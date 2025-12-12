@@ -1,0 +1,9 @@
+pub mod agent_tests;
+mod gemini_tests;
+pub mod tools_tests;
+mod config_tests;
+mod research_tests;
+pub mod prompts_tests;
+mod background_tests;
+
+mod interactions_tests;

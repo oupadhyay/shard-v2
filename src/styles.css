@@ -1,0 +1,651 @@
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: transparent;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+}
+
+.app-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: transparent;
+}
+
+.app-content {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+
+  backdrop-filter: none;
+  filter: blur(12px);
+
+  transition: filter 0.3s ease;
+}
+
+.app-ui {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+.app-focused .app-content {
+  filter: blur(14px);
+}
+
+.app-unfocused .app-content {
+  filter: blur(6px);
+}
+
+.app-unfocused .app-ui {
+  opacity: 0.95;
+}
+
+.app-unfocused .input-field {
+  background: rgba(10, 10, 10, 1);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.image-preview {
+  position: relative;
+  max-width: 150px; /* Smaller thumbnail */
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 0 auto 8px auto; /* Center horizontally with bottom margin */
+  padding: 4px;
+  display: block;
+}
+
+.image-close-btn {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  background: rgba(0, 0, 0, 0.9);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  color: white;
+  border-radius: 50%;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: bold;
+  line-height: 1;
+  padding: 0;
+  transition: all 0.2s;
+  z-index: 100;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+
+.image-close-btn:hover {
+  background: rgba(255, 0, 0, 0.95);
+  border-color: rgba(255, 255, 255, 0.6);
+  transform: scale(1.15);
+}
+
+.image-preview img {
+  display: block;
+  max-width: 100px;
+  max-height: 100px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 8px;
+  margin: 0 auto; /* Center the image */
+}
+
+
+#app {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end; /* Stack from bottom */
+  border-radius: 16px;
+  overflow: hidden;
+  border: none;
+  box-shadow: none;
+  transition: opacity 0.2s ease-in-out;
+  opacity: 1;
+  background: radial-gradient(ellipse 150% 25% at bottom left, rgba(70, 70, 70, 0.8) 0%, transparent 70%);
+}
+
+.hidden-app {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+
+/* Top Bar Removed */
+
+/* Chat Area */
+.chat-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Ensure scrollbar is hidden or styled if needed */
+  scrollbar-width: none; /* Firefox */
+}
+.chat-area::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
+}
+
+.chat-area > :first-child {
+  margin-top: auto;
+}
+
+
+/* Bottom Bar */
+.bottom-bar {
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch; /* Allow items to stretch (input) or align self */
+  position: relative;
+  /* Gradient Circular Blur */
+  border-radius: 20px 20px 0 0; /* Round top corners of bottom bar area */
+  margin-top: auto; /* Push to bottom */
+}
+
+.action-buttons {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  width: 100%;
+}
+
+.message {
+  margin-bottom: 12px;
+  line-height: 1.5;
+  font-size: 14px;
+  word-wrap: break-word;
+  backdrop-filter: blur(10px); /* Added blur */
+  animation: slideUp 0.3s ease-out; /* Animation */
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message.user {
+  align-self: stretch;
+  background: radial-gradient(circle at right, rgba(15, 15, 15, 0.9) 0%, rgba(5, 5, 5, 0.95) 100%);
+  padding: 8px 12px;
+  border-radius: 8px;
+  max-width: 93%;
+  color: #fff;
+}
+
+.message.assistant {
+  align-self: stretch;
+  background: radial-gradient(circle at left, rgba(25, 25, 25, 0.9) 0%, rgba(15, 15, 15, 0.95) 100%);
+  padding: 8px 12px;
+  border-radius: 8px;
+  width: 93%;
+  color: #e0e0e0;
+}
+
+.message-image-container {
+  margin-bottom: 8px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.message-image {
+  max-width: 100%;
+  max-height: 200px;
+  display: block;
+  border-radius: 8px;
+}
+
+.action-btn {
+  background: radial-gradient(circle at left, rgba(25, 25, 25, 0.9) 0%, rgba(0, 0, 0, 0.9) 200%);
+  border: none;
+  border-radius: 12px; /* Slightly more rounded */
+  width: 40px; /* Slightly larger */
+  height: 40px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  color: #fff;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(4px);
+}
+
+.action-btn:hover {
+  background: rgba(150, 150, 150, 0.5);
+  transform: translateY(-1px);
+}
+
+.action-btn:active {
+  transform: translateY(0);
+}
+
+.action-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.action-btn[data-mode="undo"] {
+  background: rgba(100, 200, 255, 0.5);
+  border: 1px solid rgba(100, 200, 255, 0.8);
+}
+
+.input-field {
+  width: 100%;
+  background: radial-gradient(circle at bottom left, rgba(25, 25, 25, 0.9) 0%, rgba(0, 0, 0, 0.95) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 24px; /* Pill shape */
+  padding: 10px 20px;
+  color: #fff;
+  font-size: 14px;
+  outline: none;
+  transition: background 0.2s;
+  box-sizing: border-box; /* Ensure padding doesn't overflow width */
+  resize: none;
+  min-height: 44px;
+  max-height: 100px;
+  overflow-y: auto;
+  line-height: 1.5;
+  font-family: inherit;
+  display: block;
+}
+
+.input-field:focus {
+  background: radial-gradient(circle at bottom left, rgba(25, 25, 25, 0.9) 0%, rgba(0, 0, 0, 0.95) 100%);
+}
+
+/* Markdown Styles */
+.markdown-body {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.markdown-body pre {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.markdown-body code {
+  font-family: monospace;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+/* KaTeX Scrollbars */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  padding: 0.5em 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Settings Modal */
+.settings-modal {
+  display: none;
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+}
+
+.settings-content {
+  background: radial-gradient(circle at bottom left, rgba(25, 25, 25, 0.9) 0%, rgba(0, 0, 0, 0.9) 100%);
+  padding: 24px;
+  border-radius: 16px;
+  width: 250px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(20px);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-content h3 {
+  margin: 0 0 8px 0;
+  font-size: 18px;
+  color: #fff;
+}
+
+.setting-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setting-group label {
+  font-size: 12px;
+  color: #aaa;
+}
+
+.setting-group input {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: #fff;
+  font-size: 14px;
+  outline: none;
+}
+
+.setting-group input:focus {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.settings-actions button {
+  flex: 1;
+  padding: 8px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+#save-settings {
+  background: radial-gradient(circle at center, rgba(25, 25, 25, 0.75) 0%, rgba(20, 20, 20, 0.9) 100%);
+  border: 2px solid rgba(0, 0, 0, 0.9);
+  color: #fff;
+}
+
+#save-settings:hover {
+  background: radial-gradient(circle at center, rgba(25, 25, 25, 0.85) 0%, rgba(25, 25, 25, 0.9) 100%);
+}
+
+#close-settings {
+  background: radial-gradient(circle at center, rgba(25, 25, 25, 0.75) 0%, rgba(0, 0, 0, 0.9) 100%);
+  border: 2px solid rgba(0, 0, 0, 0.9);
+  color: #fff;
+}
+
+#close-settings:hover {
+  background: radial-gradient(circle at center, rgba(50, 50, 50, 0.85) 0%, rgba(0, 0, 0, 0.9) 100%);
+}
+
+#model-id {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 8px 16px !important;
+  color: #fff;
+  font-size: 14px;
+  height: 32px;
+  outline: none;
+}
+
+/* Thought Blocks */
+.thought-block {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  overflow: visible; /* Changed from hidden to prevent clipping */
+  position: relative; /* Establish stacking context */
+  z-index: 1; /* Ensure proper stacking */
+}
+
+.thought-block summary {
+  cursor: pointer;
+  padding: 12px;
+  font-weight: 600;
+  user-select: none;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.thought-block summary:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.thought-content {
+  padding: 12px;
+  font-size: 0.9em;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.8);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.thought-content.markdown-body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+.thought-content.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+/* Thinking Output - Standalone like Tool Calls */
+.thinking-output {
+  background: rgba(0, 0, 0, 0.3) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 0 !important;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  align-self: flex-start;
+  margin-bottom: 0px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Tool Call Blocks - Accordion Style */
+.tool-output {
+  background: rgba(0, 0, 0, 0.3) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 0 !important;
+  overflow: visible; /* Changed from hidden */
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  align-self: flex-start;
+  margin-bottom: 0;
+  position: relative; /* Establish stacking context */
+  z-index: 1; /* Same as thought-block */
+}
+
+.tool-output details {
+  border: none;
+}
+
+.tool-output summary {
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.tool-output summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-output summary:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tool-args {
+  padding: 10px 12px;
+  font-family: monospace;
+  font-size: 0.85em;
+  color: rgba(255, 255, 255, 0.7);
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: rgba(0, 0, 0, 0.2);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.tool-result {
+  padding: 10px 12px;
+  font-family: monospace;
+  font-size: 0.85em;
+  color: rgba(255, 255, 255, 0.8);
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: rgba(20, 20, 20, 0.1);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.tool-name {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.tool-summary-args {
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.9em;
+  font-family: monospace;
+  margin-left: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+.tool-result-label {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  margin-bottom: 6px;
+  font-size: 0.9em;
+}
+
+/* Input Container and Stop Button */
+.input-container {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.input-field {
+  padding-right: 48px; /* Space for stop button */
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+
+.input-field::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Opera */
+}
+
+.stop-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  border-radius: 32px; /* Rounded square */
+  background: rgba(255, 255, 255, 0.15);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+  backdrop-filter: blur(4px);
+}
+
+.stop-btn::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 32px;
+  height: 32px;
+  margin-top: -18px;
+  margin-left: -18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: rgba(255, 255, 255, 0.8);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.stop-btn.loading::before {
+  opacity: 1;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.stop-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+  transform: translateY(-50%) scale(1.05);
+}
+
+.stop-btn.loading:hover {
+  transform: translateY(-50%) scale(1.0);
+}
+
+.stop-btn:active {
+  transform: translateY(-50%) scale(0.95);
+}
+
+.stop-icon {
+  width: 12px;
+  height: 12px;
+  background-color: white;
+  border-radius: 2px;
+  margin: 0 auto;
+  display: block;
+}
