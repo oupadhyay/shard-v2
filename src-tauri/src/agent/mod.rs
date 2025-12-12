@@ -1,0 +1,997 @@
+/**
+ * Agent module - AI chat agent with Gemini and OpenRouter support
+ */
+
+mod types;
+mod gemini;
+mod openrouter;
+
+pub use types::*;
+pub use gemini::{AgentEvent, construct_gemini_messages, parse_gemini_chunk};
+
+use crate::integrations::{
+    arxiv::perform_arxiv_lookup, finance::perform_finance_lookup, weather::perform_weather_lookup,
+    web_search::perform_web_search, wikipedia::perform_wikipedia_lookup,
+};
+use reqwest::Client;
+use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tokio::sync::Mutex;
+
+/// The main AI Agent managing chat history and API interactions
+pub struct Agent {
+    history: Mutex<Vec<ChatMessage>>,
+    http_client: Client,
+    uploaded_files: Mutex<Vec<String>>,
+    backup_history: Mutex<Option<Vec<ChatMessage>>>,
+}
+
+impl Agent {
+    pub fn new(app_handle: tauri::AppHandle) -> Self {
+        let app_data_dir = app_handle
+            .path()
+            .app_data_dir()
+            .expect("failed to get app data dir");
+        std::fs::create_dir_all(&app_data_dir).expect("failed to create app data dir");
+
+        let http_client = Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+
+        Self {
+            history: Mutex::new(Vec::new()),
+            http_client,
+            uploaded_files: Mutex::new(Vec::new()),
+            backup_history: Mutex::new(None),
+        }
+    }
+
+    pub async fn clear_history(&self, api_key: Option<String>) {
+        let mut history = self.history.lock().await;
+        history.clear();
+
+        let mut uploaded_files = self.uploaded_files.lock().await;
+        if !uploaded_files.is_empty() {
+            if let Some(key) = api_key {
+                for uri in uploaded_files.iter() {
+                    if let Some(file_name) = uri.split('/').last() {
+                        let delete_url = format!(
+                            "https://generativelanguage.googleapis.com/v1beta/files/{}?key={}",
+                            file_name, key
+                        );
+                        let _ = self.http_client.delete(&delete_url).send().await;
+                    }
+                }
+            }
+            uploaded_files.clear();
+        }
+    }
+
+    pub async fn rewind_history(&self) {
+        let mut history = self.history.lock().await;
+        if history.is_empty() {
+            return;
+        }
+
+        while let Some(msg) = history.pop() {
+            if msg.role == "user" {
+                break;
+            }
+        }
+    }
+
+    pub async fn save_and_clear_history(&self) {
+        let mut history = self.history.lock().await;
+        let mut backup = self.backup_history.lock().await;
+        *backup = Some(history.clone());
+        history.clear();
+    }
+
+    pub async fn restore_history(&self) -> Result<(), String> {
+        let mut history = self.history.lock().await;
+        let mut backup = self.backup_history.lock().await;
+
+        if let Some(saved) = backup.take() {
+            *history = saved;
+            Ok(())
+        } else {
+            Err("No backup available".to_string())
+        }
+    }
+
+    pub async fn get_history(&self) -> Vec<ChatMessage> {
+        let history = self.history.lock().await;
+        history.clone()
+    }
+
+    pub async fn get_message_count(&self) -> usize {
+        let history = self.history.lock().await;
+        history.len()
+    }
+
+    pub async fn has_backup(&self) -> bool {
+        let backup = self.backup_history.lock().await;
+        backup.is_some()
+    }
+
+    pub async fn process_message<R: Runtime>(
+        &self,
+        app_handle: &AppHandle<R>,
+        message: String,
+        image_base64: Option<String>,
+        image_mime_type: Option<String>,
+        config: &crate::config::AppConfig,
+    ) -> Result<(), String> {
+        println!("process_message called. Message len: {}", message.len());
+
+        let mut history = self.history.lock().await;
+
+        let (user_content, file_uri_option) = if let (Some(img_data), Some(mime_type)) =
+            (image_base64.clone(), image_mime_type.clone())
+        {
+            let selected_model = config
+                .selected_model
+                .clone()
+                .unwrap_or("gemini-2.0-flash".to_string());
+            if !selected_model.contains("/") {
+                match crate::gemini_files::upload_image_to_gemini_files_api(
+                    &self.http_client,
+                    &img_data,
+                    &mime_type,
+                    config.gemini_api_key.as_ref().ok_or("No Gemini API key")?,
+                )
+                .await
+                {
+                    Ok(file_uri) => {
+                        self.uploaded_files
+                            .lock()
+                            .await
+                            .push(file_uri.file_uri.clone());
+                        (Some(message.clone()), Some(file_uri.file_uri))
+                    }
+                    Err(e) => {
+                        return Err(format!("Failed to upload image to Gemini Files API: {}", e))
+                    }
+                }
+            } else {
+                (Some(message.clone()), None)
+            }
+        } else {
+            (Some(message.clone()), None)
+        };
+
+        history.push(ChatMessage {
+            role: "user".to_string(),
+            content: user_content,
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            image: if let (Some(base64), Some(mime)) = (image_base64, image_mime_type) {
+                Some(ImageAttachment {
+                    base64,
+                    mime_type: mime,
+                    file_uri: file_uri_option,
+                })
+            } else {
+                None
+            },
+        });
+
+        // RAG: Generate embedding and retrieve relevant interactions
+        let user_embedding = if let Some(api_key) = &config.gemini_api_key {
+            crate::interactions::generate_embedding(&self.http_client, &message, api_key).await.ok()
+        } else {
+            None
+        };
+
+        let relevant_interactions = if let Some(emb) = &user_embedding {
+            crate::interactions::search_interactions(app_handle, emb, 5).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let mut rag_context_str = if !relevant_interactions.is_empty() {
+            let mut s = String::from("\n\nRelevant Past Interactions:\n");
+            for entry in relevant_interactions {
+                s.push_str(&format!("- [{}] {}: {}\n", entry.ts.format("%Y-%m-%d"), entry.role, entry.content));
+            }
+            Some(s)
+        } else {
+            None
+        };
+
+        // RAG: Focused Summaries (Tier 2)
+        if let Some(emb) = &user_embedding {
+            if let Ok(Some((topic, content))) = crate::memories::find_relevant_topics(app_handle, emb) {
+                let s = rag_context_str.get_or_insert_with(String::new);
+                s.push_str("\n\nRelevant Topic Summary:\n");
+                s.push_str(&format!("### Topic: {}\n{}\n\n", topic, content));
+            }
+        }
+
+        app_handle.emit("agent-processing-start", ()).ok();
+        let stream_id =
+            crate::CURRENT_STREAM_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+
+        // Detect research mode: either from config OR dynamically via intent classification
+        let is_research_mode = if config.research_mode.unwrap_or(false) {
+            true
+        } else if let Some(api_key) = config.gemini_api_key.as_ref() {
+            // Dynamically detect research queries using LLM
+            if let Some(last_msg) = history.last() {
+                if last_msg.role == "user" {
+                    self.classify_intent(&last_msg.content.clone().unwrap_or_default(), api_key)
+                        .await
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if is_research_mode {
+            log::info!("[Agent] Research mode detected - using extended turn limit");
+        }
+
+        let max_turns = if is_research_mode { 15 } else { 5 };
+        let mut current_turn = 0;
+
+        loop {
+            if current_turn >= max_turns {
+                break;
+            }
+            current_turn += 1;
+
+            let selected_model = config
+                .selected_model
+                .clone()
+                .unwrap_or("gemini-2.0-flash".to_string());
+            let is_gemini = !selected_model.contains("/");
+
+            let continue_turn = if is_gemini {
+                let api_key = config.gemini_api_key.as_ref().ok_or("No Gemini API key")?;
+                self.process_gemini_turn(
+                    app_handle,
+                    config,
+                    &mut history,
+                    stream_id,
+                    &selected_model,
+                    api_key,
+                    rag_context_str.as_deref(),
+                    is_research_mode,
+                )
+                .await?
+            } else {
+                self.process_openrouter_turn(
+                    app_handle,
+                    config,
+                    &mut history,
+                    stream_id,
+                    rag_context_str.as_deref(),
+                    is_research_mode,
+                ).await?
+            };
+
+            if !continue_turn {
+                break;
+            }
+        }
+
+        // Log interactions for future RAG
+        // 1. Log user message
+        if let Some(emb) = user_embedding {
+            crate::interactions::log_interaction(app_handle, "user", &message, Some(emb)).await.ok();
+        }
+
+        // 2. Log assistant response
+        if let Some(last_msg) = history.last() {
+            if (last_msg.role == "model" || last_msg.role == "assistant") && last_msg.content.is_some() {
+                let content = last_msg.content.as_ref().unwrap();
+                let response_embedding = if let Some(api_key) = &config.gemini_api_key {
+                    crate::interactions::generate_embedding(&self.http_client, content, api_key).await.ok()
+                } else {
+                    None
+                };
+                crate::interactions::log_interaction(app_handle, "model", content, response_embedding).await.ok();
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn execute_tool<R: Runtime>(&self, app_handle: &AppHandle<R>, function_name: &str, args: &Value, config: &crate::config::AppConfig) -> String {
+        match function_name {
+            "get_weather" => {
+                let location = args["location"].as_str().unwrap_or_default();
+                match perform_weather_lookup(&self.http_client, location).await {
+                    Ok(Some((temp, unit, loc))) => format!("Weather in {}: {} {}", loc, temp, unit),
+                    Ok(None) => "Weather data not found.".to_string(),
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+            "search_wikipedia" => {
+                let query = args["query"].as_str().unwrap_or_default();
+                match perform_wikipedia_lookup(&self.http_client, query).await {
+                    Ok(Some((title, summary, _))) => {
+                        format!("Wikipedia Title: {}\nSummary: {}", title, summary)
+                    }
+                    Ok(None) => "No Wikipedia results found.".to_string(),
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+            "get_stock_price" => {
+                let symbol = args["symbol"].as_str().unwrap_or_default();
+                perform_finance_lookup(symbol)
+                    .await
+                    .unwrap_or_else(|e| format!("Error: {}", e))
+            }
+            "search_arxiv" => {
+                let query = args["query"].as_str().unwrap_or_default();
+                match perform_arxiv_lookup(&self.http_client, query, 3).await {
+                    Ok(papers) => {
+                        let summaries: Vec<String> = papers
+                            .iter()
+                            .map(|p| {
+                                format!(
+                                    "- {} ({}): {}",
+                                    p.title,
+                                    p.published_date.as_deref().unwrap_or("?"),
+                                    p.summary
+                                )
+                            })
+                            .collect();
+                        format!("ArXiv Results:\n{}", summaries.join("\n\n"))
+                    }
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+            "web_search" => {
+                let query = args["query"].as_str().unwrap_or_default();
+                match perform_web_search(query, config.brave_api_key.as_deref()).await {
+                    Ok(results) => {
+                        let snippets: Vec<String> = results
+                            .iter()
+                            .map(|r| format!("- [{}]({}) : {}", r.title, r.url, r.snippet))
+                            .collect();
+                        format!("Web Search Results:\n{}", snippets.join("\n\n"))
+                    }
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+            "save_memory" => {
+                // Quiet tool - no UI feedback, just log
+                let category_str = args["category"].as_str().unwrap_or("fact");
+                let content = args["content"].as_str().unwrap_or_default().to_string();
+                let importance = args["importance"].as_u64().unwrap_or(3) as u8;
+
+                let category = match category_str {
+                    "preference" => crate::memories::MemoryCategory::Preference,
+                    "project" => crate::memories::MemoryCategory::Project,
+                    "interaction" => crate::memories::MemoryCategory::Interaction,
+                    _ => crate::memories::MemoryCategory::Fact,
+                };
+
+                match crate::memories::add_memory(app_handle, category, content.clone(), importance) {
+                    Ok(_) => format!("Memory saved: {}", content),
+                    Err(e) => format!("Failed to save memory: {}", e),
+                }
+            }
+            "update_topic_summary" => {
+                let topic = args["topic"].as_str().unwrap_or_default();
+                let content = args["content"].as_str().unwrap_or_default();
+                if let Some(api_key) = config.gemini_api_key.as_ref() {
+                    match crate::memories::update_topic_summary(app_handle, &self.http_client, api_key, topic, content).await {
+                        Ok(_) => format!("Topic summary updated: {}", topic),
+                        Err(e) => format!("Failed to update topic summary: {}", e),
+                    }
+                } else {
+                    "Failed: No Gemini API key available for embedding generation".to_string()
+                }
+            }
+            "read_topic_summary" => {
+                let topic = args["topic"].as_str().unwrap_or_default();
+                match crate::memories::read_topic_summary(app_handle, topic) {
+                    Ok(content) => content,
+                    Err(e) => format!("Failed to read topic summary: {}", e),
+                }
+            }
+            _ => format!("Unknown tool: {}", function_name),
+        }
+    }
+
+    async fn classify_intent(&self, query: &str, api_key: &str) -> Result<bool, String> {
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={}",
+            api_key
+        );
+
+        let payload = serde_json::json!({
+            "contents": [{
+                "parts": [{
+                    "text": format!("{}\n\nQuery: {}", crate::prompts::INTENT_CLASSIFICATION_PROMPT, query)
+                }]
+            }],
+            "generationConfig": {
+                "temperature": 0.0,
+                "maxOutputTokens": 10
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let res = client
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !res.status().is_success() {
+            return Err(format!("Intent classification failed: {}", res.status()));
+        }
+
+        let body: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+
+        if let Some(candidates) = body.get("candidates").and_then(|c| c.as_array()) {
+            if let Some(first) = candidates.first() {
+                if let Some(content) = first.get("content") {
+                    if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
+                        if let Some(text_part) = parts.first() {
+                            if let Some(text) = text_part.get("text").and_then(|t| t.as_str()) {
+                                return Ok(text.trim().to_uppercase().contains("YES"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    async fn process_gemini_turn<R: Runtime>(
+        &self,
+        app_handle: &AppHandle<R>,
+        config: &crate::config::AppConfig,
+        history: &mut Vec<ChatMessage>,
+        stream_id: u64,
+        selected_model: &str,
+        api_key: &str,
+        rag_context: Option<&str>,
+        is_research_mode: bool,
+    ) -> Result<bool, String> {
+        let enable_tools = config.enable_tools.unwrap_or(true);
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?key={}",
+            selected_model, api_key
+        );
+
+        // Load memories for injection into system prompt
+        let memory_context = crate::memories::get_memories_for_prompt(app_handle)
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        let system_prompt_content = if config.jailbreak_mode.unwrap_or(false) {
+            crate::prompts::get_jailbreak_prompt(&selected_model)
+        } else if is_research_mode {
+            crate::prompts::get_research_system_prompt()
+        } else {
+            config
+                .system_prompt
+                .clone()
+                .unwrap_or_else(|| crate::prompts::get_default_system_prompt(memory_context.as_deref(), rag_context))
+        };
+
+        let contents = construct_gemini_messages(history);
+        let system_instruction = Some(GeminiContent {
+            role: None,
+            parts: vec![GeminiPart::Text {
+                text: system_prompt_content.clone(),
+            }],
+        });
+
+        let gemini_tools = if enable_tools {
+            Some(vec![GeminiTool {
+                function_declarations: crate::tools::get_all_tools()
+                    .iter()
+                    .map(|t| t.function.clone())
+                    .collect(),
+            }])
+        } else {
+            None
+        };
+
+        let supports_thinking =
+            selected_model.contains("2.5") || selected_model.contains("thinking");
+
+        let request_body = GenerateContentRequest {
+            contents,
+            tools: gemini_tools,
+            system_instruction,
+            generation_config: Some(GenerationConfig {
+                thinking_config: if supports_thinking {
+                    Some(ThinkingConfig {
+                        include_thoughts: true,
+                        thinking_budget: Some(1024),
+                    })
+                } else {
+                    None
+                },
+            }),
+        };
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|e| format!("API network error: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!("Gemini API Error: {}", error_text));
+        }
+
+        use futures_util::StreamExt;
+        let mut stream = response.bytes_stream();
+        let mut buffer = Vec::new();
+        let mut full_text = String::new();
+        let mut full_reasoning = String::new();
+        let mut tool_calls: Vec<GeminiFunctionCall> = Vec::new();
+
+        while let Some(item) = stream.next().await {
+            if stream_id == crate::CANCELLED_STREAM_ID.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+
+            let chunk = item.map_err(|e| format!("Stream error: {}", e))?;
+            buffer.extend_from_slice(&chunk);
+
+            let mut consumed = 0;
+            let mut depth = 0;
+            let mut in_string = false;
+            let mut escape = false;
+            let mut start_idx = None;
+
+            for (idx, &b) in buffer.iter().enumerate() {
+                let c = b as char;
+                if !in_string {
+                    if c == '{' {
+                        if depth == 0 {
+                            start_idx = Some(idx);
+                        }
+                        depth += 1;
+                    } else if c == '}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            if let Some(start) = start_idx {
+                                let slice = &buffer[start..=idx];
+                                if let Ok(json_obj) =
+                                    serde_json::from_slice::<GenerateContentResponse>(slice)
+                                {
+                                    if let Some(candidates) = json_obj.candidates {
+                                        for candidate in candidates {
+                                            for part in candidate.content.parts {
+                                                let events = parse_gemini_chunk(
+                                                    part,
+                                                    &mut full_text,
+                                                    &mut full_reasoning,
+                                                    &mut tool_calls,
+                                                );
+                                                for event in events {
+                                                    match event {
+                                                        AgentEvent::ResponseChunk(text) => {
+                                                            app_handle
+                                                                .emit("agent-response-chunk", text)
+                                                                .ok();
+                                                        }
+                                                        AgentEvent::ReasoningChunk(text) => {
+                                                            app_handle
+                                                                .emit("agent-reasoning-chunk", text)
+                                                                .ok();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    consumed = idx + 1;
+                                    start_idx = None;
+                                }
+                            }
+                        }
+                    }
+                }
+                if c == '"' && !escape {
+                    in_string = !in_string;
+                }
+                if c == '\\' && !escape {
+                    escape = true;
+                } else {
+                    escape = false;
+                }
+            }
+
+            if consumed > 0 {
+                buffer.drain(0..consumed);
+            }
+        }
+
+        if !tool_calls.is_empty() {
+            history.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: if full_text.is_empty() {
+                    None
+                } else {
+                    Some(full_text.clone())
+                },
+                reasoning: if full_reasoning.is_empty() {
+                    None
+                } else {
+                    Some(full_reasoning.trim_end().to_string())
+                },
+                tool_calls: Some(
+                    tool_calls
+                        .iter()
+                        .map(|fc| ToolCall {
+                            id: "call_".to_string() + &fc.name,
+                            tool_type: "function".to_string(),
+                            function: FunctionCall {
+                                name: fc.name.clone(),
+                                arguments: serde_json::to_string(&fc.args).unwrap_or_default(),
+                            },
+                        })
+                        .collect(),
+                ),
+                tool_call_id: None,
+                image: None,
+            });
+
+            for fc in tool_calls {
+                let function_name = &fc.name;
+                let args = &fc.args;
+
+                let tool_call_event = json!({
+                    "name": function_name,
+                    "args": args
+                });
+                app_handle
+                    .emit("agent-tool-call", tool_call_event.to_string())
+                    .ok();
+
+                let tool_result = self.execute_tool(app_handle, function_name, args, config).await;
+
+                let result_payload = serde_json::json!({
+                    "name": function_name,
+                    "result": tool_result.clone()
+                });
+                app_handle
+                    .emit("agent-tool-result", result_payload.to_string())
+                    .ok();
+
+                history.push(ChatMessage {
+                    role: "tool".to_string(),
+                    content: Some(tool_result),
+                    reasoning: None,
+                    tool_calls: None,
+                    tool_call_id: Some("call_".to_string() + &fc.name),
+                    image: None,
+                });
+            }
+            Ok(true) // Continue loop so model can respond to tool results
+        } else {
+            history.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: Some(full_text),
+                reasoning: if full_reasoning.is_empty() {
+                    None
+                } else {
+                    Some(full_reasoning.trim_end().to_string())
+                },
+                tool_calls: None,
+                tool_call_id: None,
+                image: None,
+            });
+            Ok(false) // No tool calls = final response, stop the loop
+        }
+    }
+
+    async fn process_openrouter_turn<R: Runtime>(
+        &self,
+        app_handle: &AppHandle<R>,
+        config: &crate::config::AppConfig,
+        history: &mut Vec<ChatMessage>,
+        stream_id: u64,
+        rag_context: Option<&str>,
+        is_research_mode: bool,
+    ) -> Result<bool, String> {
+        let selected_model = config
+            .selected_model
+            .clone()
+            .unwrap_or("gemini-2.0-flash".to_string());
+        let enable_tools = config.enable_tools.unwrap_or(true);
+        let (api_key, base_url, model) = if let Some(key) = &config.openrouter_api_key {
+            (
+                key.clone(),
+                "https://openrouter.ai/api/v1/".to_string(),
+                selected_model,
+            )
+        } else {
+            return Err("No OpenRouter API Key configured".to_string());
+        };
+
+        let url = format!("{}chat/completions", base_url);
+        // Load memories for injection into system prompt
+        let memory_context = crate::memories::get_memories_for_prompt(app_handle)
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        let system_prompt_content = if config.jailbreak_mode.unwrap_or(false) {
+            crate::prompts::get_jailbreak_prompt(&model)
+        } else if is_research_mode {
+            crate::prompts::get_research_system_prompt()
+        } else {
+            config
+                .system_prompt
+                .clone()
+                .unwrap_or_else(|| crate::prompts::get_default_system_prompt(memory_context.as_deref(), rag_context))
+        };
+
+        let mut messages_with_system = vec![ChatMessage {
+            role: "system".to_string(),
+            content: Some(system_prompt_content),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            image: None,
+        }];
+        messages_with_system.extend(history.clone());
+
+        let api_messages: Vec<ApiChatMessage> = messages_with_system
+            .iter()
+            .map(|msg| ApiChatMessage {
+                role: msg.role.clone(),
+                content: msg.content.clone(),
+                tool_calls: msg.tool_calls.clone(),
+                tool_call_id: msg.tool_call_id.clone(),
+            })
+            .collect();
+
+        let make_request = |tools_opt: Option<Vec<ToolDefinition>>| {
+            let model = model.clone();
+            let messages = api_messages.clone();
+            let url = url.clone();
+            let api_key = api_key.clone();
+            let client = self.http_client.clone();
+            let use_tools = tools_opt.is_some();
+
+            async move {
+                let request_body = ChatCompletionRequest {
+                    model,
+                    messages,
+                    tools: tools_opt,
+                    tool_choice: if use_tools {
+                        Some("auto".to_string())
+                    } else {
+                        None
+                    },
+                    reasoning_effort: None,
+                    reasoning: None,
+                    include_reasoning: Some(true),
+                    stream: true,
+                };
+
+                client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&request_body)
+                    .send()
+                    .await
+            }
+        };
+
+        let is_olmo_think = model.contains("olmo-3-32b-think");
+        let is_llama_3_3 = model.contains("llama-3.3-70b-instruct");
+        let current_tools = if enable_tools && !is_olmo_think && !is_llama_3_3 {
+            Some(
+                crate::tools::get_all_tools()
+                    .iter()
+                    .map(|t| ToolDefinition {
+                        tool_type: t.tool_type.clone(),
+                        function: FunctionDefinition {
+                            name: t.function.name.clone(),
+                            description: t.function.description.clone(),
+                            parameters: t.function.parameters.clone(),
+                        },
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+
+        let mut response = make_request(current_tools.clone())
+            .await
+            .map_err(|e| format!("API network error: {}", e))?;
+
+        if response.status() == 404 && enable_tools {
+            println!("Got 404 with tools, retrying without tools...");
+            response = make_request(None)
+                .await
+                .map_err(|e| format!("API network error (retry): {}", e))?;
+        }
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!("API error: {}", error_text));
+        }
+
+        let mut full_content = String::new();
+        let mut full_reasoning = String::new();
+        let mut tool_calls_buffer: Vec<ToolCall> = Vec::new();
+        use futures_util::StreamExt;
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(item) = stream.next().await {
+            if stream_id == crate::CANCELLED_STREAM_ID.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            let chunk = item.map_err(|e| {
+                log::debug!("Stream chunk error: {}", e);
+                format!("Stream error: {}", e)
+            })?;
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&chunk_str);
+
+            let mut consumed = 0;
+            if let Some(last_newline) = buffer.rfind('\n') {
+                let content_to_process = &buffer[..last_newline];
+                for line in content_to_process.lines() {
+                    let line = line.trim();
+                    if line.starts_with("data: ") {
+                        let json_str = &line[6..];
+                        if json_str == "[DONE]" {
+                            continue;
+                        }
+
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
+                            if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
+                                if let Some(choice) = choices.first() {
+                                    if let Some(reasoning) = choice["delta"].get("reasoning") {
+                                        if !reasoning.is_null() && reasoning.as_str().is_some() {
+                                            let reasoning_str = reasoning.as_str().unwrap();
+                                            full_reasoning.push_str(reasoning_str);
+                                            app_handle
+                                                .emit("agent-reasoning-chunk", reasoning_str)
+                                                .ok();
+                                        }
+                                    }
+
+                                    if let Some(content) =
+                                        choice["delta"].get("content").and_then(|c| c.as_str())
+                                    {
+                                        full_content.push_str(content);
+                                        app_handle.emit("agent-response-chunk", content).ok();
+                                    }
+
+                                    if let Some(delta_tool_calls) =
+                                        choice["delta"].get("tool_calls")
+                                    {
+                                        if let Some(tool_calls_arr) = delta_tool_calls.as_array() {
+                                            for tool_call_json in tool_calls_arr {
+                                                let index =
+                                                    tool_call_json["index"].as_u64().unwrap_or(0)
+                                                        as usize;
+                                                if index >= tool_calls_buffer.len() {
+                                                    tool_calls_buffer.resize(
+                                                        index + 1,
+                                                        ToolCall {
+                                                            id: String::new(),
+                                                            tool_type: "function".to_string(),
+                                                            function: FunctionCall {
+                                                                name: String::new(),
+                                                                arguments: String::new(),
+                                                            },
+                                                        },
+                                                    );
+                                                }
+                                                let target = &mut tool_calls_buffer[index];
+                                                if let Some(id) = tool_call_json["id"].as_str() {
+                                                    target.id = id.to_string();
+                                                }
+                                                if let Some(func) = tool_call_json.get("function") {
+                                                    if let Some(name) = func["name"].as_str() {
+                                                        target.function.name.push_str(name);
+                                                    }
+                                                    if let Some(args) = func["arguments"].as_str() {
+                                                        target.function.arguments.push_str(args);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                consumed = last_newline + 1;
+            }
+
+            if consumed > 0 {
+                buffer.drain(0..consumed);
+            }
+        }
+
+        if !full_content.is_empty() || !tool_calls_buffer.is_empty() {
+            history.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: if full_content.is_empty() {
+                    None
+                } else {
+                    Some(full_content.clone())
+                },
+                reasoning: if full_reasoning.is_empty() {
+                    None
+                } else {
+                    Some(full_reasoning.clone())
+                },
+                tool_calls: if tool_calls_buffer.is_empty() {
+                    None
+                } else {
+                    Some(tool_calls_buffer.clone())
+                },
+                tool_call_id: None,
+                image: None,
+            });
+
+            if !tool_calls_buffer.is_empty() {
+                for tool_call in &tool_calls_buffer {
+                    let function_name = &tool_call.function.name;
+                    let arguments = &tool_call.function.arguments;
+                    let args: Value = serde_json::from_str(arguments).unwrap_or(json!({}));
+
+                    let tool_call_event = json!({
+                        "name": function_name,
+                        "args": args
+                    });
+                    app_handle
+                        .emit("agent-tool-call", tool_call_event.to_string())
+                        .ok();
+
+                    let tool_result = self.execute_tool(app_handle, function_name, &args, config).await;
+
+                    let result_payload = serde_json::json!({
+                        "name": function_name,
+                        "result": tool_result.clone()
+                    });
+                    app_handle
+                        .emit("agent-tool-result", result_payload.to_string())
+                        .ok();
+
+                    history.push(ChatMessage {
+                        role: "tool".to_string(),
+                        content: Some(tool_result),
+                        reasoning: None,
+                        tool_calls: None,
+                        tool_call_id: Some(tool_call.id.clone()),
+                        image: None,
+                    });
+                }
+                Ok(true) // Continue loop so model can respond to tool results
+            } else {
+                Ok(false) // No tool calls = final response, stop the loop
+            }
+        } else {
+            Ok(false) // No content = stop
+        }
+    }
+}
