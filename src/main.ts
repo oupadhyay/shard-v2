@@ -15,7 +15,7 @@ import {
   STOP_ICON,
   TRASH_ICON,
   UNDO_ICON,
-  RETRY_ICON
+  RETRY_ICON,
 } from "./ui";
 
 // DOM Elements
@@ -33,10 +33,13 @@ let lastUserMessage = "";
 let lastAttachedImages: AttachedImage[] = [];
 let isCancelled = false;
 
-function addMessage(role: "user" | "assistant", content: string, images?: { base64: string; mimeType: string }[]) {
+function addMessage(
+  role: "user" | "assistant",
+  content: string,
+  images?: { base64: string; mimeType: string }[],
+) {
   addMessageToChat(chatArea, role, content, images);
 }
-
 
 // Helper: Handle Input
 async function handleInput(skipUi = false) {
@@ -95,25 +98,25 @@ async function handleInput(skipUi = false) {
 
       if (selectedModel.includes("/")) {
         // OpenRouter - use OCR text for all images
-        const ocrTexts = imagesToSend.map(img => img.ocrText).join('\n---\n');
+        const ocrTexts = imagesToSend.map((img) => img.ocrText).join("\n---\n");
         messagePayload.message = `[Image OCR]:\n${ocrTexts}\n\n${messagePayload.message}`;
       } else {
         // Gemini - send image data as arrays
-        messagePayload.imagesBase64 = imagesToSend.map(img => img.base64);
-        messagePayload.imagesMimeTypes = imagesToSend.map(img => img.mimeType);
+        messagePayload.imagesBase64 = imagesToSend.map((img) => img.base64);
+        messagePayload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
       }
 
       // Clear image preview after determining what to send
       attachedImages = [];
       const container = document.getElementById("image-preview-container");
-      if (container) container.innerHTML = '';
+      if (container) container.innerHTML = "";
     }
 
     console.log("Sending payload to backend:", {
       message: messagePayload.message,
       hasImage: !!messagePayload.imageBase64,
       imageLen: messagePayload.imageBase64?.length,
-      mime: messagePayload.imageMimeType
+      mime: messagePayload.imageMimeType,
     });
     await invoke("chat", messagePayload);
     // Note: The actual response handling might need to be event-based if streaming
@@ -145,9 +148,11 @@ stopBtn.addEventListener("click", async () => {
       // Stop if we hit a user message
       if (el.classList.contains("user")) break;
 
-      if (el.classList.contains("assistant") ||
+      if (
+        el.classList.contains("assistant") ||
         el.classList.contains("tool-output") ||
-        el.classList.contains("thinking-output")) {
+        el.classList.contains("thinking-output")
+      ) {
         el.remove();
       } else {
         // Stop if we encounter an unknown element type to be safe
@@ -222,7 +227,7 @@ inputField.addEventListener("paste", async (e) => {
 
   // Check for image in clipboard
   const items = Array.from(clipboardData.items);
-  const imageItem = items.find(item => item.type.startsWith("image/"));
+  const imageItem = items.find((item) => item.type.startsWith("image/"));
 
   if (imageItem) {
     e.preventDefault(); // Prevent default paste behavior for images
@@ -240,20 +245,20 @@ inputField.addEventListener("paste", async (e) => {
       const imageData = {
         base64,
         mimeType,
-        ocrText: "[Processing...]"
+        ocrText: "[Processing...]",
       };
       showImagePreview(imageData);
       const imageIndex = attachedImages.length - 1; // Index of just-added image
 
       // Run OCR in background (don't await)
       invoke<string>("ocr_image", { imageBase64: base64 })
-        .then(ocrText => {
+        .then((ocrText) => {
           // Update the image's OCR text once complete
           if (attachedImages[imageIndex]) {
             attachedImages[imageIndex].ocrText = ocrText;
           }
         })
-        .catch(err => {
+        .catch((err) => {
           console.warn("OCR failed for pasted image:", err);
           if (attachedImages[imageIndex]) {
             attachedImages[imageIndex].ocrText = "[OCR failed]";
@@ -265,7 +270,6 @@ inputField.addEventListener("paste", async (e) => {
     reader.readAsDataURL(file);
   }
 });
-
 
 function showImagePreview(imageData: { base64: string; mimeType: string; ocrText: string }) {
   // Add to images array
@@ -318,7 +322,7 @@ ocrBtn.addEventListener("click", async () => {
       showImagePreview({
         base64: result.image_base64,
         mimeType: result.mime_type,
-        ocrText: result.text
+        ocrText: result.text,
       });
       // Do NOT paste text into input
       inputField.focus();
@@ -340,7 +344,7 @@ listen("trigger-ocr", async () => {
       showImagePreview({
         base64: result.image_base64,
         mimeType: result.mime_type,
-        ocrText: result.text
+        ocrText: result.text,
       });
       inputField.focus();
     }
@@ -349,8 +353,6 @@ listen("trigger-ocr", async () => {
     inputField.focus();
   }
 });
-
-
 
 // Delete/Undo State Management
 async function updateButtonStates() {
@@ -415,7 +417,6 @@ trashBtn.addEventListener("click", async () => {
 // Update button states on page load
 updateButtonStates();
 
-
 async function loadChatHistory() {
   try {
     const history = await invoke<ChatMessage[]>("get_chat_history");
@@ -440,7 +441,7 @@ async function loadChatHistory() {
               toolCall.function.name,
               toolCall.function.arguments,
               toolCall.id,
-              false // Closed by default on restore
+              false, // Closed by default on restore
             );
             chatArea.appendChild(toolDiv);
           });
@@ -454,12 +455,14 @@ async function loadChatHistory() {
         // Tool result message
         // Find the most recent tool-output that matches
         // We search backwards from the end of chatArea
-        const toolMessages = Array.from(chatArea.querySelectorAll('.tool-output'));
+        const toolMessages = Array.from(chatArea.querySelectorAll(".tool-output"));
         let matchingTool: Element | undefined;
 
         // Try to match by ID first if available
         if (msg.tool_call_id) {
-          matchingTool = toolMessages.reverse().find(el => el.getAttribute('data-tool-id') === msg.tool_call_id);
+          matchingTool = toolMessages
+            .reverse()
+            .find((el) => el.getAttribute("data-tool-id") === msg.tool_call_id);
         }
 
         // Fallback to name matching or just the last one if no ID
@@ -493,7 +496,11 @@ listen<string>("agent-response-chunk", (event) => {
 
   // If we would create a new message, check if chunk is just whitespace
   // This prevents creating empty bubbles from leading newlines/spaces
-  const isNewMessage = !lastMsg || !lastMsg.classList.contains("assistant") || lastMsg.classList.contains("tool-output") || lastMsg.classList.contains("thinking-output");
+  const isNewMessage =
+    !lastMsg ||
+    !lastMsg.classList.contains("assistant") ||
+    lastMsg.classList.contains("tool-output") ||
+    lastMsg.classList.contains("thinking-output");
 
   if (isNewMessage && chunk.trim().length === 0) {
     return;
@@ -506,7 +513,12 @@ listen<string>("agent-response-chunk", (event) => {
   }
 
   // Create or update assistant message (skip if last is thinking or tool)
-  if (!lastMsg || !lastMsg.classList.contains("assistant") || lastMsg.classList.contains("tool-output") || lastMsg.classList.contains("thinking-output")) {
+  if (
+    !lastMsg ||
+    !lastMsg.classList.contains("assistant") ||
+    lastMsg.classList.contains("tool-output") ||
+    lastMsg.classList.contains("thinking-output")
+  ) {
     const msgDiv = document.createElement("div");
     msgDiv.className = "message assistant markdown-body";
     chatArea.appendChild(msgDiv);
@@ -522,12 +534,12 @@ listen<string>("agent-response-chunk", (event) => {
   if (rawText.length > 10) {
     const openThinking = chatArea.querySelector('.thinking-output:not([data-complete="true"])');
     if (openThinking) {
-      openThinking.setAttribute('data-complete', 'true');
+      openThinking.setAttribute("data-complete", "true");
       // Change summary to "Thought" and close it
-      const summary = openThinking.querySelector('summary');
-      if (summary) summary.textContent = 'Thought';
-      const details = openThinking.querySelector('details');
-      if (details) details.removeAttribute('open');
+      const summary = openThinking.querySelector("summary");
+      if (summary) summary.textContent = "Thought";
+      const details = openThinking.querySelector("details");
+      if (details) details.removeAttribute("open");
     }
   }
 
@@ -575,12 +587,12 @@ listen<string>("agent-reasoning-chunk", (event) => {
 
   // Check if we have an existing thinking message that's not complete
   let thinkingMsg: HTMLElement | null = null;
-  const allMessages = chatArea.querySelectorAll('.message.thinking-output');
+  const allMessages = chatArea.querySelectorAll(".message.thinking-output");
 
   // Find the last thinking message that's not marked as complete
   for (let i = allMessages.length - 1; i >= 0; i--) {
     const msg = allMessages[i] as HTMLElement;
-    if (msg.getAttribute('data-complete') !== 'true') {
+    if (msg.getAttribute("data-complete") !== "true") {
       thinkingMsg = msg;
       break;
     }
@@ -625,11 +637,16 @@ listen<string>("agent-tool-result", (event) => {
   const result = payload.result;
 
   // Find the most recent tool-output with matching name
-  const toolMessages = Array.from(chatArea.querySelectorAll('.tool-output'));
-  const matchingTool = toolMessages.reverse().find(el => el.getAttribute('data-tool-name') === name);
+  const toolMessages = Array.from(chatArea.querySelectorAll(".tool-output"));
+  const matchingTool = toolMessages
+    .reverse()
+    .find((el) => el.getAttribute("data-tool-name") === name);
 
   if (matchingTool) {
-    updateToolResult(matchingTool, typeof result === 'string' ? result : JSON.stringify(result, null, 2));
+    updateToolResult(
+      matchingTool,
+      typeof result === "string" ? result : JSON.stringify(result, null, 2),
+    );
   }
 });
 
@@ -695,17 +712,17 @@ listen<string>("agent-error", (event) => {
   const root = document.documentElement;
 
   function setFocused(focused: boolean) {
-    root.classList.toggle('app-focused', focused);
-    root.classList.toggle('app-unfocused', !focused);
+    root.classList.toggle("app-focused", focused);
+    root.classList.toggle("app-unfocused", !focused);
   }
 
   // Initial state
   setFocused(document.hasFocus());
 
-  window.addEventListener('focus', () => {
+  window.addEventListener("focus", () => {
     setFocused(true);
   });
-  window.addEventListener('blur', () => setFocused(false));
+  window.addEventListener("blur", () => setFocused(false));
 
   // Edge case: some platforms can miss focus events after fast window switches
   // Polling fallback ensures correct state within a short interval.
@@ -748,13 +765,15 @@ listen("start-show", () => {
 });
 
 // Click-to-Hide Logic
-document.addEventListener('click', (e) => {
+document.addEventListener("click", (e) => {
   const target = e.target as HTMLElement;
   // Interactive elements: input container, messages, settings modal, bottom bar, buttons, image preview
   // We also check if the click was on a text selection? (Browser handles this, click fires after mouseup)
   // If user selects text, they might click? No, selection is drag. Click is click.
 
-  const isInteractive = target.closest('.input-container, .message, .settings-modal, .bottom-bar, .action-btn, .stop-btn, .image-preview');
+  const isInteractive = target.closest(
+    ".input-container, .message, .settings-modal, .bottom-bar, .action-btn, .stop-btn, .image-preview",
+  );
 
   if (!isInteractive) {
     startHide();
@@ -784,10 +803,8 @@ settingsModal.innerHTML = `
       <label>Model</label>
       <select id="model-id">
         <optgroup label="Gemini AI">
-          <option value="gemini-2.0-flash">gemini-2.0-flash</option>
           <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
           <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-          <option value="gemini-2.5-pro">gemini-2.5-pro</option>
         </optgroup>
         <optgroup label="OpenRouter">
           <option value="google/gemma-3-27b-it:free">google/gemma-3-27b-it:free</option>
@@ -829,8 +846,8 @@ const closeSettingsBtn = document.getElementById("close-settings") as HTMLButton
 
 // Define unsupported models (no tool calling support)
 const UNSUPPORTED_TOOL_MODELS = [
-  'allenai/olmo-3-32b-think:free',
-  'meta-llama/llama-3.3-70b-instruct:free'
+  "allenai/olmo-3-32b-think:free",
+  "meta-llama/llama-3.3-70b-instruct:free",
 ];
 
 // Create warning element

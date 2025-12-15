@@ -183,7 +183,7 @@ impl Agent {
                 let selected_model = config
                     .selected_model
                     .clone()
-                    .unwrap_or("gemini-2.0-flash".to_string());
+                    .unwrap_or("gemini-2.5-flash-lite".to_string());
                 let is_gemini = !selected_model.contains("/");
 
                 let mut attachments = Vec::with_capacity(bases.len());
@@ -324,7 +324,7 @@ impl Agent {
             let selected_model = config
                 .selected_model
                 .clone()
-                .unwrap_or("gemini-2.0-flash".to_string());
+                .unwrap_or("gemini-2.5-flash-lite".to_string());
             let is_gemini = !selected_model.contains("/");
 
             let continue_turn = if is_gemini {
@@ -823,7 +823,7 @@ impl Agent {
         let selected_model = config
             .selected_model
             .clone()
-            .unwrap_or("gemini-2.0-flash".to_string());
+            .unwrap_or("gemini-2.5-flash-lite".to_string());
         let enable_tools = config.enable_tools.unwrap_or(true);
         let (api_key, base_url, model) = if let Some(key) = &config.openrouter_api_key {
             (

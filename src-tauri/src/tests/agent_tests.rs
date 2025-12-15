@@ -120,7 +120,7 @@ mod tests {
             assert_eq!(text, "Hello");
         } else { panic!("Expected ResponseChunk"); }
 
-        // Test 2: Thinking Text (Gemini 2.0 Flash Thinking convention)
+        // Test 2: Thinking Text
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
         let mut tool_calls = Vec::new();
