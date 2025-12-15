@@ -7,10 +7,11 @@
  *
  * Both jobs run sequentially every 6 hours (Summary first, then Cleanup).
  */
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
 use tokio::time::{self, Duration};
 
@@ -19,6 +20,74 @@ pub const JOB_INTERVAL_HOURS: u64 = 6;
 pub const LOOKBACK_HOURS: i64 = 12;
 pub const LLM_MODEL: &str = "openai/gpt-oss-120b:free";
 pub const LOG_RETENTION_DAYS: i64 = 30; // Fallback for date-based cleanup
+/// Skip job execution if less than this fraction of the interval has passed
+const SKIP_INTERVAL_FRACTION: f64 = 0.5;
+
+// ============================================================================
+// Last Run Persistence
+// ============================================================================
+
+/// Stores the last run timestamps for background jobs
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct LastRunInfo {
+    summary_last_run: Option<String>,
+    cleanup_last_run: Option<String>,
+}
+
+/// Get the path to the last_run.json file
+fn get_last_run_path<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    Ok(app_data_dir.join("last_run.json"))
+}
+
+/// Load the last run info from disk
+fn load_last_run_info<R: Runtime>(app_handle: &AppHandle<R>) -> LastRunInfo {
+    match get_last_run_path(app_handle) {
+        Ok(path) => {
+            if path.exists() {
+                match fs::read_to_string(&path) {
+                    Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+                    Err(_) => LastRunInfo::default(),
+                }
+            } else {
+                LastRunInfo::default()
+            }
+        }
+        Err(_) => LastRunInfo::default(),
+    }
+}
+
+/// Save the last run info to disk
+fn save_last_run_info<R: Runtime>(app_handle: &AppHandle<R>, info: &LastRunInfo) {
+    if let Ok(path) = get_last_run_path(app_handle) {
+        if let Ok(content) = serde_json::to_string_pretty(info) {
+            let _ = fs::write(&path, content);
+        }
+    }
+}
+
+/// Check if we should skip a job based on last run time
+/// Returns true if less than half the interval has passed since last run
+fn should_skip_job(last_run_str: Option<&str>) -> bool {
+    let Some(last_run_str) = last_run_str else {
+        return false; // No previous run, should execute
+    };
+
+    let last_run = match DateTime::parse_from_rfc3339(last_run_str) {
+        Ok(dt) => dt.with_timezone(&Utc),
+        Err(_) => return false, // Invalid timestamp, run the job
+    };
+
+    let now = Utc::now();
+    let elapsed = now.signed_duration_since(last_run);
+    let skip_threshold_hours = (JOB_INTERVAL_HOURS as f64 * SKIP_INTERVAL_FRACTION) as i64;
+    let skip_threshold = ChronoDuration::hours(skip_threshold_hours);
+
+    elapsed < skip_threshold
+}
 
 // ============================================================================
 // Result Types
@@ -164,33 +233,57 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
 
             log::info!("[Background] Starting scheduled jobs (Summary → Cleanup)...");
 
-            // Sequential: Summary first (needs raw interaction data)
-            log::info!("[Background] Running summary job...");
-            match run_summary_job(&app_handle).await {
-                Ok(result) => {
-                    log::info!(
-                        "[Summary] Complete. {} interactions analyzed, {} topics updated.",
-                        result.total_interactions,
-                        result.topics_updated.len()
-                    );
-                }
-                Err(e) => {
-                    log::error!("[Background] Summary job failed: {}", e);
+            // Load last run info to check if we should skip
+            let mut last_run_info = load_last_run_info(&app_handle);
+            let now = Utc::now().to_rfc3339();
+
+            // Summary job with skip check
+            if should_skip_job(last_run_info.summary_last_run.as_deref()) {
+                log::info!(
+                    "[Background] Skipping summary job - less than {} hours since last run",
+                    (JOB_INTERVAL_HOURS as f64 * SKIP_INTERVAL_FRACTION) as u64
+                );
+            } else {
+                log::info!("[Background] Running summary job...");
+                match run_summary_job(&app_handle).await {
+                    Ok(result) => {
+                        log::info!(
+                            "[Summary] Complete. {} interactions analyzed, {} topics updated.",
+                            result.total_interactions,
+                            result.topics_updated.len()
+                        );
+                        // Update last run time on success
+                        last_run_info.summary_last_run = Some(now.clone());
+                        save_last_run_info(&app_handle, &last_run_info);
+                    }
+                    Err(e) => {
+                        log::error!("[Background] Summary job failed: {}", e);
+                    }
                 }
             }
 
-            // Cleanup runs after summary (can safely remove processed entries)
-            log::info!("[Background] Running cleanup job...");
-            match run_cleanup_job(&app_handle).await {
-                Ok(result) => {
-                    log::info!(
-                        "[Cleanup] Complete. Removed {} entries, freed {} bytes.",
-                        result.deleted_count,
-                        result.bytes_freed
-                    );
-                }
-                Err(e) => {
-                    log::error!("[Background] Cleanup job failed: {}", e);
+            // Cleanup job with skip check
+            if should_skip_job(last_run_info.cleanup_last_run.as_deref()) {
+                log::info!(
+                    "[Background] Skipping cleanup job - less than {} hours since last run",
+                    (JOB_INTERVAL_HOURS as f64 * SKIP_INTERVAL_FRACTION) as u64
+                );
+            } else {
+                log::info!("[Background] Running cleanup job...");
+                match run_cleanup_job(&app_handle).await {
+                    Ok(result) => {
+                        log::info!(
+                            "[Cleanup] Complete. Removed {} entries, freed {} bytes.",
+                            result.deleted_count,
+                            result.bytes_freed
+                        );
+                        // Update last run time on success
+                        last_run_info.cleanup_last_run = Some(Utc::now().to_rfc3339());
+                        save_last_run_info(&app_handle, &last_run_info);
+                    }
+                    Err(e) => {
+                        log::error!("[Background] Cleanup job failed: {}", e);
+                    }
                 }
             }
 
@@ -198,6 +291,7 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
         }
     });
 }
+
 
 // ============================================================================
 // Summary Job
@@ -443,15 +537,31 @@ Interaction Entries:
 // ============================================================================
 
 /// Force-trigger the summary job (public API for on-demand analysis)
+/// Also updates the last run timestamp to prevent redundant scheduled runs
 pub async fn force_summary<R: Runtime>(app_handle: &AppHandle<R>) -> Result<SummaryResult, String> {
     log::info!("[Background] Force-triggered summary job");
-    run_summary_job(app_handle).await
+    let result = run_summary_job(app_handle).await?;
+
+    // Update last run time on success
+    let mut last_run_info = load_last_run_info(app_handle);
+    last_run_info.summary_last_run = Some(Utc::now().to_rfc3339());
+    save_last_run_info(app_handle, &last_run_info);
+
+    Ok(result)
 }
 
 /// Force-trigger the cleanup job (public API for on-demand cleanup)
+/// Also updates the last run timestamp to prevent redundant scheduled runs
 pub async fn force_cleanup<R: Runtime>(app_handle: &AppHandle<R>) -> Result<CleanupResult, String> {
     log::info!("[Background] Force-triggered cleanup job");
-    run_cleanup_job(app_handle).await
+    let result = run_cleanup_job(app_handle).await?;
+
+    // Update last run time on success
+    let mut last_run_info = load_last_run_info(app_handle);
+    last_run_info.cleanup_last_run = Some(Utc::now().to_rfc3339());
+    save_last_run_info(app_handle, &last_run_info);
+
+    Ok(result)
 }
 
 // ============================================================================
