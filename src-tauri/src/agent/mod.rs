@@ -641,6 +641,7 @@ impl Agent {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
+            app_handle.emit("agent-error", format!("Gemini API Error: {}", error_text)).ok();
             return Err(format!("Gemini API Error: {}", error_text));
         }
 
@@ -937,6 +938,7 @@ impl Agent {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
+            app_handle.emit("agent-error", format!("API error: {}", error_text)).ok();
             return Err(format!("API error: {}", error_text));
         }
 

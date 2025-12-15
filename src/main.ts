@@ -14,7 +14,8 @@ import {
   RESEND_ICON,
   STOP_ICON,
   TRASH_ICON,
-  UNDO_ICON
+  UNDO_ICON,
+  RETRY_ICON
 } from "./ui";
 
 // DOM Elements
@@ -119,8 +120,9 @@ async function handleInput(skipUi = false) {
     // For now, assuming the command returns when done or we listen for events.
     // If `chat` returns void, we need to listen for "agent-response" events.
   } catch (error) {
+    // API errors are handled by agent-error event listener
+    // This catch handles network/Tauri invoke errors only
     console.error("Chat error:", error);
-    addMessage("assistant", `Error: ${error}`);
   } finally {
     isProcessing = false;
     stopBtn.classList.remove("loading"); // Remove loading state
@@ -633,6 +635,60 @@ listen<string>("agent-tool-result", (event) => {
 
 listen("agent-processing-start", () => {
   // Optional: Show a "thinking" indicator
+});
+
+// Listen for API errors and display with retry button
+listen<string>("agent-error", (event) => {
+  const errorText = event.payload;
+  console.error("API Error:", errorText);
+
+  // Remove loading indicator if present
+  const loadingIndicator = chatArea.querySelector("#loading-indicator");
+  if (loadingIndicator) {
+    loadingIndicator.remove();
+  }
+
+  // Create error message with accordion and retry button below
+  const errorDiv = document.createElement("div");
+  errorDiv.className = "message error-message";
+  errorDiv.innerHTML = `
+    <details class="error-accordion">
+      <summary class="error-summary">API Error</summary>
+      <div class="error-details">${DOMPurify.sanitize(errorText)}</div>
+    </details>
+    <button class="retry-btn" title="Retry request">
+      ${RETRY_ICON}
+      <span>Retry</span>
+    </button>
+  `;
+
+  // Wire retry button
+  const retryBtn = errorDiv.querySelector(".retry-btn");
+  retryBtn?.addEventListener("click", async () => {
+    // Remove this error message
+    errorDiv.remove();
+
+    // Rewind backend history to remove the failed user message
+    try {
+      await invoke("rewind_history");
+      console.log("History rewound for retry");
+    } catch (e) {
+      console.error("Failed to rewind history:", e);
+    }
+
+    // Restore last images and resend
+    attachedImages = [...lastAttachedImages];
+    inputField.value = lastUserMessage;
+    handleInput(true);
+  });
+
+  chatArea.appendChild(errorDiv);
+  chatArea.scrollTop = chatArea.scrollHeight;
+
+  // Reset processing state
+  isProcessing = false;
+  stopBtn.classList.remove("loading");
+  stopBtn.style.display = "none";
 });
 // Focus Tracking for Consistent Blur UI
 (function () {
