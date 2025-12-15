@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
 import "katex/dist/katex.min.css";
 
@@ -32,6 +33,16 @@ let attachedImages: AttachedImage[] = [];
 let lastUserMessage = "";
 let lastAttachedImages: AttachedImage[] = [];
 let isCancelled = false;
+
+// Open external links in default browser
+document.addEventListener("click", (e) => {
+  const target = e.target as HTMLElement;
+  const anchor = target.closest("a");
+  if (anchor && anchor.href && (anchor.href.startsWith("http://") || anchor.href.startsWith("https://"))) {
+    e.preventDefault();
+    openUrl(anchor.href).catch(console.error);
+  }
+});
 
 function addMessage(
   role: "user" | "assistant",
@@ -823,8 +834,8 @@ settingsModal.innerHTML = `
     </div>
     <div class="setting-group">
       <label>
-        <input type="checkbox" id="jailbreak-mode" />
-        Jailbreak Mode (>500 tokens)
+        <input type="checkbox" id="incognito-mode" />
+        Incognito Mode (no logging/history)
       </label>
     </div>
     <div class="settings-actions">
@@ -840,7 +851,7 @@ const openRouterKeyInput = document.getElementById("openrouter-key") as HTMLInpu
 const braveKeyInput = document.getElementById("brave-key") as HTMLInputElement;
 const modelInput = document.getElementById("model-id") as HTMLSelectElement;
 const enableToolsCheckbox = document.getElementById("enable-tools") as HTMLInputElement;
-const jailbreakModeCheckbox = document.getElementById("jailbreak-mode") as HTMLInputElement;
+const incognitoModeCheckbox = document.getElementById("incognito-mode") as HTMLInputElement;
 const saveSettingsBtn = document.getElementById("save-settings") as HTMLButtonElement;
 const closeSettingsBtn = document.getElementById("close-settings") as HTMLButtonElement;
 
@@ -883,7 +894,7 @@ settingsBtn.addEventListener("click", async () => {
     braveKeyInput.value = config.brave_api_key || "";
     modelInput.value = config.selected_model || "gemini-2.5-flash";
     enableToolsCheckbox.checked = config.enable_tools || false;
-    jailbreakModeCheckbox.checked = config.jailbreak_mode || false;
+    incognitoModeCheckbox.checked = config.incognito_mode || false;
 
     updateToolAvailability(); // Run check on open
 
@@ -906,7 +917,7 @@ saveSettingsBtn.addEventListener("click", async () => {
     selected_model: modelInput.value || null,
     enable_web_search: true, // Default to true for now
     enable_tools: enableToolsCheckbox.checked,
-    jailbreak_mode: jailbreakModeCheckbox.checked,
+    incognito_mode: incognitoModeCheckbox.checked,
   };
 
   try {

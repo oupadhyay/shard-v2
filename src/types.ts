@@ -46,6 +46,6 @@ export interface AppConfig {
   selected_model?: string;
   enable_web_search?: boolean;
   enable_tools?: boolean;
-  jailbreak_mode?: boolean;
+  incognito_mode?: boolean;
   research_mode?: boolean;
 }

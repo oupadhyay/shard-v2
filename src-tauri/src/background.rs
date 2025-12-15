@@ -18,7 +18,7 @@ use tokio::time::{self, Duration};
 /// Configuration for background jobs
 pub const JOB_INTERVAL_HOURS: u64 = 6;
 pub const LOOKBACK_HOURS: i64 = 12;
-pub const LLM_MODEL: &str = "openai/gpt-oss-120b:free";
+pub const LLM_MODEL: &str = "openai/gpt-oss-20b:free";
 pub const LOG_RETENTION_DAYS: i64 = 30; // Fallback for date-based cleanup
 /// Skip job execution if less than this fraction of the interval has passed
 const SKIP_INTERVAL_FRACTION: f64 = 0.5;
@@ -350,6 +350,7 @@ INSTRUCTIONS:
 3. Only create NEW topics for genuinely new broad categories/projects.
 4. Keep topic names consistent with existing ones (use underscores, not spaces).
 5. Be concise but comprehensive in summaries.
+6. PRIORITY: When user-provided information conflicts with assistant responses, ALWAYS prefer the user's stated facts. The user often will try to correct the assistant's mistakes.
 
 Format: JSON array of {{"topic": string, "summary": string}}
 Return at most 5 topic updates. Ignore one-off queries.
@@ -640,9 +641,11 @@ fn gather_recent_interactions(
                     }
                     stats.total_chars += content.len();
 
-                    // Format for LLM (truncate long content)
+                    // Format for LLM (truncate long content, respecting UTF-8 boundaries)
                     let truncated = if content.len() > 500 {
-                        format!("{}...", &content[..500])
+                        // Find valid UTF-8 boundary at or before byte 500
+                        let boundary = content.floor_char_boundary(500);
+                        format!("{}...", &content[..boundary])
                     } else {
                         content.to_string()
                     };
@@ -670,9 +673,10 @@ fn load_topic_summaries_context<R: Runtime>(app_handle: &AppHandle<R>) -> String
                     if path.extension().and_then(|s| s.to_str()) == Some("md") {
                         if let Some(topic) = path.file_stem().and_then(|s| s.to_str()) {
                             if let Ok(content) = fs::read_to_string(&path) {
-                                // Truncate long summaries
+                                // Truncate long summaries (respecting UTF-8 boundaries)
                                 let truncated = if content.len() > 1000 {
-                                    format!("{}...", &content[..1000])
+                                    let boundary = content.floor_char_boundary(1000);
+                                    format!("{}...", &content[..boundary])
                                 } else {
                                     content
                                 };

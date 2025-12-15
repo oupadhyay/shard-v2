@@ -357,41 +357,45 @@ impl Agent {
             }
         }
 
-        // Log interactions for future RAG
-        // 1. Log user message
-        if let Some(emb) = user_embedding {
-            crate::interactions::log_interaction(app_handle, "user", &message, Some(emb))
-                .await
-                .ok();
-        }
+        // Log interactions for future RAG (skip in incognito mode)
+        let incognito = config.incognito_mode.unwrap_or(false);
 
-        // 2. Log assistant response
-        if let Some(last_msg) = history.last() {
-            if (last_msg.role == "model" || last_msg.role == "assistant")
-                && last_msg.content.is_some()
-            {
-                let content = last_msg.content.as_ref().unwrap();
-                let response_embedding = if let Some(api_key) = &config.gemini_api_key {
-                    crate::interactions::generate_embedding(&self.http_client, content, api_key)
-                        .await
-                        .ok()
-                } else {
-                    None
-                };
-                crate::interactions::log_interaction(
-                    app_handle,
-                    "model",
-                    content,
-                    response_embedding,
-                )
-                .await
-                .ok();
+        if !incognito {
+            // 1. Log user message
+            if let Some(emb) = user_embedding {
+                crate::interactions::log_interaction(app_handle, "user", &message, Some(emb))
+                    .await
+                    .ok();
             }
-        }
 
-        // Persist history to disk after each message exchange
-        drop(history); // Release lock before persist
-        self.persist_history().await;
+            // 2. Log assistant response
+            if let Some(last_msg) = history.last() {
+                if (last_msg.role == "model" || last_msg.role == "assistant")
+                    && last_msg.content.is_some()
+                {
+                    let content = last_msg.content.as_ref().unwrap();
+                    let response_embedding = if let Some(api_key) = &config.gemini_api_key {
+                        crate::interactions::generate_embedding(&self.http_client, content, api_key)
+                            .await
+                            .ok()
+                    } else {
+                        None
+                    };
+                    crate::interactions::log_interaction(
+                        app_handle,
+                        "model",
+                        content,
+                        response_embedding,
+                    )
+                    .await
+                    .ok();
+                }
+            }
+
+            // Persist history to disk after each message exchange
+            drop(history); // Release lock before persist
+            self.persist_history().await;
+        }
 
         Ok(())
     }
@@ -582,7 +586,7 @@ impl Agent {
             .ok()
             .filter(|s| !s.is_empty());
 
-        let system_prompt_content = if config.jailbreak_mode.unwrap_or(false) {
+        let system_prompt_content = if config.incognito_mode.unwrap_or(false) {
             crate::prompts::get_jailbreak_prompt(&selected_model)
         } else if is_research_mode {
             crate::prompts::get_research_system_prompt()
@@ -841,7 +845,7 @@ impl Agent {
             .ok()
             .filter(|s| !s.is_empty());
 
-        let system_prompt_content = if config.jailbreak_mode.unwrap_or(false) {
+        let system_prompt_content = if config.incognito_mode.unwrap_or(false) {
             crate::prompts::get_jailbreak_prompt(&model)
         } else if is_research_mode {
             crate::prompts::get_research_system_prompt()

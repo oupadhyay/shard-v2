@@ -16,7 +16,7 @@ pub struct AppConfig {
     pub enable_web_search: Option<bool>,
     pub enable_tools: Option<bool>,
     pub system_prompt: Option<String>, // Custom system prompt, if None will use MCP default
-    pub jailbreak_mode: Option<bool>,
+    pub incognito_mode: Option<bool>,
     pub research_mode: Option<bool>,
 }
 
@@ -32,7 +32,7 @@ impl Default for AppConfig {
             enable_web_search: None,
             enable_tools: Some(true),
             system_prompt: None,
-            jailbreak_mode: None,
+            incognito_mode: None,
             research_mode: Some(false),
         }
     }
