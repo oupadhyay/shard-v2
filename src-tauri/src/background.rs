@@ -18,7 +18,7 @@ use tokio::time::{self, Duration};
 /// Configuration for background jobs
 pub const JOB_INTERVAL_HOURS: u64 = 6;
 pub const LOOKBACK_HOURS: i64 = 12;
-pub const LLM_MODEL: &str = "openai/gpt-oss-20b:free";
+pub const LLM_MODEL: &str = "openai/gpt-oss-20b"; // Groq model ID (no :free suffix)
 pub const LOG_RETENTION_DAYS: i64 = 30; // Fallback for date-based cleanup
 /// Skip job execution if less than this fraction of the interval has passed
 const SKIP_INTERVAL_FRACTION: f64 = 0.5;
@@ -130,13 +130,14 @@ pub struct CleanupDecision {
 // LLM Integration
 // ============================================================================
 
-/// Make an LLM call via OpenRouter for background processing
+/// Make an LLM call via Groq for background processing
+/// Uses Groq API to avoid consuming user's OpenRouter quota
 async fn call_background_llm(
     http_client: &reqwest::Client,
-    openrouter_api_key: &str,
+    groq_api_key: &str,
     prompt: &str,
 ) -> Result<String, String> {
-    let url = "https://openrouter.ai/api/v1/chat/completions";
+    let url = "https://api.groq.com/openai/v1/chat/completions";
 
     let payload = serde_json::json!({
         "model": LLM_MODEL,
@@ -156,22 +157,22 @@ async fn call_background_llm(
 
     let res = http_client
         .post(url)
-        .header("Authorization", format!("Bearer {}", openrouter_api_key))
+        .header("Authorization", format!("Bearer {}", groq_api_key))
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("OpenRouter API network error: {}", e))?;
+        .map_err(|e| format!("Groq API network error: {}", e))?;
 
     if !res.status().is_success() {
         let error_text = res.text().await.unwrap_or_default();
-        return Err(format!("OpenRouter API error: {}", error_text));
+        return Err(format!("Groq API error: {}", error_text));
     }
 
     let body: serde_json::Value = res
         .json()
         .await
-        .map_err(|e| format!("Failed to parse OpenRouter response: {}", e))?;
+        .map_err(|e| format!("Failed to parse Groq response: {}", e))?;
 
     // Extract text content from response
     if let Some(choices) = body.get("choices").and_then(|c| c.as_array()) {
@@ -186,7 +187,7 @@ async fn call_background_llm(
         }
     }
 
-    Err("No content in OpenRouter response".to_string())
+    Err("No content in Groq response".to_string())
 }
 
 /// Parse topic updates from LLM JSON response
@@ -308,9 +309,9 @@ async fn run_summary_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summar
 
     // Load config for API key
     let config = crate::config::load_config(app_handle)?;
-    let openrouter_api_key = config
-        .openrouter_api_key
-        .ok_or("No OpenRouter API key configured for background jobs")?;
+    let groq_api_key = config
+        .groq_api_key
+        .ok_or("No Groq API key configured for background jobs")?;
 
     // Gather interactions from lookback period
     let (interactions, stats) = gather_recent_interactions(&interactions_dir, LOOKBACK_HOURS)?;
@@ -359,7 +360,7 @@ Return at most 5 topic updates. Ignore one-off queries.
     );
 
     let http_client = reqwest::Client::new();
-    let llm_response = call_background_llm(&http_client, &openrouter_api_key, &prompt).await;
+    let llm_response = call_background_llm(&http_client, &groq_api_key, &prompt).await;
 
     let mut topics_updated = vec![];
     let llm_reasoning = match llm_response {
@@ -432,10 +433,10 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
 
     // Load config for API key
     let config = crate::config::load_config(app_handle)?;
-    let openrouter_api_key = match config.openrouter_api_key {
+    let groq_api_key = match config.groq_api_key {
         Some(key) => key,
         None => {
-            log::info!("[Cleanup] No OpenRouter API key, falling back to date-based cleanup");
+            log::info!("[Cleanup] No Groq API key, falling back to date-based cleanup");
             return cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS);
         }
     };
@@ -475,7 +476,7 @@ Interaction Entries:
     );
 
     let http_client = reqwest::Client::new();
-    let llm_response = call_background_llm(&http_client, &openrouter_api_key, &prompt).await;
+    let llm_response = call_background_llm(&http_client, &groq_api_key, &prompt).await;
 
     match llm_response {
         Ok(response) => {

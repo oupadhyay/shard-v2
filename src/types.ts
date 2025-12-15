@@ -43,6 +43,8 @@ export interface OcrResult {
 export interface AppConfig {
   gemini_api_key?: string;
   openrouter_api_key?: string;
+  cerebras_api_key?: string;
+  groq_api_key?: string;
   selected_model?: string;
   enable_web_search?: boolean;
   enable_tools?: boolean;

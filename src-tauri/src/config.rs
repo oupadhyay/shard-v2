@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub api_key: Option<String>, // Generic/OpenAI key
     pub gemini_api_key: Option<String>,
     pub openrouter_api_key: Option<String>,
+    pub cerebras_api_key: Option<String>,
     pub brave_api_key: Option<String>,
     pub selected_model: Option<String>,
     pub api_base_url: Option<String>, // e.g., https://generativelanguage.googleapis.com/v1beta/openai/
@@ -18,6 +19,7 @@ pub struct AppConfig {
     pub system_prompt: Option<String>, // Custom system prompt, if None will use MCP default
     pub incognito_mode: Option<bool>,
     pub research_mode: Option<bool>,
+    pub groq_api_key: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -26,6 +28,7 @@ impl Default for AppConfig {
             api_key: None,
             gemini_api_key: None,
             openrouter_api_key: None,
+            cerebras_api_key: None,
             brave_api_key: None,
             selected_model: None,
             api_base_url: None,
@@ -34,6 +37,7 @@ impl Default for AppConfig {
             system_prompt: None,
             incognito_mode: None,
             research_mode: Some(false),
+            groq_api_key: None,
         }
     }
 }

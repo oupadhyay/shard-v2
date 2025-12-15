@@ -807,6 +807,14 @@ settingsModal.innerHTML = `
       <input type="password" id="openrouter-key" placeholder="Enter OpenRouter API Key" />
     </div>
     <div class="setting-group">
+      <label>Cerebras API Key</label>
+      <input type="password" id="cerebras-key" placeholder="Enter Cerebras API Key" />
+    </div>
+    <div class="setting-group">
+      <label>Groq API Key</label>
+      <input type="password" id="groq-key" placeholder="Enter Groq API Key" />
+    </div>
+    <div class="setting-group">
       <label>Brave Search API Key</label>
       <input type="password" id="brave-key" placeholder="Enter Brave API Key for web search" />
     </div>
@@ -814,15 +822,19 @@ settingsModal.innerHTML = `
       <label>Model</label>
       <select id="model-id">
         <optgroup label="Gemini AI">
-          <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
-          <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+          <option value="gemini-2.5-flash-lite">2.5 Flash Lite</option>
+          <option value="gemini-2.5-flash">2.5 Flash</option>
         </optgroup>
         <optgroup label="OpenRouter">
-          <option value="google/gemma-3-27b-it:free">google/gemma-3-27b-it:free</option>
-          <option value="openai/gpt-oss-20b:free">openai/gpt-oss-20b:free</option>
-          <option value="mistralai/devstral-2512:free">mistralai/devstral-2512:free</option>
-          <option value="allenai/olmo-3-32b-think:free">allenai/olmo-3-32b-think:free</option>
-          <option value="meta-llama/llama-3.3-70b-instruct:free">meta-llama/llama-3.3-70b-instruct:free</option>
+          <option value="google/gemma-3-27b-it:free">Gemma 3-27B</option>
+          <option value="openai/gpt-oss-20b:free">GPT-OSS 20B</option>
+          <option value="mistralai/devstral-2512:free">Devstral 2512</option>
+          <option value="allenai/olmo-3-32b-think:free">Olmo 3-32B Think</option>
+          <option value="meta-llama/llama-3.3-70b-instruct:free">LLaMA 3.3 70B</option>
+        </optgroup>
+        <optgroup label="Other Providers">
+          <option value="gpt-oss-120b (Cerebras)">GPT-OSS 120B (Cerebras)</option>
+          <option value="gpt-oss-120b (Groq)">GPT-OSS 120B (Groq)</option>
         </optgroup>
       </select>
     </div>
@@ -848,6 +860,8 @@ document.body.appendChild(settingsModal);
 
 const geminiKeyInput = document.getElementById("gemini-key") as HTMLInputElement;
 const openRouterKeyInput = document.getElementById("openrouter-key") as HTMLInputElement;
+const cerebrasKeyInput = document.getElementById("cerebras-key") as HTMLInputElement;
+const groqKeyInput = document.getElementById("groq-key") as HTMLInputElement;
 const braveKeyInput = document.getElementById("brave-key") as HTMLInputElement;
 const modelInput = document.getElementById("model-id") as HTMLSelectElement;
 const enableToolsCheckbox = document.getElementById("enable-tools") as HTMLInputElement;
@@ -891,6 +905,8 @@ settingsBtn.addEventListener("click", async () => {
     const config = await invoke<any>("get_config");
     geminiKeyInput.value = config.gemini_api_key || "";
     openRouterKeyInput.value = config.openrouter_api_key || "";
+    cerebrasKeyInput.value = config.cerebras_api_key || "";
+    groqKeyInput.value = config.groq_api_key || "";
     braveKeyInput.value = config.brave_api_key || "";
     modelInput.value = config.selected_model || "gemini-2.5-flash";
     enableToolsCheckbox.checked = config.enable_tools || false;
@@ -913,6 +929,8 @@ saveSettingsBtn.addEventListener("click", async () => {
   const config = {
     gemini_api_key: geminiKeyInput.value || null,
     openrouter_api_key: openRouterKeyInput.value || null,
+    cerebras_api_key: cerebrasKeyInput.value || null,
+    groq_api_key: groqKeyInput.value || null,
     brave_api_key: braveKeyInput.value || null,
     selected_model: modelInput.value || null,
     enable_web_search: true, // Default to true for now

@@ -325,7 +325,11 @@ impl Agent {
                 .selected_model
                 .clone()
                 .unwrap_or("gemini-2.5-flash-lite".to_string());
-            let is_gemini = !selected_model.contains("/");
+
+            // Detect provider: Gemini models don't have slash or provider suffixes
+            let is_gemini = !selected_model.contains("/")
+                && !selected_model.contains("(Cerebras)")
+                && !selected_model.contains("(Groq)");
 
             let continue_turn = if is_gemini {
                 let api_key = config.gemini_api_key.as_ref().ok_or("No Gemini API key")?;
@@ -341,6 +345,7 @@ impl Agent {
                 )
                 .await?
             } else {
+                // Both OpenRouter and Cerebras use OpenAI-compatible API
                 self.process_openrouter_turn(
                     app_handle,
                     config,
@@ -829,17 +834,58 @@ impl Agent {
             .clone()
             .unwrap_or("gemini-2.5-flash-lite".to_string());
         let enable_tools = config.enable_tools.unwrap_or(true);
-        let (api_key, base_url, model) = if let Some(key) = &config.openrouter_api_key {
+
+        // Detect provider from model name and configure accordingly
+        let is_cerebras = selected_model.contains("(Cerebras)");
+        let is_groq = selected_model.contains("(Groq)");
+
+        let (api_key, base_url, model, reasoning_effort, provider_name) = if is_cerebras {
+            // Cerebras: strip suffix and use Cerebras endpoint
+            let key = config
+                .cerebras_api_key
+                .as_ref()
+                .ok_or("No Cerebras API key configured")?;
+            let clean_model = selected_model.replace(" (Cerebras)", "").trim().to_string();
+            (
+                key.clone(),
+                "https://api.cerebras.ai/v1/".to_string(),
+                clean_model,
+                Some("high".to_string()), // Cerebras supports reasoning_effort
+                "Cerebras",
+            )
+        } else if is_groq {
+            // Groq: strip suffix, add openai/ prefix, and use Groq endpoint
+            let key = config
+                .groq_api_key
+                .as_ref()
+                .ok_or("No Groq API key configured")?;
+            // Groq expects model names like "openai/gpt-oss-120b"
+            let base_model = selected_model.replace(" (Groq)", "").trim().to_string();
+            let clean_model = format!("openai/{}", base_model);
+            (
+                key.clone(),
+                "https://api.groq.com/openai/v1/".to_string(),
+                clean_model,
+                Some("high".to_string()), // Groq GPT-OSS supports reasoning_effort
+                "Groq",
+            )
+        } else {
+            // OpenRouter
+            let key = config
+                .openrouter_api_key
+                .as_ref()
+                .ok_or("No OpenRouter API key configured")?;
             (
                 key.clone(),
                 "https://openrouter.ai/api/v1/".to_string(),
                 selected_model,
+                None, // OpenRouter doesn't use reasoning_effort
+                "OpenRouter",
             )
-        } else {
-            return Err("No OpenRouter API Key configured".to_string());
         };
 
         let url = format!("{}chat/completions", base_url);
+
         // Load memories for injection into system prompt
         let memory_context = crate::memories::get_memories_for_prompt(app_handle)
             .ok()
@@ -882,6 +928,7 @@ impl Agent {
             let api_key = api_key.clone();
             let client = self.http_client.clone();
             let use_tools = tools_opt.is_some();
+            let reasoning_effort = reasoning_effort.clone();
 
             async move {
                 let request_body = ChatCompletionRequest {
@@ -893,9 +940,9 @@ impl Agent {
                     } else {
                         None
                     },
-                    reasoning_effort: None,
+                    reasoning_effort,
                     reasoning: None,
-                    include_reasoning: Some(true),
+                    include_reasoning: if is_cerebras || is_groq { None } else { Some(true) },
                     stream: true,
                 };
 
@@ -903,6 +950,7 @@ impl Agent {
                     .post(&url)
                     .header("Authorization", format!("Bearer {}", api_key))
                     .header("Content-Type", "application/json")
+                    .header("User-Agent", "rust-reqwest/0.12")
                     .json(&request_body)
                     .send()
                     .await
@@ -931,19 +979,19 @@ impl Agent {
 
         let mut response = make_request(current_tools.clone())
             .await
-            .map_err(|e| format!("API network error: {}", e))?;
+            .map_err(|e| format!("{} network error: {}", provider_name, e))?;
 
         if response.status() == 404 && enable_tools {
-            println!("Got 404 with tools, retrying without tools...");
+            println!("[{}] Got 404 with tools, retrying without tools...", provider_name);
             response = make_request(None)
                 .await
-                .map_err(|e| format!("API network error (retry): {}", e))?;
+                .map_err(|e| format!("{} network error (retry): {}", provider_name, e))?;
         }
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            app_handle.emit("agent-error", format!("API error: {}", error_text)).ok();
-            return Err(format!("API error: {}", error_text));
+            app_handle.emit("agent-error", format!("{} error: {}", provider_name, error_text)).ok();
+            return Err(format!("{} error: {}", provider_name, error_text));
         }
 
         let mut full_content = String::new();
