@@ -19,6 +19,7 @@ mod gemini_files;
 mod memories;
 mod interactions;
 mod background;
+mod retrieval;
 
 #[cfg(test)]
 mod tests;
@@ -232,6 +233,11 @@ async fn rebuild_topic_index(app_handle: AppHandle) -> Result<usize, String> {
     memories::rebuild_topic_index(&app_handle, &http_client, &api_key).await
 }
 
+#[tauri::command]
+async fn rebuild_bm25_index(app_handle: AppHandle) -> Result<usize, String> {
+    retrieval::rebuild_bm25_index(&app_handle)
+}
+
 // --- Main Run Function ---
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -321,7 +327,8 @@ pub fn run() {
             hide_window,
             force_cleanup,
             force_summary,
-            rebuild_topic_index
+            rebuild_topic_index,
+            rebuild_bm25_index
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

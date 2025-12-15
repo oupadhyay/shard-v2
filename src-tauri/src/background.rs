@@ -389,6 +389,10 @@ Interaction Entries:
             match parse_cleanup_decision(&response) {
                 Ok(decision) => {
                     if decision.to_remove.is_empty() {
+                        // Also prune BM25 index
+                        if let Err(e) = crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000) {
+                            log::warn!("[Cleanup] BM25 prune failed: {}", e);
+                        }
                         return Ok(CleanupResult {
                             deleted_count: 0,
                             bytes_freed: 0,
@@ -400,6 +404,11 @@ Interaction Entries:
                     let (deleted, bytes) =
                         remove_entries_by_timestamp(&interactions_dir, &decision.to_remove)?;
 
+                    // Also prune BM25 index
+                    if let Err(e) = crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000) {
+                        log::warn!("[Cleanup] BM25 prune failed: {}", e);
+                    }
+
                     Ok(CleanupResult {
                         deleted_count: deleted,
                         bytes_freed: bytes,
@@ -408,13 +417,23 @@ Interaction Entries:
                 }
                 Err(e) => {
                     log::warn!("[Cleanup] Failed to parse LLM response: {}. Using date-based fallback.", e);
-                    cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS)
+                    let result = cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS)?;
+                    // Also prune BM25 index
+                    if let Err(e) = crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000) {
+                        log::warn!("[Cleanup] BM25 prune failed: {}", e);
+                    }
+                    Ok(result)
                 }
             }
         }
         Err(e) => {
             log::warn!("[Cleanup] LLM call failed: {}. Using date-based fallback.", e);
-            cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS)
+            let result = cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS)?;
+            // Also prune BM25 index
+            if let Err(e) = crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000) {
+                log::warn!("[Cleanup] BM25 prune failed: {}", e);
+            }
+            Ok(result)
         }
     }
 }

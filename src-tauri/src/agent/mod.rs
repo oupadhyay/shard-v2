@@ -1,13 +1,12 @@
 /**
  * Agent module - AI chat agent with Gemini and OpenRouter support
  */
-
-mod types;
 mod gemini;
 mod openrouter;
+mod types;
 
+pub use gemini::{construct_gemini_messages, parse_gemini_chunk, AgentEvent};
 pub use types::*;
-pub use gemini::{AgentEvent, construct_gemini_messages, parse_gemini_chunk};
 
 use crate::integrations::{
     arxiv::perform_arxiv_lookup, finance::perform_finance_lookup, weather::perform_weather_lookup,
@@ -24,6 +23,7 @@ pub struct Agent {
     http_client: Client,
     uploaded_files: Mutex<Vec<String>>,
     backup_history: Mutex<Option<Vec<ChatMessage>>>,
+    data_dir: std::path::PathBuf,
 }
 
 impl Agent {
@@ -39,11 +39,35 @@ impl Agent {
             .build()
             .unwrap_or_else(|_| Client::new());
 
+        // Load persisted history if it exists
+        let history_path = app_data_dir.join("chat_history.json");
+        let history = if history_path.exists() {
+            match std::fs::read_to_string(&history_path) {
+                Ok(contents) => match serde_json::from_str::<Vec<ChatMessage>>(&contents) {
+                    Ok(msgs) => {
+                        log::info!("Loaded {} messages from persisted history", msgs.len());
+                        msgs
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to parse chat history: {}", e);
+                        Vec::new()
+                    }
+                },
+                Err(e) => {
+                    log::warn!("Failed to read chat history: {}", e);
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
         Self {
-            history: Mutex::new(Vec::new()),
+            history: Mutex::new(history),
             http_client,
             uploaded_files: Mutex::new(Vec::new()),
             backup_history: Mutex::new(None),
+            data_dir: app_data_dir,
         }
     }
 
@@ -66,6 +90,11 @@ impl Agent {
             }
             uploaded_files.clear();
         }
+
+        // Persist the cleared state
+        drop(history); // Release lock before persist
+        drop(uploaded_files);
+        self.persist_history().await;
     }
 
     pub async fn rewind_history(&self) {
@@ -113,6 +142,23 @@ impl Agent {
     pub async fn has_backup(&self) -> bool {
         let backup = self.backup_history.lock().await;
         backup.is_some()
+    }
+
+    /// Persist current chat history to disk
+    pub async fn persist_history(&self) {
+        let history = self.history.lock().await;
+        let history_path = self.data_dir.join("chat_history.json");
+
+        match serde_json::to_string_pretty(&*history) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&history_path, json) {
+                    log::error!("Failed to persist chat history: {}", e);
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to serialize chat history: {}", e);
+            }
+        }
     }
 
     pub async fn process_message<R: Runtime>(
@@ -193,15 +239,21 @@ impl Agent {
             images: uploaded_images,
         });
 
-        // RAG: Generate embedding and retrieve relevant interactions
+        // RAG: Generate embedding and retrieve relevant interactions using hybrid search (BM25 + Dense + RRF)
         let user_embedding = if let Some(api_key) = &config.gemini_api_key {
-            crate::interactions::generate_embedding(&self.http_client, &message, api_key).await.ok()
+            crate::interactions::generate_embedding(&self.http_client, &message, api_key)
+                .await
+                .ok()
         } else {
             None
         };
 
         let relevant_interactions = if let Some(emb) = &user_embedding {
-            crate::interactions::search_interactions(app_handle, emb, 5).unwrap_or_default()
+            // Use hybrid search with RRF fusion of BM25 and dense results
+            crate::interactions::hybrid_search_interactions(
+                app_handle, &message, emb, /* limit= */ 5,
+            )
+            .unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -209,7 +261,12 @@ impl Agent {
         let mut rag_context_str = if !relevant_interactions.is_empty() {
             let mut s = String::from("\n\nRelevant Past Interactions:\n");
             for entry in relevant_interactions {
-                s.push_str(&format!("- [{}] {}: {}\n", entry.ts.format("%Y-%m-%d"), entry.role, entry.content));
+                s.push_str(&format!(
+                    "- [{}] {}: {}\n",
+                    entry.ts.format("%Y-%m-%d"),
+                    entry.role,
+                    entry.content
+                ));
             }
             Some(s)
         } else {
@@ -218,7 +275,9 @@ impl Agent {
 
         // RAG: Focused Summaries (Tier 2)
         if let Some(emb) = &user_embedding {
-            if let Ok(Some((topic, content))) = crate::memories::find_relevant_topics(app_handle, emb) {
+            if let Ok(Some((topic, content))) =
+                crate::memories::find_relevant_topics(app_handle, emb)
+            {
                 let s = rag_context_str.get_or_insert_with(String::new);
                 s.push_str("\n\nRelevant Topic Summary:\n");
                 s.push_str(&format!("### Topic: {}\n{}\n\n", topic, content));
@@ -289,7 +348,8 @@ impl Agent {
                     stream_id,
                     rag_context_str.as_deref(),
                     is_research_mode,
-                ).await?
+                )
+                .await?
             };
 
             if !continue_turn {
@@ -300,26 +360,49 @@ impl Agent {
         // Log interactions for future RAG
         // 1. Log user message
         if let Some(emb) = user_embedding {
-            crate::interactions::log_interaction(app_handle, "user", &message, Some(emb)).await.ok();
+            crate::interactions::log_interaction(app_handle, "user", &message, Some(emb))
+                .await
+                .ok();
         }
 
         // 2. Log assistant response
         if let Some(last_msg) = history.last() {
-            if (last_msg.role == "model" || last_msg.role == "assistant") && last_msg.content.is_some() {
+            if (last_msg.role == "model" || last_msg.role == "assistant")
+                && last_msg.content.is_some()
+            {
                 let content = last_msg.content.as_ref().unwrap();
                 let response_embedding = if let Some(api_key) = &config.gemini_api_key {
-                    crate::interactions::generate_embedding(&self.http_client, content, api_key).await.ok()
+                    crate::interactions::generate_embedding(&self.http_client, content, api_key)
+                        .await
+                        .ok()
                 } else {
                     None
                 };
-                crate::interactions::log_interaction(app_handle, "model", content, response_embedding).await.ok();
+                crate::interactions::log_interaction(
+                    app_handle,
+                    "model",
+                    content,
+                    response_embedding,
+                )
+                .await
+                .ok();
             }
         }
+
+        // Persist history to disk after each message exchange
+        drop(history); // Release lock before persist
+        self.persist_history().await;
 
         Ok(())
     }
 
-    async fn execute_tool<R: Runtime>(&self, app_handle: &AppHandle<R>, function_name: &str, args: &Value, config: &crate::config::AppConfig) -> String {
+    async fn execute_tool<R: Runtime>(
+        &self,
+        app_handle: &AppHandle<R>,
+        function_name: &str,
+        args: &Value,
+        config: &crate::config::AppConfig,
+    ) -> String {
         match function_name {
             "get_weather" => {
                 let location = args["location"].as_str().unwrap_or_default();
@@ -391,7 +474,8 @@ impl Agent {
                     _ => crate::memories::MemoryCategory::Fact,
                 };
 
-                match crate::memories::add_memory(app_handle, category, content.clone(), importance) {
+                match crate::memories::add_memory(app_handle, category, content.clone(), importance)
+                {
                     Ok(_) => format!("Memory saved: {}", content),
                     Err(e) => format!("Failed to save memory: {}", e),
                 }
@@ -400,7 +484,15 @@ impl Agent {
                 let topic = args["topic"].as_str().unwrap_or_default();
                 let content = args["content"].as_str().unwrap_or_default();
                 if let Some(api_key) = config.gemini_api_key.as_ref() {
-                    match crate::memories::update_topic_summary(app_handle, &self.http_client, api_key, topic, content).await {
+                    match crate::memories::update_topic_summary(
+                        app_handle,
+                        &self.http_client,
+                        api_key,
+                        topic,
+                        content,
+                    )
+                    .await
+                    {
                         Ok(_) => format!("Topic summary updated: {}", topic),
                         Err(e) => format!("Failed to update topic summary: {}", e),
                     }
@@ -495,10 +587,9 @@ impl Agent {
         } else if is_research_mode {
             crate::prompts::get_research_system_prompt()
         } else {
-            config
-                .system_prompt
-                .clone()
-                .unwrap_or_else(|| crate::prompts::get_default_system_prompt(memory_context.as_deref(), rag_context))
+            config.system_prompt.clone().unwrap_or_else(|| {
+                crate::prompts::get_default_system_prompt(memory_context.as_deref(), rag_context)
+            })
         };
 
         let contents = construct_gemini_messages(history);
@@ -680,7 +771,9 @@ impl Agent {
                     .emit("agent-tool-call", tool_call_event.to_string())
                     .ok();
 
-                let tool_result = self.execute_tool(app_handle, function_name, args, config).await;
+                let tool_result = self
+                    .execute_tool(app_handle, function_name, args, config)
+                    .await;
 
                 let result_payload = serde_json::json!({
                     "name": function_name,
@@ -752,10 +845,9 @@ impl Agent {
         } else if is_research_mode {
             crate::prompts::get_research_system_prompt()
         } else {
-            config
-                .system_prompt
-                .clone()
-                .unwrap_or_else(|| crate::prompts::get_default_system_prompt(memory_context.as_deref(), rag_context))
+            config.system_prompt.clone().unwrap_or_else(|| {
+                crate::prompts::get_default_system_prompt(memory_context.as_deref(), rag_context)
+            })
         };
 
         let mut messages_with_system = vec![ChatMessage {
@@ -982,7 +1074,9 @@ impl Agent {
                         .emit("agent-tool-call", tool_call_event.to_string())
                         .ok();
 
-                    let tool_result = self.execute_tool(app_handle, function_name, &args, config).await;
+                    let tool_result = self
+                        .execute_tool(app_handle, function_name, &args, config)
+                        .await;
 
                     let result_payload = serde_json::json!({
                         "name": function_name,

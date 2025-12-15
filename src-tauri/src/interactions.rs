@@ -149,6 +149,12 @@ pub async fn log_interaction<R: Runtime>(
     writeln!(writer, "{}", json)
         .map_err(|e| format!("Failed to write interaction: {}", e))?;
 
+    // Also update BM25 index for hybrid retrieval
+    let doc_id = entry.ts.to_rfc3339();
+    let mut bm25_index = crate::retrieval::load_bm25_index(app_handle)?;
+    bm25_index.add_document(&doc_id, content);
+    crate::retrieval::save_bm25_index(app_handle, &bm25_index)?;
+
     Ok(())
 }
 
@@ -168,6 +174,8 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot_product / (norm_a * norm_b)
 }
 
+/// Search interactions by embedding similarity (dense-only search, kept as fallback)
+#[allow(dead_code)]
 pub fn search_interactions<R: Runtime>(
     app_handle: &AppHandle<R>,
     query_embedding: &[f32],
@@ -203,6 +211,110 @@ pub fn search_interactions<R: Runtime>(
 
     // Return top K
     Ok(results.into_iter().take(limit).map(|(_, entry)| entry).collect())
+}
+
+/// Hybrid search using RRF to fuse BM25 and dense retrieval results
+pub fn hybrid_search_interactions<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    query: &str,
+    query_embedding: &[f32],
+    limit: usize,
+) -> Result<Vec<InteractionEntry>, String> {
+    use crate::retrieval::{compute_rrf, load_bm25_index, ScoredDocument};
+
+    // Get BM25 results (N = 50 candidates)
+    let bm25_index = load_bm25_index(app_handle)?;
+    let bm25_results = bm25_index.search(query, 50);
+
+    // Get dense results (N = 50 candidates)
+    let dir = get_interactions_dir(app_handle)?;
+    let mut dense_results: Vec<(f32, String, InteractionEntry)> = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                if let Ok(file) = fs::File::open(&path) {
+                    let reader = BufReader::new(file);
+                    for line in reader.lines().flatten() {
+                        if let Ok(entry) = serde_json::from_str::<InteractionEntry>(&line) {
+                            if let Some(emb) = &entry.embedding {
+                                let score = cosine_similarity(query_embedding, emb);
+                                let doc_id = entry.ts.to_rfc3339();
+                                dense_results.push((score, doc_id, entry));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort dense results and take top 50
+    dense_results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    dense_results.truncate(50);
+
+    // Convert to ScoredDocument format for RRF
+    let dense_scored: Vec<ScoredDocument> = dense_results
+        .iter()
+        .map(|(score, doc_id, _)| ScoredDocument {
+            doc_id: doc_id.clone(),
+            score: *score,
+        })
+        .collect();
+
+    // Perform RRF fusion
+    let fused = compute_rrf(&bm25_results, &dense_scored, limit);
+
+    // Map fused doc_ids back to InteractionEntry
+    // Build lookup from doc_id -> entry
+    let entry_map: std::collections::HashMap<String, InteractionEntry> = dense_results
+        .into_iter()
+        .map(|(_, doc_id, entry)| (doc_id, entry))
+        .collect();
+
+    // Also need to load entries for BM25-only results
+    let mut final_results: Vec<InteractionEntry> = Vec::with_capacity(fused.len());
+    for scored in fused {
+        if let Some(entry) = entry_map.get(&scored.doc_id) {
+            final_results.push(entry.clone());
+        } else {
+            // Entry was in BM25 but not in dense (no embedding) - load from JSONL
+            if let Ok(entry) = find_entry_by_doc_id(app_handle, &scored.doc_id) {
+                final_results.push(entry);
+            }
+        }
+    }
+
+    Ok(final_results)
+}
+
+/// Find an interaction entry by its doc_id (RFC3339 timestamp)
+fn find_entry_by_doc_id<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    doc_id: &str,
+) -> Result<InteractionEntry, String> {
+    let dir = get_interactions_dir(app_handle)?;
+
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                if let Ok(file) = fs::File::open(&path) {
+                    let reader = BufReader::new(file);
+                    for line in reader.lines().flatten() {
+                        if let Ok(entry) = serde_json::from_str::<InteractionEntry>(&line) {
+                            if entry.ts.to_rfc3339() == doc_id {
+                                return Ok(entry);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err(format!("Entry not found: {}", doc_id))
 }
 
 // ============================================================================
