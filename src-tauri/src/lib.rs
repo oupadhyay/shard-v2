@@ -19,7 +19,7 @@ mod gemini_files;
 mod memories;
 mod interactions;
 mod background;
-mod retrieval;
+pub mod retrieval;
 
 #[cfg(test)]
 mod tests;

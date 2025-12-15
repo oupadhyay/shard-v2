@@ -32,16 +32,8 @@ let lastUserMessage = "";
 let lastAttachedImages: AttachedImage[] = [];
 let isCancelled = false;
 
-// Wrapper to pass chatArea to addMessage
 function addMessage(role: "user" | "assistant", content: string, images?: { base64: string; mimeType: string }[]) {
   addMessageToChat(chatArea, role, content, images);
-}
-
-// Helper: Clear image state
-function clearImageState() {
-  attachedImages = [];
-  const preview = document.getElementById("image-preview-container");
-  if (preview) preview.innerHTML = '';
 }
 
 
