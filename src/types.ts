@@ -17,7 +17,7 @@ export interface AttachedImage extends ImageAttachment {
 export interface ChatMessage {
   role: string;
   content: string;
-  image?: ImageAttachment;
+  images?: ImageAttachment[];
   tool_calls?: ToolCall[];
   tool_call_id?: string | null;
   reasoning?: string | null;

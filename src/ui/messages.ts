@@ -86,19 +86,21 @@ export function addMessage(
   chatArea: HTMLElement,
   role: "user" | "assistant",
   content: string,
-  image?: ImageAttachment
+  images?: ImageAttachment[]
 ) {
   const msgDiv = document.createElement("div");
   msgDiv.className = `message ${role}`;
 
-  // Render Image if present
-  if (image) {
+  // Render all images if present
+  if (images && images.length > 0) {
     const imgContainer = document.createElement("div");
     imgContainer.className = "message-image-container";
-    const img = document.createElement("img");
-    img.src = `data:${image.mimeType};base64,${image.base64}`;
-    img.className = "message-image";
-    imgContainer.appendChild(img);
+    for (const image of images) {
+      const img = document.createElement("img");
+      img.src = `data:${image.mimeType};base64,${image.base64}`;
+      img.className = "message-image";
+      imgContainer.appendChild(img);
+    }
     msgDiv.appendChild(imgContainer);
   }
 

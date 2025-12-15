@@ -121,11 +121,11 @@ async fn chat(
     app_handle: AppHandle,
     state: tauri::State<'_, AppState>,
     message: String,
-    image_base64: Option<String>,
-    image_mime_type: Option<String>,
+    images_base64: Option<Vec<String>>,
+    images_mime_types: Option<Vec<String>>,
 ) -> Result<(), String> {
     let config = config::load_config(&app_handle)?;
-    state.agent.process_message(&app_handle, message, image_base64, image_mime_type, &config).await
+    state.agent.process_message(&app_handle, message, images_base64, images_mime_types, &config).await
 }
 
 #[tauri::command]

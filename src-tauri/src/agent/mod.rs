@@ -119,63 +119,78 @@ impl Agent {
         &self,
         app_handle: &AppHandle<R>,
         message: String,
-        image_base64: Option<String>,
-        image_mime_type: Option<String>,
+        images_base64: Option<Vec<String>>,
+        images_mime_types: Option<Vec<String>>,
         config: &crate::config::AppConfig,
     ) -> Result<(), String> {
         println!("process_message called. Message len: {}", message.len());
 
         let mut history = self.history.lock().await;
 
-        let (user_content, file_uri_option) = if let (Some(img_data), Some(mime_type)) =
-            (image_base64.clone(), image_mime_type.clone())
+        // Process images: upload to Gemini Files API if using Gemini model
+        let uploaded_images: Option<Vec<ImageAttachment>> = if let (Some(bases), Some(mimes)) =
+            (images_base64.as_ref(), images_mime_types.as_ref())
         {
-            let selected_model = config
-                .selected_model
-                .clone()
-                .unwrap_or("gemini-2.0-flash".to_string());
-            if !selected_model.contains("/") {
-                match crate::gemini_files::upload_image_to_gemini_files_api(
-                    &self.http_client,
-                    &img_data,
-                    &mime_type,
-                    config.gemini_api_key.as_ref().ok_or("No Gemini API key")?,
-                )
-                .await
-                {
-                    Ok(file_uri) => {
-                        self.uploaded_files
-                            .lock()
-                            .await
-                            .push(file_uri.file_uri.clone());
-                        (Some(message.clone()), Some(file_uri.file_uri))
-                    }
-                    Err(e) => {
-                        return Err(format!("Failed to upload image to Gemini Files API: {}", e))
-                    }
-                }
+            if bases.is_empty() {
+                None
             } else {
-                (Some(message.clone()), None)
+                let selected_model = config
+                    .selected_model
+                    .clone()
+                    .unwrap_or("gemini-2.0-flash".to_string());
+                let is_gemini = !selected_model.contains("/");
+
+                let mut attachments = Vec::with_capacity(bases.len());
+
+                for (img_data, mime_type) in bases.iter().zip(mimes.iter()) {
+                    let file_uri = if is_gemini {
+                        // Upload to Gemini Files API
+                        match crate::gemini_files::upload_image_to_gemini_files_api(
+                            &self.http_client,
+                            img_data,
+                            mime_type,
+                            config.gemini_api_key.as_ref().ok_or("No Gemini API key")?,
+                        )
+                        .await
+                        {
+                            Ok(file_uri) => {
+                                self.uploaded_files
+                                    .lock()
+                                    .await
+                                    .push(file_uri.file_uri.clone());
+                                Some(file_uri.file_uri)
+                            }
+                            Err(e) => {
+                                return Err(format!(
+                                    "Failed to upload image to Gemini Files API: {}",
+                                    e
+                                ))
+                            }
+                        }
+                    } else {
+                        None // OpenRouter doesn't use file URIs
+                    };
+
+                    attachments.push(ImageAttachment {
+                        base64: img_data.clone(),
+                        mime_type: mime_type.clone(),
+                        file_uri,
+                    });
+                }
+
+                Some(attachments)
             }
         } else {
-            (Some(message.clone()), None)
+            None
         };
 
         history.push(ChatMessage {
             role: "user".to_string(),
-            content: user_content,
+            content: Some(message.clone()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            image: if let (Some(base64), Some(mime)) = (image_base64, image_mime_type) {
-                Some(ImageAttachment {
-                    base64,
-                    mime_type: mime,
-                    file_uri: file_uri_option,
-                })
-            } else {
-                None
-            },
+            images: uploaded_images,
         });
 
         // RAG: Generate embedding and retrieve relevant interactions
@@ -650,7 +665,7 @@ impl Agent {
                         .collect(),
                 ),
                 tool_call_id: None,
-                image: None,
+                images: None,
             });
 
             for fc in tool_calls {
@@ -681,7 +696,7 @@ impl Agent {
                     reasoning: None,
                     tool_calls: None,
                     tool_call_id: Some("call_".to_string() + &fc.name),
-                    image: None,
+                    images: None,
                 });
             }
             Ok(true) // Continue loop so model can respond to tool results
@@ -696,7 +711,7 @@ impl Agent {
                 },
                 tool_calls: None,
                 tool_call_id: None,
-                image: None,
+                images: None,
             });
             Ok(false) // No tool calls = final response, stop the loop
         }
@@ -749,7 +764,7 @@ impl Agent {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            image: None,
+            images: None,
         }];
         messages_with_system.extend(history.clone());
 
@@ -950,7 +965,7 @@ impl Agent {
                     Some(tool_calls_buffer.clone())
                 },
                 tool_call_id: None,
-                image: None,
+                images: None,
             });
 
             if !tool_calls_buffer.is_empty() {
@@ -983,7 +998,7 @@ impl Agent {
                         reasoning: None,
                         tool_calls: None,
                         tool_call_id: Some(tool_call.id.clone()),
-                        image: None,
+                        images: None,
                     });
                 }
                 Ok(true) // Continue loop so model can respond to tool results

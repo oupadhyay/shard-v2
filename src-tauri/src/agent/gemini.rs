@@ -77,14 +77,16 @@ pub fn construct_gemini_messages(history: &[ChatMessage]) -> Vec<GeminiContent> 
                 }
             }
 
-            if let Some(img) = &msg.image {
-                if let Some(uri) = &img.file_uri {
-                    parts.push(GeminiPart::FileData {
-                        file_data: GeminiFileData {
-                            mime_type: img.mime_type.clone(),
-                            file_uri: uri.clone(),
-                        },
-                    });
+            if let Some(images) = &msg.images {
+                for img in images {
+                    if let Some(uri) = &img.file_uri {
+                        parts.push(GeminiPart::FileData {
+                            file_data: GeminiFileData {
+                                mime_type: img.mime_type.clone(),
+                                file_uri: uri.clone(),
+                            },
+                        });
+                    }
                 }
             }
 

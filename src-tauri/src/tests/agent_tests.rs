@@ -9,7 +9,7 @@ mod tests {
             content: Some("Hello".to_string()),
             tool_calls: None,
             tool_call_id: None,
-            image: None,
+            images: None,
             reasoning: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -25,11 +25,11 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             reasoning: None,
-            image: Some(ImageAttachment {
+            images: Some(vec![ImageAttachment {
                 base64: "base64data".to_string(),
                 mime_type: "image/png".to_string(),
                 file_uri: Some("https://example.com/image.png".to_string()),
-            }),
+            }]),
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("base64data"));
@@ -74,7 +74,7 @@ mod tests {
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                image: None,
+                images: None,
             },
             ChatMessage {
                 role: "assistant".to_string(),
@@ -82,7 +82,7 @@ mod tests {
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                image: None,
+                images: None,
             },
         ];
 

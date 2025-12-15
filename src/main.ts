@@ -27,21 +27,21 @@ const stopBtn = document.getElementById("stop-btn") as HTMLButtonElement;
 
 // State
 let isProcessing = false;
-let attachedImage: AttachedImage | null = null;
+let attachedImages: AttachedImage[] = [];
 let lastUserMessage = "";
-let lastAttachedImage: AttachedImage | null = null;
+let lastAttachedImages: AttachedImage[] = [];
 let isCancelled = false;
 
 // Wrapper to pass chatArea to addMessage
-function addMessage(role: "user" | "assistant", content: string, image?: { base64: string; mimeType: string }) {
-  addMessageToChat(chatArea, role, content, image);
+function addMessage(role: "user" | "assistant", content: string, images?: { base64: string; mimeType: string }[]) {
+  addMessageToChat(chatArea, role, content, images);
 }
 
 // Helper: Clear image state
 function clearImageState() {
-  attachedImage = null;
+  attachedImages = [];
   const preview = document.getElementById("image-preview-container");
-  if (preview) preview.remove();
+  if (preview) preview.innerHTML = '';
 }
 
 
@@ -58,13 +58,14 @@ async function handleInput(skipUi = false) {
     lastUserMessage = text;
     isCancelled = false;
 
-    // Capture current image state before clearing it
-    const currentImage = attachedImage ? { ...attachedImage } : undefined;
-    lastAttachedImage = attachedImage; // Save for resend
+    // Capture current images state before clearing it
+    const currentImages = [...attachedImages];
+    lastAttachedImages = [...attachedImages]; // Save for resend
 
     inputField.value = "";
     inputField.style.height = "auto"; // Reset height
-    addMessage("user", text, currentImage);
+    // Pass all images for display
+    addMessage("user", text, currentImages);
   } else {
     // Resending: reset cancelled state
     isCancelled = false;
@@ -89,10 +90,10 @@ async function handleInput(skipUi = false) {
 
     const messagePayload: any = { message: skipUi ? lastUserMessage : text };
 
-    // Use the image that is currently set (restored by caller if resending)
-    const imageToSend = attachedImage;
+    // Use the images that are currently set (restored by caller if resending)
+    const imagesToSend = attachedImages;
 
-    if (imageToSend) {
+    if (imagesToSend.length > 0) {
       // For OpenRouter models (don't support images), prepend OCR text
       // For Gemini models, send image data
       // Simple heuristic: if there's a slash in model name, it's OpenRouter
@@ -100,18 +101,19 @@ async function handleInput(skipUi = false) {
       const selectedModel = config?.selected_model || "";
 
       if (selectedModel.includes("/")) {
-        // OpenRouter - use OCR text
-        messagePayload.message = `[Image OCR]:\n${imageToSend.ocrText}\n\n${messagePayload.message}`;
+        // OpenRouter - use OCR text for all images
+        const ocrTexts = imagesToSend.map(img => img.ocrText).join('\n---\n');
+        messagePayload.message = `[Image OCR]:\n${ocrTexts}\n\n${messagePayload.message}`;
       } else {
-        // Gemini - send image data
-        // Tauri expects camelCase keys for snake_case Rust arguments
-        messagePayload.imageBase64 = imageToSend.base64;
-        messagePayload.imageMimeType = imageToSend.mimeType;
+        // Gemini - send image data as arrays
+        messagePayload.imagesBase64 = imagesToSend.map(img => img.base64);
+        messagePayload.imagesMimeTypes = imagesToSend.map(img => img.mimeType);
       }
 
       // Clear image preview after determining what to send
-      attachedImage = null;
-      document.getElementById("image-preview-container")?.remove();
+      attachedImages = [];
+      const container = document.getElementById("image-preview-container");
+      if (container) container.innerHTML = '';
     }
 
     console.log("Sending payload to backend:", {
@@ -160,7 +162,7 @@ stopBtn.addEventListener("click", async () => {
     }
 
     // Restore image state
-    attachedImage = lastAttachedImage;
+    attachedImages = [...lastAttachedImages];
 
     // We don't need to set inputField.value if we use lastUserMessage inside handleInput
     // But handleInput reads inputField.value.
@@ -207,10 +209,15 @@ inputField.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     handleInput();
-  } else if (e.key === "Backspace" && inputField.value === "" && attachedImage) {
+  } else if (e.key === "Backspace" && inputField.value === "" && attachedImages.length > 0) {
     e.preventDefault();
-    attachedImage = null;
-    document.getElementById("image-preview-container")?.remove();
+    // Remove last image
+    attachedImages.pop();
+    const container = document.getElementById("image-preview-container");
+    if (container) {
+      const lastPreview = container.lastElementChild;
+      if (lastPreview) lastPreview.remove();
+    }
   }
 });
 
@@ -231,28 +238,33 @@ inputField.addEventListener("paste", async (e) => {
 
     // Convert to base64
     const reader = new FileReader();
-    reader.onload = async () => {
+    reader.onload = () => {
       const base64 = (reader.result as string).split(",")[1]; // Remove data:image/...;base64, prefix
       const mimeType = file.type;
 
-      // Clear any existing image
-      clearImageState();
-
-      // Perform OCR on pasted image
-      let ocrText = "";
-      try {
-        ocrText = await invoke<string>("ocr_image", { imageBase64: base64 });
-      } catch (err) {
-        console.warn("OCR failed for pasted image:", err);
-        ocrText = "[OCR failed]";
-      }
-
-      // Show preview with OCR text
-      showImagePreview({
+      // Show preview immediately with placeholder OCR (non-blocking)
+      const imageData = {
         base64,
         mimeType,
-        ocrText
-      });
+        ocrText: "[Processing...]"
+      };
+      showImagePreview(imageData);
+      const imageIndex = attachedImages.length - 1; // Index of just-added image
+
+      // Run OCR in background (don't await)
+      invoke<string>("ocr_image", { imageBase64: base64 })
+        .then(ocrText => {
+          // Update the image's OCR text once complete
+          if (attachedImages[imageIndex]) {
+            attachedImages[imageIndex].ocrText = ocrText;
+          }
+        })
+        .catch(err => {
+          console.warn("OCR failed for pasted image:", err);
+          if (attachedImages[imageIndex]) {
+            attachedImages[imageIndex].ocrText = "[OCR failed]";
+          }
+        });
 
       inputField.focus();
     };
@@ -262,38 +274,51 @@ inputField.addEventListener("paste", async (e) => {
 
 
 function showImagePreview(imageData: { base64: string; mimeType: string; ocrText: string }) {
-  attachedImage = imageData;
-  const previewContainer = document.getElementById("image-preview-container");
-  if (!previewContainer) {
-    const container = document.createElement("div");
+  // Add to images array
+  attachedImages.push(imageData);
+  const index = attachedImages.length - 1;
+
+  let container = document.getElementById("image-preview-container");
+  if (!container) {
+    container = document.createElement("div");
     container.id = "image-preview-container";
     container.className = "image-preview-container";
-    container.innerHTML = `
-      <div class="image-preview">
-        <button class="image-close-btn" title="Remove image">×</button>
-        <img src="data:${imageData.mimeType};base64,${imageData.base64}" alt="OCR Capture" />
-      </div>
-    `;
     // Insert before the input-container (which contains the input field)
     const inputContainer = inputField.parentElement;
     const bottomBar = inputContainer?.parentElement;
     if (bottomBar && inputContainer) {
       bottomBar.insertBefore(container, inputContainer);
     }
-
-    // Add close handler
-    container.querySelector(".image-close-btn")?.addEventListener("click", () => {
-      attachedImage = null;
-      container.remove();
-    });
   }
+
+  // Create preview element for this image
+  const preview = document.createElement("div");
+  preview.className = "image-preview";
+  preview.dataset.index = index.toString();
+  preview.innerHTML = `
+    <button class="image-close-btn" title="Remove image">×</button>
+    <img src="data:${imageData.mimeType};base64,${imageData.base64}" alt="Attached image ${index + 1}" />
+  `;
+
+  // Add close handler
+  preview.querySelector(".image-close-btn")?.addEventListener("click", () => {
+    const idx = parseInt(preview.dataset.index || "0");
+    attachedImages.splice(idx, 1);
+    preview.remove();
+    // Re-index remaining previews
+    const remaining = container?.querySelectorAll(".image-preview") || [];
+    remaining.forEach((el, i) => {
+      (el as HTMLElement).dataset.index = i.toString();
+    });
+  });
+
+  container.appendChild(preview);
 }
 
 ocrBtn.addEventListener("click", async () => {
+  // Focus immediately so user can type while OCR processes
+  inputField.focus();
   try {
-    // Clear previous image state before new capture
-    clearImageState();
-
     const result = await invoke<OcrResult>("perform_ocr_capture");
     if (result) {
       showImagePreview({
@@ -307,15 +332,15 @@ ocrBtn.addEventListener("click", async () => {
   } catch (error) {
     console.error("OCR error:", error);
     alert(`OCR Failed: ${error}`);
+    inputField.focus();
   }
 });
 
 // Listen for OCR trigger from global shortcut
 listen("trigger-ocr", async () => {
+  // Focus immediately so user can type while OCR processes
+  inputField.focus();
   try {
-    // Clear previous image state before new capture
-    clearImageState();
-
     const result = await invoke<OcrResult>("perform_ocr_capture");
     if (result) {
       showImagePreview({
@@ -327,6 +352,7 @@ listen("trigger-ocr", async () => {
     }
   } catch (error) {
     console.error("OCR error:", error);
+    inputField.focus();
   }
 });
 
@@ -404,8 +430,8 @@ async function loadChatHistory() {
     // Process messages sequentially
     for (const msg of history) {
       if (msg.role === "user") {
-        // Pass image if present in history
-        addMessage("user", msg.content || "", msg.image);
+        // Pass all images if present in history
+        addMessage("user", msg.content || "", msg.images);
       } else if (msg.role === "assistant") {
         // 1. Render Reasoning (if present)
         if (msg.reasoning) {
@@ -428,7 +454,7 @@ async function loadChatHistory() {
 
         // 3. Render Assistant Content (if present)
         if (msg.content) {
-          addMessage("assistant", msg.content, msg.image);
+          addMessage("assistant", msg.content, msg.images);
         }
       } else if (msg.role === "tool") {
         // Tool result message
@@ -717,7 +743,7 @@ settingsModal.innerHTML = `
         </optgroup>
         <optgroup label="OpenRouter">
           <option value="google/gemma-3-27b-it:free">google/gemma-3-27b-it:free</option>
-          <option value="openai/gpt-oss-120b:free">openai/gpt-oss-120b:free</option>
+          <option value="openai/gpt-oss-20b:free">openai/gpt-oss-20b:free</option>
           <option value="mistralai/devstral-2512:free">mistralai/devstral-2512:free</option>
           <option value="allenai/olmo-3-32b-think:free">allenai/olmo-3-32b-think:free</option>
           <option value="meta-llama/llama-3.3-70b-instruct:free">meta-llama/llama-3.3-70b-instruct:free</option>
@@ -804,6 +830,7 @@ settingsBtn.addEventListener("click", async () => {
 
 closeSettingsBtn.addEventListener("click", () => {
   settingsModal.style.display = "none";
+  inputField.focus();
 });
 
 saveSettingsBtn.addEventListener("click", async () => {
@@ -821,6 +848,7 @@ saveSettingsBtn.addEventListener("click", async () => {
     await invoke("save_config", { config });
     alert("Settings saved!");
     settingsModal.style.display = "none";
+    inputField.focus();
   } catch (e) {
     alert(`Failed to save settings: ${e}`);
   }

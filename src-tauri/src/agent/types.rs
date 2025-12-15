@@ -8,6 +8,37 @@ use serde_json::Value;
 // Chat Message Types
 // ============================================================================
 
+// Helper for backward-compatible deserialization of image/images field
+fn deserialize_images<'de, D>(deserializer: D) -> Result<Option<Vec<ImageAttachment>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ImageOrImages {
+        Single(ImageAttachment),
+        Multiple(Vec<ImageAttachment>),
+    }
+
+    // First, deserialize into a raw Value to check for both field names
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+
+    match value {
+        None => Ok(None),
+        Some(v) => {
+            // Try to parse as ImageOrImages
+            serde_json::from_value::<ImageOrImages>(v)
+                .map(|ioi| Some(match ioi {
+                    ImageOrImages::Single(img) => vec![img],
+                    ImageOrImages::Multiple(imgs) => imgs,
+                }))
+                .map_err(|e| D::Error::custom(format!("Failed to parse images: {}", e)))
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChatMessage {
     pub role: String,
@@ -18,8 +49,14 @@ pub struct ChatMessage {
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image: Option<ImageAttachment>,
+    /// Images attached to the message. Supports backward-compat read from old "image" field.
+    #[serde(
+        default,
+        alias = "image",
+        deserialize_with = "deserialize_images",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub images: Option<Vec<ImageAttachment>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
