@@ -13,6 +13,10 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
+use crate::retrieval::{
+    apply_temporal_boost, fuse_rrf_multi, load_bm25_index, min_dense_hits, rrf_k_default,
+    temporal_tau_days, HitSource, ScoredHit,
+};
 
 // ============================================================================
 // Data Types
@@ -214,17 +218,36 @@ pub fn search_interactions<R: Runtime>(
 }
 
 /// Hybrid search using RRF to fuse BM25 and dense retrieval results
+///
+/// Features:
+/// - N-list RRF fusion (currently BM25 + dense interactions)
+/// - Fallback to BM25-only when dense results are sparse
+/// - Temporal boost for recency-sensitive queries
 pub fn hybrid_search_interactions<R: Runtime>(
     app_handle: &AppHandle<R>,
     query: &str,
     query_embedding: &[f32],
     limit: usize,
 ) -> Result<Vec<InteractionEntry>, String> {
-    use crate::retrieval::{compute_rrf, load_bm25_index, ScoredDocument};
-
     // Get BM25 results (N = 50 candidates)
     let bm25_index = load_bm25_index(app_handle)?;
     let bm25_results = bm25_index.search(query, 50);
+
+    // Convert BM25 results to ScoredHit
+    let bm25_hits: Vec<ScoredHit> = bm25_results
+        .iter()
+        .map(|d| {
+            let ts = chrono::DateTime::parse_from_rfc3339(&d.doc_id)
+                .ok()
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            ScoredHit {
+                doc_id: d.doc_id.clone(),
+                score: d.score,
+                source: HitSource::Bm25,
+                ts,
+            }
+        })
+        .collect();
 
     // Get dense results (N = 50 candidates)
     let dir = get_interactions_dir(app_handle)?;
@@ -254,17 +277,30 @@ pub fn hybrid_search_interactions<R: Runtime>(
     dense_results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     dense_results.truncate(50);
 
-    // Convert to ScoredDocument format for RRF
-    let dense_scored: Vec<ScoredDocument> = dense_results
+    // Convert to ScoredHit format
+    let dense_hits: Vec<ScoredHit> = dense_results
         .iter()
-        .map(|(score, doc_id, _)| ScoredDocument {
+        .map(|(score, doc_id, entry)| ScoredHit {
             doc_id: doc_id.clone(),
             score: *score,
+            source: HitSource::DenseInteraction,
+            ts: Some(entry.ts),
         })
         .collect();
 
-    // Perform RRF fusion
-    let fused = compute_rrf(&bm25_results, &dense_scored, limit);
+    // Perform RRF fusion with fallback for sparse dense results
+    let mut fused = if dense_hits.len() < min_dense_hits() {
+        log::debug!(
+            "[Hybrid] Sparse dense results ({}), using BM25-only fallback",
+            dense_hits.len()
+        );
+        fuse_rrf_multi(&[&bm25_hits], rrf_k_default(), limit)
+    } else {
+        fuse_rrf_multi(&[&bm25_hits, &dense_hits], rrf_k_default(), limit)
+    };
+
+    // Apply temporal boost for recency
+    apply_temporal_boost(&mut fused, temporal_tau_days());
 
     // Map fused doc_ids back to InteractionEntry
     // Build lookup from doc_id -> entry

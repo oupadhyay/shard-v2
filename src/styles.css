@@ -299,6 +299,56 @@ body {
   transform: scale(0.97);
 }
 
+/* Fallback Messages (rate limit → provider switch) */
+.fallback-message {
+  background: transparent !important;
+  padding: 0 !important;
+  backdrop-filter: none;
+}
+
+.fallback-accordion {
+  background: radial-gradient(circle at left, rgba(50, 45, 20, 0.85) 0%, rgba(30, 25, 10, 0.9) 100%);
+  border: 1px solid rgba(255, 200, 80, 0.25);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.fallback-summary {
+  padding: 10px 14px;
+  font-weight: 600;
+  font-size: 13px;
+  color: rgba(255, 200, 100, 0.95);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fallback-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fallback-summary::before {
+  content: '⚡';
+  font-size: 14px;
+}
+
+.fallback-summary:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.fallback-details { /* yellow alert */
+  padding: 10px 14px;
+  font-size: 12px;
+  color: rgba(255, 220, 150, 0.9);
+  background: rgba(0, 0, 0, 0.2);
+  border-top: 1px solid rgba(255, 200, 80, 0.15);
+  word-break: break-word;
+  font-family: monospace;
+}
+
 .message-image-container {
   margin-bottom: 8px;
   border-radius: 8px;

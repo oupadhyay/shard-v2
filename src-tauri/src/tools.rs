@@ -25,7 +25,7 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "query": { "type": "string", "description": "Wikipedia article title. Use exact page title as it appears on Wikipedia (e.g., 'San Francisco 49ers', 'Albert Einstein')." },
+                        "query": { "type": "string", "description": "Wikipedia article title. Use exact page title as it appears on Wikipedia (e.g., 'San Francisco 49ers', 'Albert Einstein'). For example, use 'SchedMD' and 'NVIDIA' not 'SchedMD acquisition by NVIDIA'" },
                     },
                     "required": ["query"]
                 }),

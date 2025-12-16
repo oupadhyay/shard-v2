@@ -988,10 +988,72 @@ impl Agent {
                 .map_err(|e| format!("{} network error (retry): {}", provider_name, e))?;
         }
 
+        // Check for token quota errors on Cerebras/Groq and fallback to OpenRouter
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            app_handle.emit("agent-error", format!("{} error: {}", provider_name, error_text)).ok();
-            return Err(format!("{} error: {}", provider_name, error_text));
+            let is_quota_error = error_text.contains("token_quota_exceeded")
+                || error_text.contains("too_many_tokens")
+                || error_text.contains("rate_limit")
+                || error_text.contains("tokens per minute");
+
+            // Only fallback for Cerebras/Groq quota errors, not OpenRouter
+            if is_quota_error && (is_cerebras || is_groq) {
+                // Check if OpenRouter is available for fallback
+                if let Some(openrouter_key) = &config.openrouter_api_key {
+                    // Emit fallback notification with original error
+                    let fallback_event = serde_json::json!({
+                        "title": "API Error: Moving to OpenRouter",
+                        "details": format!("{} error: {}", provider_name, error_text)
+                    });
+                    app_handle.emit("agent-fallback", fallback_event.to_string()).ok();
+
+                    // Rebuild request for OpenRouter
+                    let openrouter_url = "https://openrouter.ai/api/v1/chat/completions";
+                    // Use GPT-OSS-20b on OpenRouter as fallback
+                    let fallback_model = "openai/gpt-oss-20b:free".to_string();
+
+                    let fallback_body = ChatCompletionRequest {
+                        model: fallback_model,
+                        messages: api_messages.clone(),
+                        tools: current_tools.clone(),
+                        tool_choice: if current_tools.is_some() {
+                            Some("auto".to_string())
+                        } else {
+                            None
+                        },
+                        reasoning_effort: None,
+                        reasoning: None,
+                        include_reasoning: Some(true),
+                        stream: true,
+                    };
+
+                    response = self.http_client
+                        .post(openrouter_url)
+                        .header("Authorization", format!("Bearer {}", openrouter_key))
+                        .header("Content-Type", "application/json")
+                        .header("User-Agent", "rust-reqwest/0.12")
+                        .json(&fallback_body)
+                        .send()
+                        .await
+                        .map_err(|e| format!("OpenRouter fallback network error: {}", e))?;
+
+                    // Check if fallback succeeded
+                    if !response.status().is_success() {
+                        let fallback_error = response.text().await.unwrap_or_default();
+                        app_handle.emit("agent-error", format!("OpenRouter fallback error: {}", fallback_error)).ok();
+                        return Err(format!("OpenRouter fallback error: {}", fallback_error));
+                    }
+                    // Continue with fallback response
+                } else {
+                    // No OpenRouter key available, show original error
+                    app_handle.emit("agent-error", format!("{} error: {}", provider_name, error_text)).ok();
+                    return Err(format!("{} error: {}", provider_name, error_text));
+                }
+            } else {
+                // Not a quota error or already on OpenRouter, show original error
+                app_handle.emit("agent-error", format!("{} error: {}", provider_name, error_text)).ok();
+                return Err(format!("{} error: {}", provider_name, error_text));
+            }
         }
 
         let mut full_content = String::new();

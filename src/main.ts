@@ -718,6 +718,32 @@ listen<string>("agent-error", (event) => {
   stopBtn.classList.remove("loading");
   stopBtn.style.display = "none";
 });
+
+// Listen for provider fallback notifications (rate limit → OpenRouter)
+listen<string>("agent-fallback", (event) => {
+  try {
+    const data = JSON.parse(event.payload);
+    const title = data.title || "Provider Fallback";
+    const details = data.details || "";
+
+    console.log("[Fallback]", title, details);
+
+    // Create a non-blocking notification accordion in chat
+    const fallbackDiv = document.createElement("div");
+    fallbackDiv.className = "message fallback-message";
+    fallbackDiv.innerHTML = `
+      <details class="fallback-accordion">
+        <summary class="fallback-summary">${DOMPurify.sanitize(title)}</summary>
+        <div class="fallback-details">${DOMPurify.sanitize(details)}</div>
+      </details>
+    `;
+
+    chatArea.appendChild(fallbackDiv);
+    chatArea.scrollTop = chatArea.scrollHeight;
+  } catch (e) {
+    console.error("Failed to parse fallback event:", e);
+  }
+});
 // Focus Tracking for Consistent Blur UI
 (function () {
   const root = document.documentElement;

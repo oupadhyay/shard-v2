@@ -13,16 +13,6 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
 
-// ============================================================================
-// BM25 Constants
-// ============================================================================
-
-/// Term frequency saturation parameter
-const BM25_K1: f32 = 1.2;
-/// Length normalization parameter
-const BM25_B: f32 = 0.75;
-/// RRF dampening constant (standard default)
-const RRF_K: f32 = 60.0;
 
 // ============================================================================
 // Data Structures
@@ -41,12 +31,44 @@ pub struct BM25Index {
     pub doc_count: u32,
 }
 
-/// A scored document result
+/// Source of a retrieval hit (for debugging and fusion weighting)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HitSource {
+    Bm25,
+    DenseInteraction,
+    DenseTopicChunk, // future-proofing for chunked topic retrieval
+}
+
+/// A scored retrieval hit with metadata for fusion
+#[derive(Debug, Clone)]
+pub struct ScoredHit {
+    pub doc_id: String,
+    pub score: f32,
+    pub source: HitSource,
+    pub ts: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Legacy scored document (kept for backwards compatibility)
 #[derive(Debug, Clone)]
 pub struct ScoredDocument {
     pub doc_id: String,
     pub score: f32,
 }
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/// Term frequency saturation parameter (BM25)
+const BM25_K1: f32 = 1.2;
+/// Length normalization parameter (BM25)
+const BM25_B: f32 = 0.75;
+/// RRF dampening constant (standard default)
+const RRF_K_DEFAULT: f32 = 60.0;
+/// Minimum dense hits before falling back to BM25-only
+const MIN_DENSE_HITS: usize = 3;
+/// Default temporal decay half-life in days
+const TEMPORAL_TAU_DAYS: f32 = 15.0;
 
 // ============================================================================
 // Tokenization
@@ -195,7 +217,7 @@ impl BM25Index {
 // Reciprocal Rank Fusion
 // ============================================================================
 
-/// Compute RRF fusion of two ranked lists
+/// Compute RRF fusion of two ranked lists (legacy API, kept for compatibility)
 ///
 /// RRF(d) = Σ 1/(k + rank_L(d))
 /// where k is a dampening constant (default 60)
@@ -208,13 +230,13 @@ pub fn compute_rrf(
 
     // Add BM25 contributions (1-indexed ranks)
     for (rank, doc) in bm25_results.iter().enumerate() {
-        let rrf_contribution = 1.0 / (RRF_K + (rank + 1) as f32);
+        let rrf_contribution = 1.0 / (RRF_K_DEFAULT + (rank + 1) as f32);
         *rrf_scores.entry(doc.doc_id.clone()).or_insert(0.0) += rrf_contribution;
     }
 
     // Add dense contributions (1-indexed ranks)
     for (rank, doc) in dense_results.iter().enumerate() {
-        let rrf_contribution = 1.0 / (RRF_K + (rank + 1) as f32);
+        let rrf_contribution = 1.0 / (RRF_K_DEFAULT + (rank + 1) as f32);
         *rrf_scores.entry(doc.doc_id.clone()).or_insert(0.0) += rrf_contribution;
     }
 
@@ -227,6 +249,85 @@ pub fn compute_rrf(
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     results.truncate(limit);
     results
+}
+
+/// Compute RRF fusion over N ranked lists of ScoredHit
+///
+/// RRF(d) = Σ_L 1/(k + rank_L(d))
+/// Returns fused results sorted by RRF score
+pub fn fuse_rrf_multi(lists: &[&[ScoredHit]], k: f32, limit: usize) -> Vec<ScoredHit> {
+    use std::collections::HashMap;
+
+    let mut rrf_scores: HashMap<String, f32> = HashMap::new();
+    let mut hit_metadata: HashMap<String, (HitSource, Option<chrono::DateTime<chrono::Utc>>)> =
+        HashMap::new();
+
+    for list in lists {
+        for (rank, hit) in list.iter().enumerate() {
+            let rrf_contribution = 1.0 / (k + (rank + 1) as f32);
+            *rrf_scores.entry(hit.doc_id.clone()).or_insert(0.0) += rrf_contribution;
+
+            // Keep first source we encounter (arbitrary but consistent)
+            hit_metadata
+                .entry(hit.doc_id.clone())
+                .or_insert((hit.source, hit.ts));
+        }
+    }
+
+    // Sort by RRF score descending
+    let mut results: Vec<ScoredHit> = rrf_scores
+        .into_iter()
+        .map(|(doc_id, score)| {
+            let (source, ts) = hit_metadata.get(&doc_id).cloned().unwrap_or((HitSource::Bm25, None));
+            ScoredHit {
+                doc_id,
+                score,
+                source,
+                ts,
+            }
+        })
+        .collect();
+
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(limit);
+    results
+}
+
+/// Apply exponential decay boost based on recency
+///
+/// boost = base_score * exp(-(now - ts) / τ)
+/// where τ is half-life in days (default 15.0)
+///
+/// Hits without timestamps are left unchanged.
+pub fn apply_temporal_boost(hits: &mut [ScoredHit], tau_days: f32) {
+    let now = chrono::Utc::now();
+    let tau_secs = tau_days * 24.0 * 3600.0;
+
+    for hit in hits.iter_mut() {
+        if let Some(ts) = hit.ts {
+            let age_secs = (now - ts).num_seconds().max(0) as f32;
+            let decay = (-age_secs / tau_secs).exp();
+            hit.score *= decay;
+        }
+    }
+
+    // Re-sort after boosting
+    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+}
+
+/// Get the default minimum dense hits threshold (for external use)
+pub fn min_dense_hits() -> usize {
+    MIN_DENSE_HITS
+}
+
+/// Get the default temporal decay half-life in days (for external use)
+pub fn temporal_tau_days() -> f32 {
+    TEMPORAL_TAU_DAYS
+}
+
+/// Get the default RRF k constant (for external use)
+pub fn rrf_k_default() -> f32 {
+    RRF_K_DEFAULT
 }
 
 // ============================================================================
@@ -493,5 +594,88 @@ mod tests {
         // Order should be preserved from BM25
         assert_eq!(fused[0].doc_id, "A");
         assert_eq!(fused[1].doc_id, "B");
+    }
+
+    #[test]
+    fn test_fuse_rrf_multi_two_lists() {
+        let now = chrono::Utc::now();
+        let bm25_hits = vec![
+            ScoredHit { doc_id: "A".to_string(), score: 10.0, source: HitSource::Bm25, ts: Some(now) },
+            ScoredHit { doc_id: "B".to_string(), score: 8.0, source: HitSource::Bm25, ts: Some(now) },
+        ];
+        let dense_hits = vec![
+            ScoredHit { doc_id: "B".to_string(), score: 0.9, source: HitSource::DenseInteraction, ts: Some(now) },
+            ScoredHit { doc_id: "C".to_string(), score: 0.8, source: HitSource::DenseInteraction, ts: Some(now) },
+        ];
+
+        let fused = fuse_rrf_multi(&[&bm25_hits, &dense_hits], 60.0, 10);
+
+        // B appears in both lists, should be ranked highest or near top
+        let b_pos = fused.iter().position(|r| r.doc_id == "B");
+        assert!(b_pos.is_some());
+        assert!(b_pos.unwrap() <= 1);
+    }
+
+    #[test]
+    fn test_fuse_rrf_multi_single_list() {
+        let now = chrono::Utc::now();
+        let hits = vec![
+            ScoredHit { doc_id: "X".to_string(), score: 5.0, source: HitSource::Bm25, ts: Some(now) },
+            ScoredHit { doc_id: "Y".to_string(), score: 3.0, source: HitSource::Bm25, ts: Some(now) },
+        ];
+
+        let fused = fuse_rrf_multi(&[&hits], 60.0, 10);
+        assert_eq!(fused.len(), 2);
+        assert_eq!(fused[0].doc_id, "X");
+        assert_eq!(fused[1].doc_id, "Y");
+    }
+
+    #[test]
+    fn test_fuse_rrf_multi_three_lists() {
+        let now = chrono::Utc::now();
+        let list1 = vec![ScoredHit { doc_id: "A".to_string(), score: 1.0, source: HitSource::Bm25, ts: Some(now) }];
+        let list2 = vec![ScoredHit { doc_id: "A".to_string(), score: 1.0, source: HitSource::DenseInteraction, ts: Some(now) }];
+        let list3 = vec![ScoredHit { doc_id: "A".to_string(), score: 1.0, source: HitSource::DenseTopicChunk, ts: Some(now) }];
+
+        let fused = fuse_rrf_multi(&[&list1, &list2, &list3], 60.0, 10);
+
+        // A appears in all 3 lists, should get highest RRF
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].doc_id, "A");
+        // RRF contribution = 3 * (1/(60+1)) ≈ 0.049
+        assert!(fused[0].score > 0.04);
+    }
+
+    #[test]
+    fn test_temporal_boost_recent_first() {
+        let now = chrono::Utc::now();
+        let hour_ago = now - chrono::Duration::hours(1);
+        let month_ago = now - chrono::Duration::days(30);
+
+        let mut hits = vec![
+            ScoredHit { doc_id: "old".to_string(), score: 1.0, source: HitSource::Bm25, ts: Some(month_ago) },
+            ScoredHit { doc_id: "new".to_string(), score: 1.0, source: HitSource::Bm25, ts: Some(hour_ago) },
+        ];
+
+        apply_temporal_boost(&mut hits, 15.0); // 15-day half-life
+
+        // Recent hit should now be first due to higher decay-adjusted score
+        assert_eq!(hits[0].doc_id, "new");
+        assert!(hits[0].score > hits[1].score);
+    }
+
+    #[test]
+    fn test_temporal_boost_no_timestamp() {
+        let now = chrono::Utc::now();
+        let mut hits = vec![
+            ScoredHit { doc_id: "with_ts".to_string(), score: 1.0, source: HitSource::Bm25, ts: Some(now) },
+            ScoredHit { doc_id: "no_ts".to_string(), score: 1.0, source: HitSource::Bm25, ts: None },
+        ];
+
+        apply_temporal_boost(&mut hits, 15.0);
+
+        // Both should still be present, no timestamp hit retains score
+        let no_ts = hits.iter().find(|h| h.doc_id == "no_ts").unwrap();
+        assert!((no_ts.score - 1.0).abs() < 0.01); // Unchanged
     }
 }
