@@ -62,6 +62,20 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
+                name: "read_arxiv_paper".to_string(),
+                description: "Read the full content of an ArXiv paper. Use this AFTER search_arxiv to get detailed paper content. Input can be ArXiv paper ID (e.g., '2401.12345') or URL.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "paper_id": { "type": "string", "description": "ArXiv paper ID (e.g., '2401.12345') or full arxiv.org URL" },
+                    },
+                    "required": ["paper_id"]
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
                 name: "web_search".to_string(),
                 description: "Search the web for current/recent information. BEST for: sports scores, news, current events, live data, recent updates. Returns 5 results with title, URL, and snippet. One search is usually sufficient - avoid multiple redundant searches.".to_string(),
                 parameters: json!({

@@ -9,8 +9,11 @@ pub use gemini::{construct_gemini_messages, parse_gemini_chunk, AgentEvent};
 pub use types::*;
 
 use crate::integrations::{
-    arxiv::perform_arxiv_lookup, finance::perform_finance_lookup, weather::perform_weather_lookup,
-    web_search::perform_web_search, wikipedia::perform_wikipedia_lookup,
+    arxiv::{perform_arxiv_lookup, read_arxiv_paper},
+    finance::perform_finance_lookup,
+    weather::perform_weather_lookup,
+    web_search::perform_web_search,
+    wikipedia::perform_wikipedia_lookup,
 };
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -452,7 +455,8 @@ impl Agent {
                             .iter()
                             .map(|p| {
                                 format!(
-                                    "- {} ({}): {}",
+                                    "- [{}] {} ({}): {}",
+                                    p.id,
                                     p.title,
                                     p.published_date.as_deref().unwrap_or("?"),
                                     p.summary
@@ -462,6 +466,18 @@ impl Agent {
                         format!("ArXiv Results:\n{}", summaries.join("\n\n"))
                     }
                     Err(e) => format!("Error: {}", e),
+                }
+            }
+            "read_arxiv_paper" => {
+                let paper_id = args["paper_id"].as_str().unwrap_or_default();
+                match read_arxiv_paper(&self.http_client, paper_id).await {
+                    Ok(paper) => {
+                        format!(
+                            "# {}\n\n**Abstract:** {}\n\n{}",
+                            paper.title, paper.abstract_text, paper.content
+                        )
+                    }
+                    Err(e) => format!("Error reading paper: {}", e),
                 }
             }
             "web_search" => {
