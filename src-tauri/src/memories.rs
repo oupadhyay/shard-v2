@@ -21,6 +21,19 @@ pub struct TopicIndex {
     pub topics: HashMap<String, Vec<f32>>, // topic_name -> embedding
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct InsightIndex {
+    pub insights: HashMap<String, InsightMeta>, // title -> metadata
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InsightMeta {
+    pub embedding: Vec<f32>,
+    pub reference_count: u32,  // Track access frequency
+    pub update_count: u32,     // Track how many times information was added (for up-leveling)
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryCategory {
@@ -252,7 +265,7 @@ pub async fn update_topic_summary<R: Runtime>(
     let filename = format!("{}.md", topic.trim().replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "_"));
     let path = topics_dir.join(filename);
 
-    fs::write(&path, content)
+    fs::write(&path, format!("# {}\n\n{}", topic, content))
         .map_err(|e| format!("Failed to write topic summary: {}", e))?;
 
     // Generate embedding for the topic content (or just topic name + start of content)
@@ -319,6 +332,8 @@ pub async fn rebuild_topic_index<R: Runtime>(
 }
 
 /// Find relevant topic summaries based on query embedding (RAG)
+/// Note: Superseded by find_relevant_context() which handles both topics and insights
+#[allow(dead_code)]
 pub fn find_relevant_topics<R: Runtime>(
     app_handle: &AppHandle<R>,
     query_embedding: &[f32],
@@ -347,6 +362,294 @@ pub fn find_relevant_topics<R: Runtime>(
     }
 
     Ok(None)
+}
+
+// ============================================================================
+// Insights (Tier 2.5) - Granular atomic facts for specific queries
+// ============================================================================
+
+
+/// Get the path to the insights directory
+pub fn get_insights_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
+    let memories_dir = get_memories_dir(app_handle)?;
+    let insights_dir = memories_dir.join("insights");
+
+    if !insights_dir.exists() {
+        fs::create_dir_all(&insights_dir)
+            .map_err(|e| format!("Failed to create insights directory: {}", e))?;
+    }
+
+    Ok(insights_dir)
+}
+
+fn get_insight_index_path<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
+    let insights_dir = get_insights_dir(app_handle)?;
+    Ok(insights_dir.join("index.json"))
+}
+
+pub fn load_insight_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<InsightIndex, String> {
+    let path = get_insight_index_path(app_handle)?;
+    if !path.exists() {
+        return Ok(InsightIndex::default());
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read insight index: {}", e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse insight index: {}", e))
+}
+
+pub fn save_insight_index<R: Runtime>(app_handle: &AppHandle<R>, index: &InsightIndex) -> Result<(), String> {
+    let path = get_insight_index_path(app_handle)?;
+    let content = serde_json::to_string_pretty(index)
+        .map_err(|e| format!("Failed to serialize insight index: {}", e))?;
+    fs::write(&path, content)
+        .map_err(|e| format!("Failed to write insight index: {}", e))
+}
+
+/// Sanitize a title to a valid filename
+fn sanitize_filename(title: &str) -> String {
+    title.trim().replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "_")
+}
+
+/// Read an insight file
+pub fn read_insight<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    title: &str,
+) -> Result<String, String> {
+    let insights_dir = get_insights_dir(app_handle)?;
+    let filename = format!("{}.md", sanitize_filename(title));
+    let path = insights_dir.join(filename);
+
+    if !path.exists() {
+        return Err(format!("Insight not found: {}", title));
+    }
+
+    fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read insight: {}", e))
+}
+
+/// Create or update an insight (Async, generates embedding)
+pub async fn update_insight<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    http_client: &reqwest::Client,
+    api_key: &str,
+    title: &str,
+    content: &str,
+) -> Result<(), String> {
+    let insights_dir = get_insights_dir(app_handle)?;
+    let filename = format!("{}.md", sanitize_filename(title));
+    let path = insights_dir.join(&filename);
+
+    // Write markdown with heading format
+    let formatted_content = format!("# {}\n\n{}", title, content);
+    fs::write(&path, formatted_content)
+        .map_err(|e| format!("Failed to write insight: {}", e))?;
+
+    // Generate embedding
+    let embedding_text = format!("Insight: {}\nContent: {}", title, content.chars().take(1000).collect::<String>());
+    let embedding = crate::interactions::generate_embedding(http_client, &embedding_text, api_key).await?;
+
+    // Update index (preserve counts if exists)
+    let mut index = load_insight_index(app_handle)?;
+    let (reference_count, update_count) = index.insights.get(title)
+        .map(|m| (m.reference_count, m.update_count + 1))
+        .unwrap_or((0, 1)); // Start at 1 for new insights
+
+    index.insights.insert(title.to_string(), InsightMeta {
+        embedding,
+        reference_count,
+        update_count,
+        created_at: Utc::now(),
+    });
+    save_insight_index(app_handle, &index)?;
+
+    log::info!("Insight updated: {}", title);
+    Ok(())
+}
+
+/// Delete an insight file and remove from index
+pub fn delete_insight<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    title: &str,
+) -> Result<bool, String> {
+    let insights_dir = get_insights_dir(app_handle)?;
+    let filename = format!("{}.md", sanitize_filename(title));
+    let path = insights_dir.join(&filename);
+
+    let file_deleted = if path.exists() {
+        fs::remove_file(&path)
+            .map_err(|e| format!("Failed to delete insight file: {}", e))?;
+        true
+    } else {
+        false
+    };
+
+    // Remove from index
+    let mut index = load_insight_index(app_handle)?;
+    let was_in_index = index.insights.remove(title).is_some();
+    if was_in_index {
+        save_insight_index(app_handle, &index)?;
+    }
+
+    log::info!("Insight deleted: {}", title);
+    Ok(file_deleted || was_in_index)
+}
+
+/// Increment reference count for an insight
+pub fn increment_insight_reference<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    title: &str,
+) -> Result<u32, String> {
+    let mut index = load_insight_index(app_handle)?;
+    if let Some(meta) = index.insights.get_mut(title) {
+        meta.reference_count += 1;
+        let new_count = meta.reference_count;
+        save_insight_index(app_handle, &index)?;
+        Ok(new_count)
+    } else {
+        Err(format!("Insight not found in index: {}", title))
+    }
+}
+
+/// Get insights that are candidates for promotion to topics (update_count >= threshold)
+pub fn get_promotion_candidates<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    threshold: u32,
+) -> Result<Vec<String>, String> {
+    let index = load_insight_index(app_handle)?;
+    let candidates = index.insights.iter()
+        .filter(|(_, meta)| meta.update_count >= threshold)
+        .map(|(title, _)| title.clone())
+        .collect();
+    Ok(candidates)
+}
+
+/// Find relevant insights based on query embedding (RAG)
+/// Returns highest-scoring insight if above threshold
+pub fn find_relevant_insights<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    query_embedding: &[f32],
+) -> Result<Option<(String, String, f32)>, String> {
+    let index = load_insight_index(app_handle)?;
+    let mut best_score = -1.0f32;
+    let mut best_title = None;
+
+    for (title, meta) in index.insights.iter() {
+        let score = crate::interactions::cosine_similarity(query_embedding, &meta.embedding);
+        if score > best_score {
+            best_score = score;
+            best_title = Some(title.clone());
+        }
+    }
+
+    // Same threshold as topics (0.4)
+    if best_score > 0.4 {
+        if let Some(title) = best_title {
+            if let Ok(content) = read_insight(app_handle, &title) {
+                return Ok(Some((title, content, best_score)));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+/// Find best match between topics and insights, preferring insights on tie
+/// Returns (name, content, is_insight)
+pub fn find_relevant_context<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    query_embedding: &[f32],
+) -> Result<Option<(String, String, bool)>, String> {
+    let insight_result = find_relevant_insights(app_handle, query_embedding)?;
+
+    // Get topic score for comparison (need to duplicate some logic)
+    let topic_index = load_topic_index(app_handle)?;
+    let mut topic_score = -1.0f32;
+    let mut best_topic = None;
+    for (topic, embedding) in topic_index.topics.iter() {
+        let score = crate::interactions::cosine_similarity(query_embedding, embedding);
+        if score > topic_score {
+            topic_score = score;
+            best_topic = Some(topic.clone());
+        }
+    }
+
+    match insight_result {
+        Some((title, content, insight_score)) => {
+            // Prefer insight if score >= topic score (insight wins ties)
+            if insight_score >= topic_score {
+                // Increment reference count for this insight
+                let _ = increment_insight_reference(app_handle, &title);
+                Ok(Some((title, content, true)))
+            } else if topic_score > 0.4 {
+                if let Some(topic) = best_topic {
+                    if let Ok(content) = read_topic_summary(app_handle, &topic) {
+                        return Ok(Some((topic, content, false)));
+                    }
+                }
+                Ok(None)
+            } else {
+                Ok(None)
+            }
+        }
+        None => {
+            // No insight match, try topics
+            if topic_score > 0.4 {
+                if let Some(topic) = best_topic {
+                    if let Ok(content) = read_topic_summary(app_handle, &topic) {
+                        return Ok(Some((topic, content, false)));
+                    }
+                }
+            }
+            Ok(None)
+        }
+    }
+}
+
+/// Rebuild the insight index by regenerating embeddings for all insight files
+pub async fn rebuild_insight_index<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    http_client: &reqwest::Client,
+    api_key: &str,
+) -> Result<usize, String> {
+    let insights_dir = get_insights_dir(app_handle)?;
+    if !insights_dir.exists() {
+        return Ok(0);
+    }
+
+    let mut index = InsightIndex::default();
+    let mut count = 0;
+
+    if let Ok(entries) = fs::read_dir(&insights_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                if let Some(title) = path.file_stem().and_then(|s| s.to_str()) {
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        let embedding_text = format!("Insight: {}\nContent: {}", title, content.chars().take(1000).collect::<String>());
+                        match crate::interactions::generate_embedding(http_client, &embedding_text, api_key).await {
+                            Ok(embedding) => {
+                                index.insights.insert(title.to_string(), InsightMeta {
+                                    embedding,
+                                    reference_count: 0,
+                                    update_count: 1, // Assume 1 update for existing files
+                                    created_at: Utc::now(),
+                                });
+                                count += 1;
+                                log::info!("Indexed insight: {}", title);
+                            }
+                            Err(e) => {
+                                log::error!("Failed to generate embedding for insight {}: {}", title, e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    save_insight_index(app_handle, &index)?;
+    Ok(count)
 }
 
 /// Load memories from disk
@@ -436,93 +739,3 @@ pub fn get_memories_for_prompt<R: Runtime>(app_handle: &AppHandle<R>) -> Result<
     Ok(store.format_for_prompt())
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_memory_creation() {
-        let mem = Memory::new(
-            MemoryCategory::Preference,
-            "User prefers TypeScript".to_string(),
-            3,
-        );
-        assert!(!mem.id.is_empty());
-        assert_eq!(mem.importance, 3);
-    }
-
-    #[test]
-    fn test_importance_clamping() {
-        let mem_high = Memory::new(MemoryCategory::Fact, "test".to_string(), 10);
-        assert_eq!(mem_high.importance, 5);
-
-        let mem_low = Memory::new(MemoryCategory::Fact, "test".to_string(), 0);
-        assert_eq!(mem_low.importance, 1);
-    }
-
-    #[test]
-    fn test_memory_store_operations() {
-        let mut store = MemoryStore::new();
-
-        let mem = Memory::new(MemoryCategory::Preference, "Test memory".to_string(), 3);
-        let id = mem.id.clone();
-        store.add(mem);
-
-        assert_eq!(store.memories.len(), 1);
-
-        assert!(store.remove(&id));
-        assert_eq!(store.memories.len(), 0);
-    }
-
-    #[test]
-    fn test_token_budget_pruning() {
-        let mut store = MemoryStore::new();
-
-        // Add many low-importance memories
-        for i in 0..10 {
-            store.add(Memory::new(
-                MemoryCategory::Fact,
-                format!("This is a test memory number {} with some content to take up tokens", i),
-                1,
-            ));
-        }
-
-        // Add one high-importance memory
-        store.add(Memory::new(
-            MemoryCategory::Preference,
-            "Important user preference".to_string(),
-            5,
-        ));
-
-        // Prune to a small budget
-        store.prune_to_token_budget(100);
-
-        // High importance should survive
-        assert!(store.memories.iter().any(|m| m.importance == 5));
-    }
-
-    #[test]
-    fn test_format_for_prompt() {
-        let mut store = MemoryStore::new();
-        store.add(Memory::new(
-            MemoryCategory::Preference,
-            "User prefers Rust".to_string(),
-            3,
-        ));
-        store.add(Memory::new(
-            MemoryCategory::Project,
-            "Working on shard-v2".to_string(),
-            4,
-        ));
-
-        let formatted = store.format_for_prompt();
-        assert!(formatted.contains("User prefers Rust"));
-        assert!(formatted.contains("Working on shard-v2"));
-        assert!(formatted.contains("### Preferences"));
-        assert!(formatted.contains("### Project Context"));
-    }
-}

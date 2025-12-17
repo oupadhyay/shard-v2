@@ -18,7 +18,7 @@ use tokio::time::{self, Duration};
 /// Configuration for background jobs
 pub const JOB_INTERVAL_HOURS: u64 = 6;
 pub const LOOKBACK_HOURS: i64 = 12;
-pub const LLM_MODEL: &str = "openai/gpt-oss-20b"; // Groq model ID (no :free suffix)
+pub const LLM_MODEL: &str = "openai/gpt-oss-120b"; // Groq model for complex background tasks
 pub const LOG_RETENTION_DAYS: i64 = 30; // Fallback for date-based cleanup
 /// Skip job execution if less than this fraction of the interval has passed
 const SKIP_INTERVAL_FRACTION: f64 = 0.5;
@@ -109,6 +109,8 @@ pub struct SummaryResult {
     pub assistant_messages: usize,
     pub total_chars: usize,
     pub topics_updated: Vec<String>,
+    pub insights_created: Vec<String>,
+    pub insights_promoted: Vec<String>,
     pub llm_reasoning: Option<String>,
 }
 
@@ -117,6 +119,29 @@ pub struct SummaryResult {
 pub struct TopicUpdate {
     pub topic: String,
     pub summary: String,
+}
+
+/// Insight extraction from LLM (niche Q&A pairs)
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct InsightExtraction {
+    pub title: String,
+    pub content: String,
+}
+
+/// Promotion of insight to topic
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Promotion {
+    pub insight_title: String,
+    pub new_topic: String,
+}
+
+/// Combined extraction response from LLM
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ExtractionResponse {
+    pub topics: Vec<TopicUpdate>,
+    pub insights: Vec<InsightExtraction>,
+    #[serde(default)]
+    pub promotions: Vec<Promotion>,
 }
 
 /// Cleanup decision from LLM
@@ -198,10 +223,24 @@ pub fn parse_topic_updates(llm_response: &str) -> Result<Vec<TopicUpdate>, Strin
 
     if let (Some(start), Some(end)) = (json_start, json_end) {
         let json_str = &llm_response[start..=end];
-        serde_json::from_str(json_str)
-            .map_err(|e| format!("Failed to parse topic updates: {}", e))
+        serde_json::from_str(json_str).map_err(|e| format!("Failed to parse topic updates: {}", e))
     } else {
         Err("No JSON array found in LLM response".to_string())
+    }
+}
+
+/// Parse combined extraction response (topics + insights) from LLM JSON
+pub fn parse_extraction_response(llm_response: &str) -> Result<ExtractionResponse, String> {
+    // Try to find JSON object in response
+    let json_start = llm_response.find('{');
+    let json_end = llm_response.rfind('}');
+
+    if let (Some(start), Some(end)) = (json_start, json_end) {
+        let json_str = &llm_response[start..=end];
+        serde_json::from_str(json_str)
+            .map_err(|e| format!("Failed to parse extraction response: {}", e))
+    } else {
+        Err("No JSON object found in LLM response".to_string())
     }
 }
 
@@ -288,11 +327,13 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                 }
             }
 
-            log::info!("[Background] All jobs complete. Next run in {} hours.", JOB_INTERVAL_HOURS);
+            log::info!(
+                "[Background] All jobs complete. Next run in {} hours.",
+                JOB_INTERVAL_HOURS
+            );
         }
     });
 }
-
 
 // ============================================================================
 // Summary Job
@@ -324,55 +365,95 @@ async fn run_summary_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summar
             assistant_messages: 0,
             total_chars: 0,
             topics_updated: vec![],
+            insights_created: vec![],
+            insights_promoted: vec![],
             llm_reasoning: None,
         });
     }
 
     // Load existing topic summaries so LLM can update/merge them
     let existing_topics = load_topic_summaries_context(app_handle);
+    let existing_insights = load_insight_summaries_context(app_handle);
 
-    // Call LLM to extract topics (with existing topics for context)
+    // Get promotion candidates (insights with >= 3 updates)
+    let promotion_candidates = crate::memories::get_promotion_candidates(app_handle, 3).unwrap_or_default();
+    let mut candidates_context = String::new();
+    if !promotion_candidates.is_empty() {
+        candidates_context.push_str("CANDIDATES FOR PROMOTION TO TOPIC (Review these):\n");
+        for title in &promotion_candidates {
+            if let Ok(content) = crate::memories::read_insight(app_handle, title) {
+                candidates_context.push_str(&format!("- Title: {}\n  Content: {}\n", title, content));
+            }
+        }
+    }
+
+    // Call LLM to extract topics AND insights
     let prompt = format!(
-        r#"Analyze these interaction logs from the last {} hours and update the topic summaries.
+        r#"Analyze these interaction logs from the last {} hours and extract knowledge.
 
-EXISTING TOPIC SUMMARIES (update these if relevant, or create new ones):
+EXISTING TOPIC SUMMARIES (broad categories):
+{}
+
+EXISTING INSIGHTS (specific facts/Q&A):
+{}
+
 {}
 
 NEW INTERACTIONS TO ANALYZE:
 {}
 
 INSTRUCTIONS:
-1. Use BROAD category names for topics, not specific details. Examples:
-   - Use "Preferences" NOT "Favorite color" or "Dietary restrictions"
-   - Use "About_Me" NOT "Contact details" or "Health goals"
-   - Use individual project names NOT generic "Projects" to avoid large topics that cover multiple projects
-   - Use "Hardware" NOT "Hardware_configuration"
-2. If information relates to an existing topic, UPDATE that topic by merging new info.
-3. Only create NEW topics for genuinely new broad categories/projects.
-4. Keep topic names consistent with existing ones (use underscores, not spaces).
-5. Be concise but comprehensive in summaries.
-6. PRIORITY: When user-provided information conflicts with assistant responses, ALWAYS prefer the user's stated facts. The user often will try to correct the assistant's mistakes.
+1. TOPICS are BROAD categories (e.g., \"Preferences\", \"Hardware\", \"Career\", project names)
+2. INSIGHTS are SPECIFIC facts or Q&A pairs that are too narrow for topics but worth remembering
+   Examples of insights:
+   - \"Tauri 2.0 requires dylib bundling for macOS distribution\"
+   - \"User's M3 Pro has 36GB RAM\"
+   - \"vitest uses jsdom environment for tests\"
+3. TOPIC SCOPE RULES (CRITICAL):
+   - Each topic has a SPECIFIC DOMAIN. Only add info that directly relates to its title.
+   - About_Me = personal bio only (name, age, birthday, pronouns, interests)
+   - Hardware = devices/specs only
+   - Preferences = likes/dislikes only
+   - Career = job/education only
+   - DO NOT merge travel, health, relationships, or other domains into About_Me
+   - If info doesn't fit an existing topic's domain, create a NEW topic or insight
+4. If info relates to an existing topic's domain, UPDATE that topic
+5. If info is too specific for a topic, create an INSIGHT
+6. Use underscores in names (e.g., \"Tauri_macOS_Distribution\")
+7. PRIORITY: User-stated facts override assistant responses
+8. UP-LEVELING: Review the \"CANDIDATES FOR PROMOTION\". If an insight has enough distinct info to be a broad topic:
+   - Create/Update the TOPIC with the insight's content
+   - Add a \"promotions\" entry to delete the old insight
 
-Format: JSON array of {{"topic": string, "summary": string}}
-Return at most 5 topic updates. Ignore one-off queries.
+Return JSON object:
+{{
+  \"topics\": [{{\"topic\": \"Name\", \"summary\": \"content...\"}}],
+  \"insights\": [{{\"title\": \"Specific_Fact_Title\", \"content\": \"detailed explanation...\"}}],
+  \"promotions\": [{{\"insight_title\": \"Old_Title\", \"new_topic\": \"New_Topic_Name\"}}]
+}}
+
+Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries.
 "#,
-        LOOKBACK_HOURS, existing_topics, interactions
+        LOOKBACK_HOURS, existing_topics, existing_insights, candidates_context, interactions
     );
 
     let http_client = reqwest::Client::new();
     let llm_response = call_background_llm(&http_client, &groq_api_key, &prompt).await;
 
     let mut topics_updated = vec![];
+    let mut insights_created = vec![];
+    let mut insights_promoted = vec![];
     let llm_reasoning = match llm_response {
         Ok(response) => {
             log::debug!("[Summary] LLM response: {}", response);
 
-            match parse_topic_updates(&response) {
-                Ok(updates) => {
-                    // Update topic summaries
+            // Try new combined format first
+            match parse_extraction_response(&response) {
+                Ok(extraction) => {
                     let gemini_api_key = config.gemini_api_key.as_ref();
 
-                    for update in updates {
+                    // Process topics
+                    for update in extraction.topics {
                         if let Some(api_key) = gemini_api_key {
                             match crate::memories::update_topic_summary(
                                 app_handle,
@@ -388,16 +469,83 @@ Return at most 5 topic updates. Ignore one-off queries.
                                     topics_updated.push(update.topic);
                                 }
                                 Err(e) => {
-                                    log::warn!("[Summary] Failed to update topic {}: {}", update.topic, e);
+                                    log::warn!(
+                                        "[Summary] Failed to update topic {}: {}",
+                                        update.topic,
+                                        e
+                                    );
                                 }
                             }
-                        } else {
-                            log::warn!("[Summary] No Gemini API key for embedding generation");
+                        }
+                    }
+
+                    // Process insights
+                    for insight in extraction.insights {
+                        if let Some(api_key) = gemini_api_key {
+                            match crate::memories::update_insight(
+                                app_handle,
+                                &http_client,
+                                api_key,
+                                &insight.title,
+                                &insight.content,
+                            )
+                            .await
+                            {
+                                Ok(_) => {
+                                    log::info!("[Summary] Created/Updated insight: {}", insight.title);
+                                    insights_created.push(insight.title);
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "[Summary] Failed to create insight {}: {}",
+                                        insight.title,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Process promotions (delete old insights)
+                    for promotion in extraction.promotions {
+                        match crate::memories::delete_insight(app_handle, &promotion.insight_title) {
+                            Ok(true) => {
+                                log::info!("[Summary] Promoted insight {} to topic {}", promotion.insight_title, promotion.new_topic);
+                                insights_promoted.push(promotion.insight_title);
+                            }
+                            Ok(false) => {
+                                log::warn!("[Summary] Failed to find insight to promote: {}", promotion.insight_title);
+                            }
+                            Err(e) => {
+                                log::warn!("[Summary] Error promoting insight {}: {}", promotion.insight_title, e);
+                            }
                         }
                     }
                 }
                 Err(e) => {
-                    log::warn!("[Summary] Failed to parse LLM response: {}", e);
+                    // Fallback: try old topic-only format
+                    log::debug!(
+                        "[Summary] Combined format failed ({}), trying legacy format",
+                        e
+                    );
+                    if let Ok(updates) = parse_topic_updates(&response) {
+                        let gemini_api_key = config.gemini_api_key.as_ref();
+                        for update in updates {
+                            if let Some(api_key) = gemini_api_key {
+                                if let Ok(_) = crate::memories::update_topic_summary(
+                                    app_handle,
+                                    &http_client,
+                                    api_key,
+                                    &update.topic,
+                                    &update.summary,
+                                )
+                                .await
+                                {
+                                    topics_updated.push(update.topic);
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Some(response)
@@ -408,12 +556,17 @@ Return at most 5 topic updates. Ignore one-off queries.
         }
     };
 
+    // TODO: Up-leveling phase - check insights with reference_count >= INSIGHT_UPLEVEL_THRESHOLD
+    // and merge/promote them to topics
+
     Ok(SummaryResult {
         total_interactions: stats.total_interactions,
         user_messages: stats.user_messages,
         assistant_messages: stats.assistant_messages,
         total_chars: stats.total_chars,
         topics_updated,
+        insights_created,
+        insights_promoted,
         llm_reasoning,
     })
 }
@@ -486,7 +639,11 @@ Interaction Entries:
                 Ok(decision) => {
                     if decision.to_remove.is_empty() {
                         // Also prune BM25 index
-                        if let Err(e) = crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000) {
+                        if let Err(e) = crate::retrieval::prune_bm25_index(
+                            app_handle,
+                            LOG_RETENTION_DAYS,
+                            10000,
+                        ) {
                             log::warn!("[Cleanup] BM25 prune failed: {}", e);
                         }
                         return Ok(CleanupResult {
@@ -501,7 +658,9 @@ Interaction Entries:
                         remove_entries_by_timestamp(&interactions_dir, &decision.to_remove)?;
 
                     // Also prune BM25 index
-                    if let Err(e) = crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000) {
+                    if let Err(e) =
+                        crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000)
+                    {
                         log::warn!("[Cleanup] BM25 prune failed: {}", e);
                     }
 
@@ -512,10 +671,16 @@ Interaction Entries:
                     })
                 }
                 Err(e) => {
-                    log::warn!("[Cleanup] Failed to parse LLM response: {}. Using date-based fallback.", e);
-                    let result = cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS)?;
+                    log::warn!(
+                        "[Cleanup] Failed to parse LLM response: {}. Using date-based fallback.",
+                        e
+                    );
+                    let result =
+                        cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS)?;
                     // Also prune BM25 index
-                    if let Err(e) = crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000) {
+                    if let Err(e) =
+                        crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000)
+                    {
                         log::warn!("[Cleanup] BM25 prune failed: {}", e);
                     }
                     Ok(result)
@@ -523,10 +688,15 @@ Interaction Entries:
             }
         }
         Err(e) => {
-            log::warn!("[Cleanup] LLM call failed: {}. Using date-based fallback.", e);
+            log::warn!(
+                "[Cleanup] LLM call failed: {}. Using date-based fallback.",
+                e
+            );
             let result = cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS)?;
             // Also prune BM25 index
-            if let Err(e) = crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000) {
+            if let Err(e) =
+                crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000)
+            {
                 log::warn!("[Cleanup] BM25 prune failed: {}", e);
             }
             Ok(result)
@@ -631,7 +801,10 @@ fn gather_recent_interactions(
                 if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
                     stats.total_interactions += 1;
 
-                    let role = entry.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let role = entry
+                        .get("role")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
                     let content = entry.get("content").and_then(|v| v.as_str()).unwrap_or("");
                     let ts = entry.get("ts").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -695,6 +868,49 @@ fn load_topic_summaries_context<R: Runtime>(app_handle: &AppHandle<R>) -> String
             }
         }
         Err(_) => "No topic summaries yet.".to_string(),
+    }
+}
+
+/// Load insight summaries as context string for background job
+fn load_insight_summaries_context<R: Runtime>(app_handle: &AppHandle<R>) -> String {
+    match crate::memories::get_insights_dir(app_handle) {
+        Ok(insights_dir) => {
+            if !insights_dir.exists() {
+                return "No insights yet.".to_string();
+            }
+
+            let mut context = String::new();
+            if let Ok(entries) = fs::read_dir(&insights_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                        if let Some(title) = path.file_stem().and_then(|s| s.to_str()) {
+                            if let Ok(content) = fs::read_to_string(&path) {
+                                // Truncate long insights
+                                let truncated = if content.len() > 500 {
+                                    let boundary = content.floor_char_boundary(500);
+                                    format!("{}...", &content[..boundary])
+                                } else {
+                                    content
+                                };
+                                context.push_str(&format!(
+                                    "- {}: {}\n",
+                                    title,
+                                    truncated.replace('\n', " ")
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if context.is_empty() {
+                "No insights yet.".to_string()
+            } else {
+                context
+            }
+        }
+        Err(_) => "No insights yet.".to_string(),
     }
 }
 
@@ -833,6 +1049,8 @@ pub fn analyze_interactions_in_dir(
         assistant_messages: stats.assistant_messages,
         total_chars: stats.total_chars,
         topics_updated: vec![],
+        insights_created: vec![],
+        insights_promoted: vec![],
         llm_reasoning: None,
     })
 }

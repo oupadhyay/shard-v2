@@ -234,6 +234,16 @@ async fn rebuild_topic_index(app_handle: AppHandle) -> Result<usize, String> {
 }
 
 #[tauri::command]
+async fn rebuild_insight_index(app_handle: AppHandle) -> Result<usize, String> {
+    let config = config::load_config(&app_handle)?;
+    let api_key = config
+        .gemini_api_key
+        .ok_or("No Gemini API key configured for embedding generation")?;
+    let http_client = reqwest::Client::new();
+    memories::rebuild_insight_index(&app_handle, &http_client, &api_key).await
+}
+
+#[tauri::command]
 async fn rebuild_bm25_index(app_handle: AppHandle) -> Result<usize, String> {
     retrieval::rebuild_bm25_index(&app_handle)
 }
@@ -328,9 +338,9 @@ pub fn run() {
             force_cleanup,
             force_summary,
             rebuild_topic_index,
+            rebuild_insight_index,
             rebuild_bm25_index
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

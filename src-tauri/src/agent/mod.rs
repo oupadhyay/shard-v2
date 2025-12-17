@@ -273,14 +273,21 @@ impl Agent {
             None
         };
 
-        // RAG: Focused Summaries (Tier 2)
+        // RAG: Context from Topics or Insights (Tier 2 / 2.5)
         if let Some(emb) = &user_embedding {
-            if let Ok(Some((topic, content))) =
-                crate::memories::find_relevant_topics(app_handle, emb)
+            if let Ok(Some((name, content, is_insight))) =
+                crate::memories::find_relevant_context(app_handle, emb)
             {
                 let s = rag_context_str.get_or_insert_with(String::new);
-                s.push_str("\n\nRelevant Topic Summary:\n");
-                s.push_str(&format!("### Topic: {}\n{}\n\n", topic, content));
+                if is_insight {
+                    s.push_str("\n\nRelevant Insight:\n");
+                    s.push_str(&format!("### Insight: {}\n{}\n\n", name, content));
+                    log::debug!("[Agent] Using insight: {}", name);
+                } else {
+                    s.push_str("\n\nRelevant Topic Summary:\n");
+                    s.push_str(&format!("### Topic: {}\n{}\n\n", name, content));
+                    log::debug!("[Agent] Using topic: {}", name);
+                }
             }
         }
 
