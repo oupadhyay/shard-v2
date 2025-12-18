@@ -18,8 +18,9 @@ use tokio::time::{self, Duration};
 /// Configuration for background jobs
 pub const JOB_INTERVAL_HOURS: u64 = 6;
 pub const LOOKBACK_HOURS: i64 = 12;
-pub const LLM_MODEL: &str = "openai/gpt-oss-120b"; // Groq model for complex background tasks
 pub const LOG_RETENTION_DAYS: i64 = 30; // Fallback for date-based cleanup
+/// Default background model if none configured
+pub const DEFAULT_BACKGROUND_MODEL: &str = "gpt-oss-120b (Groq)";
 /// Skip job execution if less than this fraction of the interval has passed
 const SKIP_INTERVAL_FRACTION: f64 = 0.5;
 
@@ -155,17 +156,38 @@ pub struct CleanupDecision {
 // LLM Integration
 // ============================================================================
 
-/// Make an LLM call via Groq for background processing
-/// Uses Groq API to avoid consuming user's OpenRouter quota
+/// Make an LLM call for background processing
+/// Routes to Groq or Cerebras based on the model name
 async fn call_background_llm(
     http_client: &reqwest::Client,
-    groq_api_key: &str,
+    config: &crate::config::AppConfig,
+    model: &str,
     prompt: &str,
 ) -> Result<String, String> {
-    let url = "https://api.groq.com/openai/v1/chat/completions";
+    // Parse model to determine provider and model ID
+    let (url, api_key, model_id) = if model.contains("(Cerebras)") {
+        let key = config.cerebras_api_key.as_ref()
+            .ok_or("No Cerebras API key configured for background jobs")?;
+        let model_id = if model.contains("120b") {
+            "gpt-oss-120b"
+        } else {
+            "llama-3.3-70b"
+        };
+        ("https://api.cerebras.ai/v1/chat/completions", key, model_id)
+    } else {
+        // Default to Groq
+        let key = config.groq_api_key.as_ref()
+            .ok_or("No Groq API key configured for background jobs")?;
+        let model_id = if model.contains("20b") {
+            "openai/gpt-oss-20b"
+        } else {
+            "openai/gpt-oss-120b"
+        };
+        ("https://api.groq.com/openai/v1/chat/completions", key, model_id)
+    };
 
     let payload = serde_json::json!({
-        "model": LLM_MODEL,
+        "model": model_id,
         "messages": [
             {
                 "role": "system",
@@ -182,16 +204,16 @@ async fn call_background_llm(
 
     let res = http_client
         .post(url)
-        .header("Authorization", format!("Bearer {}", groq_api_key))
+        .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("Groq API network error: {}", e))?;
+        .map_err(|e| format!("Background LLM API network error: {}", e))?;
 
     if !res.status().is_success() {
         let error_text = res.text().await.unwrap_or_default();
-        return Err(format!("Groq API error: {}", error_text));
+        return Err(format!("Background LLM API error: {}", error_text));
     }
 
     let body: serde_json::Value = res
@@ -348,11 +370,18 @@ async fn run_summary_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summar
 
     let interactions_dir = app_data_dir.join("interactions");
 
-    // Load config for API key
     let config = crate::config::load_config(app_handle)?;
-    let groq_api_key = config
-        .groq_api_key
-        .ok_or("No Groq API key configured for background jobs")?;
+    let background_model = config.background_model.as_deref()
+        .unwrap_or(DEFAULT_BACKGROUND_MODEL);
+
+    // Verify we have the required API key
+    if background_model.contains("(Cerebras)") {
+        config.cerebras_api_key.as_ref()
+            .ok_or("No Cerebras API key configured for background jobs")?;
+    } else {
+        config.groq_api_key.as_ref()
+            .ok_or("No Groq API key configured for background jobs")?;
+    };
 
     // Gather interactions from lookback period
     let (interactions, stats) = gather_recent_interactions(&interactions_dir, LOOKBACK_HOURS)?;
@@ -438,7 +467,7 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
     );
 
     let http_client = reqwest::Client::new();
-    let llm_response = call_background_llm(&http_client, &groq_api_key, &prompt).await;
+    let llm_response = call_background_llm(&http_client, &config, background_model, &prompt).await;
 
     let mut topics_updated = vec![];
     let mut insights_created = vec![];
@@ -584,15 +613,21 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
 
     let interactions_dir = app_data_dir.join("interactions");
 
-    // Load config for API key
     let config = crate::config::load_config(app_handle)?;
-    let groq_api_key = match config.groq_api_key {
-        Some(key) => key,
-        None => {
-            log::info!("[Cleanup] No Groq API key, falling back to date-based cleanup");
-            return cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS);
-        }
+    let background_model = config.background_model.as_deref()
+        .unwrap_or(DEFAULT_BACKGROUND_MODEL);
+
+    // Verify we have the required API key
+    let has_key = if background_model.contains("(Cerebras)") {
+        config.cerebras_api_key.is_some()
+    } else {
+        config.groq_api_key.is_some()
     };
+
+    if !has_key {
+        log::info!("[Cleanup] No API key for {}, falling back to date-based cleanup", background_model);
+        return cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS);
+    }
 
     // Gather same interactions as summary job
     let (interactions, _) = gather_recent_interactions(&interactions_dir, LOOKBACK_HOURS)?;
@@ -629,7 +664,7 @@ Interaction Entries:
     );
 
     let http_client = reqwest::Client::new();
-    let llm_response = call_background_llm(&http_client, &groq_api_key, &prompt).await;
+    let llm_response = call_background_llm(&http_client, &config, background_model, &prompt).await;
 
     match llm_response {
         Ok(response) => {

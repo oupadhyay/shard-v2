@@ -20,6 +20,7 @@ pub struct AppConfig {
     pub incognito_mode: Option<bool>,
     pub research_mode: Option<bool>,
     pub groq_api_key: Option<String>,
+    pub background_model: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -38,6 +39,7 @@ impl Default for AppConfig {
             incognito_mode: None,
             research_mode: Some(false),
             groq_api_key: None,
+            background_model: Some("gpt-oss-120b (Groq)".to_string()),
         }
     }
 }

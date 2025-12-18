@@ -777,6 +777,11 @@ listen<string>("agent-fallback", (event) => {
 async function startHide() {
   const app = document.getElementById("app");
   if (app) {
+    // Also hide settings modal if open
+    const settingsModalEl = document.querySelector(".settings-modal");
+    if (settingsModalEl) {
+      settingsModalEl.classList.add("hidden");
+    }
     app.classList.add("hidden-app");
     // Wait for transition to finish (200ms)
     setTimeout(async () => {
@@ -819,63 +824,101 @@ document.addEventListener("click", (e) => {
 
 // Settings Modal Logic
 const settingsModal = document.createElement("div");
-settingsModal.className = "settings-modal";
-settingsModal.style.display = "none";
+settingsModal.className = "settings-modal hidden";
 settingsModal.innerHTML = `
   <div class="settings-content">
-    <h3>Settings</h3>
-    <div class="setting-group">
-      <label>Gemini API Key</label>
-      <input type="password" id="gemini-key" placeholder="Enter Gemini API Key" />
+    <h3>API Keys Settings</h3>
+
+    <!-- Tab Navigation -->
+    <div class="settings-tabs">
+      <button class="settings-tab active" data-tab="api-keys">API Keys</button>
+      <button class="settings-tab" data-tab="models">Models</button>
+      <button class="settings-tab" data-tab="capabilities">Capabilities</button>
     </div>
-    <div class="setting-group">
-      <label>OpenRouter API Key</label>
-      <input type="password" id="openrouter-key" placeholder="Enter OpenRouter API Key" />
+
+    <!-- Tab Panels -->
+    <div class="settings-panels">
+      <!-- API Keys Panel -->
+      <div class="settings-panel active" id="panel-api-keys">
+        <div class="setting-group">
+          <label>Gemini API Key</label>
+          <input type="password" id="gemini-key" placeholder="Enter Gemini API Key" />
+        </div>
+        <div class="setting-group">
+          <label>OpenRouter API Key</label>
+          <input type="password" id="openrouter-key" placeholder="Enter OpenRouter API Key" />
+        </div>
+        <div class="setting-group">
+          <label>Cerebras API Key</label>
+          <input type="password" id="cerebras-key" placeholder="Enter Cerebras API Key" />
+        </div>
+        <div class="setting-group">
+          <label>Groq API Key</label>
+          <input type="password" id="groq-key" placeholder="Enter Groq API Key" />
+        </div>
+        <div class="setting-group">
+          <label>Brave Search API Key</label>
+          <input type="password" id="brave-key" placeholder="Enter Brave API Key for web search" />
+        </div>
+      </div>
+
+      <!-- Models Panel -->
+      <div class="settings-panel" id="panel-models">
+        <div class="setting-group">
+          <label>Chat Model</label>
+          <select id="model-id">
+            <optgroup label="Gemini AI">
+              <option value="gemini-2.5-flash-lite">2.5 Flash Lite</option>
+              <option value="gemini-2.5-flash">2.5 Flash</option>
+            </optgroup>
+            <optgroup label="OpenRouter">
+              <option value="google/gemma-3-27b-it:free">Gemma 3-27B</option>
+              <option value="openai/gpt-oss-20b:free">GPT-OSS 20B</option>
+              <option value="mistralai/devstral-2512:free">Devstral 2512</option>
+              <option value="allenai/olmo-3-32b-think:free">Olmo 3-32B Think</option>
+              <option value="meta-llama/llama-3.3-70b-instruct:free">LLaMA 3.3 70B</option>
+            </optgroup>
+            <optgroup label="Other Providers">
+              <option value="gpt-oss-120b (Cerebras)">GPT-OSS 120B (Cerebras)</option>
+              <option value="gpt-oss-120b (Groq)">GPT-OSS 120B (Groq)</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="setting-group">
+          <label>Background Job Model</label>
+          <select id="background-model-id">
+            <optgroup label="Groq">
+              <option value="gpt-oss-20b (Groq)">GPT-OSS 20B (Groq)</option>
+              <option value="gpt-oss-120b (Groq)">GPT-OSS 120B (Groq)</option>
+            </optgroup>
+            <optgroup label="Cerebras">
+              <option value="gpt-oss-120b (Cerebras)">GPT-OSS 120B (Cerebras)</option>
+              <option value="llama-3.3-70b (Cerebras)">LLaMA 3.3 70B (Cerebras)</option>
+            </optgroup>
+          </select>
+        </div>
+        <div id="provider-conflict-warning" style="color: #ff8844; font-size: 0.8em; display: none;">
+          ⚠ Chat and background models use the same provider. This may cause rate limiting.
+        </div>
+      </div>
+
+      <!-- Capabilities Panel -->
+      <div class="settings-panel" id="panel-capabilities">
+        <div class="setting-group">
+          <label>
+            <input type="checkbox" id="enable-tools" />
+            Enable Tools (Weather, Search, etc.)
+          </label>
+        </div>
+        <div class="setting-group">
+          <label>
+            <input type="checkbox" id="incognito-mode" />
+            Incognito Mode (no logging/history)
+          </label>
+        </div>
+      </div>
     </div>
-    <div class="setting-group">
-      <label>Cerebras API Key</label>
-      <input type="password" id="cerebras-key" placeholder="Enter Cerebras API Key" />
-    </div>
-    <div class="setting-group">
-      <label>Groq API Key</label>
-      <input type="password" id="groq-key" placeholder="Enter Groq API Key" />
-    </div>
-    <div class="setting-group">
-      <label>Brave Search API Key</label>
-      <input type="password" id="brave-key" placeholder="Enter Brave API Key for web search" />
-    </div>
-    <div class="setting-group">
-      <label>Model</label>
-      <select id="model-id">
-        <optgroup label="Gemini AI">
-          <option value="gemini-2.5-flash-lite">2.5 Flash Lite</option>
-          <option value="gemini-2.5-flash">2.5 Flash</option>
-        </optgroup>
-        <optgroup label="OpenRouter">
-          <option value="google/gemma-3-27b-it:free">Gemma 3-27B</option>
-          <option value="openai/gpt-oss-20b:free">GPT-OSS 20B</option>
-          <option value="mistralai/devstral-2512:free">Devstral 2512</option>
-          <option value="allenai/olmo-3-32b-think:free">Olmo 3-32B Think</option>
-          <option value="meta-llama/llama-3.3-70b-instruct:free">LLaMA 3.3 70B</option>
-        </optgroup>
-        <optgroup label="Other Providers">
-          <option value="gpt-oss-120b (Cerebras)">GPT-OSS 120B (Cerebras)</option>
-          <option value="gpt-oss-120b (Groq)">GPT-OSS 120B (Groq)</option>
-        </optgroup>
-      </select>
-    </div>
-    <div class="setting-group">
-      <label>
-        <input type="checkbox" id="enable-tools" />
-        Enable Tools (Weather, Search, etc.)
-      </label>
-    </div>
-    <div class="setting-group">
-      <label>
-        <input type="checkbox" id="incognito-mode" />
-        Incognito Mode (no logging/history)
-      </label>
-    </div>
+
     <div class="settings-actions">
       <button id="save-settings">Save</button>
       <button id="close-settings">Close</button>
@@ -884,12 +927,38 @@ settingsModal.innerHTML = `
 `;
 document.body.appendChild(settingsModal);
 
+// Tab switching logic
+const settingsTabs = settingsModal.querySelector(".settings-tabs");
+settingsTabs?.addEventListener("click", (e) => {
+  const target = e.target as HTMLElement;
+  if (!target.classList.contains("settings-tab")) return;
+
+  const tabId = target.dataset.tab;
+  if (!tabId) return;
+
+  // Update active tab
+  settingsTabs.querySelectorAll(".settings-tab").forEach((tab) => {
+    tab.classList.remove("active");
+  });
+  target.classList.add("active");
+
+  // Update active panel
+  const panels = settingsModal.querySelectorAll(".settings-panel");
+  panels.forEach((panel) => {
+    panel.classList.remove("active");
+  });
+  const activePanel = settingsModal.querySelector(`#panel-${tabId}`);
+  activePanel?.classList.add("active");
+});
+
 const geminiKeyInput = document.getElementById("gemini-key") as HTMLInputElement;
 const openRouterKeyInput = document.getElementById("openrouter-key") as HTMLInputElement;
 const cerebrasKeyInput = document.getElementById("cerebras-key") as HTMLInputElement;
 const groqKeyInput = document.getElementById("groq-key") as HTMLInputElement;
 const braveKeyInput = document.getElementById("brave-key") as HTMLInputElement;
 const modelInput = document.getElementById("model-id") as HTMLSelectElement;
+const backgroundModelInput = document.getElementById("background-model-id") as HTMLSelectElement;
+const providerConflictWarning = document.getElementById("provider-conflict-warning") as HTMLDivElement;
 const enableToolsCheckbox = document.getElementById("enable-tools") as HTMLInputElement;
 const incognitoModeCheckbox = document.getElementById("incognito-mode") as HTMLInputElement;
 const saveSettingsBtn = document.getElementById("save-settings") as HTMLButtonElement;
@@ -926,6 +995,27 @@ const updateToolAvailability = () => {
 
 modelInput.addEventListener("change", updateToolAvailability);
 
+// Provider conflict detection
+const getProvider = (model: string): string | null => {
+  if (model.includes("(Groq)")) return "groq";
+  if (model.includes("(Cerebras)")) return "cerebras";
+  return null;
+};
+
+const checkProviderConflict = () => {
+  const chatProvider = getProvider(modelInput.value);
+  const bgProvider = getProvider(backgroundModelInput.value);
+
+  if (chatProvider && bgProvider && chatProvider === bgProvider) {
+    providerConflictWarning.style.display = "block";
+  } else {
+    providerConflictWarning.style.display = "none";
+  }
+};
+
+modelInput.addEventListener("change", checkProviderConflict);
+backgroundModelInput.addEventListener("change", checkProviderConflict);
+
 settingsBtn.addEventListener("click", async () => {
   try {
     const config = await invoke<any>("get_config");
@@ -935,19 +1025,21 @@ settingsBtn.addEventListener("click", async () => {
     groqKeyInput.value = config.groq_api_key || "";
     braveKeyInput.value = config.brave_api_key || "";
     modelInput.value = config.selected_model || "gemini-2.5-flash";
+    backgroundModelInput.value = config.background_model || "gpt-oss-120b (Groq)";
     enableToolsCheckbox.checked = config.enable_tools || false;
     incognitoModeCheckbox.checked = config.incognito_mode || false;
 
     updateToolAvailability(); // Run check on open
+    checkProviderConflict(); // Check for provider conflicts
 
-    settingsModal.style.display = "flex";
+    settingsModal.classList.remove("hidden");
   } catch (e) {
     console.error("Failed to load config", e);
   }
 });
 
 closeSettingsBtn.addEventListener("click", () => {
-  settingsModal.style.display = "none";
+  settingsModal.classList.add("hidden");
   inputField.focus();
 });
 
@@ -959,6 +1051,7 @@ saveSettingsBtn.addEventListener("click", async () => {
     groq_api_key: groqKeyInput.value || null,
     brave_api_key: braveKeyInput.value || null,
     selected_model: modelInput.value || null,
+    background_model: backgroundModelInput.value || null,
     enable_web_search: true, // Default to true for now
     enable_tools: enableToolsCheckbox.checked,
     incognito_mode: incognitoModeCheckbox.checked,
@@ -967,7 +1060,7 @@ saveSettingsBtn.addEventListener("click", async () => {
   try {
     await invoke("save_config", { config });
     alert("Settings saved!");
-    settingsModal.style.display = "none";
+    settingsModal.classList.add("hidden");
     inputField.focus();
   } catch (e) {
     alert(`Failed to save settings: ${e}`);
