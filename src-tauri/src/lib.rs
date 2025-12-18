@@ -254,7 +254,14 @@ async fn rebuild_bm25_index(app_handle: AppHandle) -> Result<usize, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_log::Builder::default().build())
+        .plugin(
+            tauri_plugin_log::Builder::default()
+                .level(log::LevelFilter::Info)
+                .filter(|metadata| {
+                    !metadata.target().starts_with("html5ever") && !metadata.target().starts_with("selectors")
+                })
+                .build()
+        )
         .plugin(tauri_nspanel::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
