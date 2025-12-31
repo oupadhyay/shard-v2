@@ -875,7 +875,7 @@ settingsModal.innerHTML = `
               <option value="google/gemma-3-27b-it:free">Gemma 3-27B</option>
               <option value="openai/gpt-oss-20b:free">GPT-OSS 20B</option>
               <option value="mistralai/devstral-2512:free">Devstral 2512</option>
-              <option value="allenai/olmo-3-32b-think:free">Olmo 3-32B Think</option>
+              <option value="allenai/olmo-3.1-32b-think:free">Olmo 3.1-32B</option>
               <option value="meta-llama/llama-3.3-70b-instruct:free">LLaMA 3.3 70B</option>
             </optgroup>
             <optgroup label="Other Providers">
@@ -966,8 +966,7 @@ const closeSettingsBtn = document.getElementById("close-settings") as HTMLButton
 
 // Define unsupported models (no tool calling support)
 const UNSUPPORTED_TOOL_MODELS = [
-  "allenai/olmo-3-32b-think:free",
-  "meta-llama/llama-3.3-70b-instruct:free",
+  "allenai/olmo-3.1-32b-think:free"
 ];
 
 // Create warning element

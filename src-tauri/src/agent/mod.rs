@@ -980,9 +980,8 @@ impl Agent {
             }
         };
 
-        let is_olmo_think = model.contains("olmo-3-32b-think");
-        let is_llama_3_3 = model.contains("llama-3.3-70b-instruct");
-        let current_tools = if enable_tools && !is_olmo_think && !is_llama_3_3 {
+        let is_olmo_think = model.contains("olmo-3.1-32b-think");
+        let current_tools = if enable_tools && !is_olmo_think {
             Some(
                 crate::tools::get_all_tools()
                     .iter()

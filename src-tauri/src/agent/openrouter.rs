@@ -20,5 +20,5 @@ pub fn to_api_messages(messages: &[ChatMessage]) -> Vec<ApiChatMessage> {
 
 // Check if a model supports tool calling
 pub fn supports_tools(model: &str) -> bool {
-    !model.contains("olmo-3-32b-think") && !model.contains("llama-3.3-70b-instruct")
+    !model.contains("olmo-3.1-32b-think")
 }
