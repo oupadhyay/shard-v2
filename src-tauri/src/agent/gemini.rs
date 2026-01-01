@@ -99,6 +99,7 @@ pub fn construct_gemini_messages(history: &[ChatMessage]) -> Vec<GeminiContent> 
                             name: tc.function.name.clone(),
                             args: args_val,
                         },
+                        thought_signature: tc.thought_signature.clone(),
                     });
                 }
             }
@@ -120,7 +121,7 @@ pub fn parse_gemini_chunk(
     part: GeminiPart,
     full_text: &mut String,
     full_reasoning: &mut String,
-    tool_calls: &mut Vec<GeminiFunctionCall>,
+    tool_calls: &mut Vec<GeminiFunctionCallWithSignature>,
 ) -> Vec<AgentEvent> {
     let mut events = Vec::new();
     log::debug!(
@@ -152,8 +153,11 @@ pub fn parse_gemini_chunk(
                 events.push(AgentEvent::ResponseChunk(text));
             }
         }
-        GeminiPart::FunctionCall { function_call } => {
-            tool_calls.push(function_call);
+        GeminiPart::FunctionCall { function_call, thought_signature } => {
+            tool_calls.push(GeminiFunctionCallWithSignature {
+                function_call,
+                thought_signature,
+            });
         }
         _ => {
             log::debug!("Gemini other part type");

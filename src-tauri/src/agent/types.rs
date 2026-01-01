@@ -87,6 +87,9 @@ pub struct ToolCall {
     #[serde(rename = "type")]
     pub tool_type: String,
     pub function: FunctionCall,
+    /// Thought signature for Gemini 3 models - required for function calling
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -184,6 +187,8 @@ pub enum GeminiPart {
     FunctionCall {
         #[serde(rename = "functionCall")]
         function_call: GeminiFunctionCall,
+        #[serde(rename = "thoughtSignature", skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
     },
     FunctionResponse {
         #[serde(rename = "functionResponse")]
@@ -210,6 +215,13 @@ pub struct GeminiTool {
 pub struct GeminiFunctionCall {
     pub name: String,
     pub args: Value,
+}
+
+/// Function call paired with its thought signature for Gemini 3 models
+#[derive(Debug, Clone)]
+pub struct GeminiFunctionCallWithSignature {
+    pub function_call: GeminiFunctionCall,
+    pub thought_signature: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

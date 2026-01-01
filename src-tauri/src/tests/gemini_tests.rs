@@ -16,7 +16,7 @@ mod tests {
 
         let part: GeminiPart = serde_json::from_value(json_data).expect("Failed to deserialize FunctionCall");
 
-        if let GeminiPart::FunctionCall { function_call } = part {
+        if let GeminiPart::FunctionCall { function_call, thought_signature: _ } = part {
             assert_eq!(function_call.name, "get_weather");
             assert_eq!(function_call.args["location"], "San Francisco, CA");
         } else {

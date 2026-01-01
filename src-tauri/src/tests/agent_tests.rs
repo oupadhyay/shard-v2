@@ -154,12 +154,14 @@ mod tests {
             function_call: GeminiFunctionCall {
                 name: "get_weather".to_string(),
                 args: json!({"location": "London"})
-            }
+            },
+            thought_signature: Some("test_signature".to_string()),
         };
         let events = parse_gemini_chunk(part, &mut full_text, &mut full_reasoning, &mut tool_calls);
 
         assert_eq!(tool_calls.len(), 1);
-        assert_eq!(tool_calls[0].name, "get_weather");
+        assert_eq!(tool_calls[0].function_call.name, "get_weather");
+        assert_eq!(tool_calls[0].thought_signature, Some("test_signature".to_string()));
         assert_eq!(events.len(), 0);
     }
 

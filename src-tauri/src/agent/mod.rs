@@ -682,7 +682,7 @@ impl Agent {
         let mut buffer = Vec::new();
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
-        let mut tool_calls: Vec<GeminiFunctionCall> = Vec::new();
+        let mut tool_calls: Vec<GeminiFunctionCallWithSignature> = Vec::new();
 
         while let Some(item) = stream.next().await {
             if stream_id == crate::CANCELLED_STREAM_ID.load(std::sync::atomic::Ordering::Relaxed) {
@@ -779,12 +779,13 @@ impl Agent {
                     tool_calls
                         .iter()
                         .map(|fc| ToolCall {
-                            id: "call_".to_string() + &fc.name,
+                            id: "call_".to_string() + &fc.function_call.name,
                             tool_type: "function".to_string(),
                             function: FunctionCall {
-                                name: fc.name.clone(),
-                                arguments: serde_json::to_string(&fc.args).unwrap_or_default(),
+                                name: fc.function_call.name.clone(),
+                                arguments: serde_json::to_string(&fc.function_call.args).unwrap_or_default(),
                             },
+                            thought_signature: fc.thought_signature.clone(),
                         })
                         .collect(),
                 ),
@@ -793,8 +794,8 @@ impl Agent {
             });
 
             for fc in tool_calls {
-                let function_name = &fc.name;
-                let args = &fc.args;
+                let function_name = &fc.function_call.name;
+                let args = &fc.function_call.args;
 
                 let tool_call_event = json!({
                     "name": function_name,
@@ -821,7 +822,7 @@ impl Agent {
                     content: Some(tool_result),
                     reasoning: None,
                     tool_calls: None,
-                    tool_call_id: Some("call_".to_string() + &fc.name),
+                    tool_call_id: Some("call_".to_string() + &fc.function_call.name),
                     images: None,
                 });
             }
@@ -1145,6 +1146,7 @@ impl Agent {
                                                                 name: String::new(),
                                                                 arguments: String::new(),
                                                             },
+                                                            thought_signature: None,
                                                         },
                                                     );
                                                 }
