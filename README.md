@@ -14,10 +14,10 @@ Shard is a high-performance, privacy-focused AI assistant built with **Tauri**, 
 
 Located in `src-tauri/src/background.rs`. Two LLM-powered jobs run **sequentially** every 6 hours:
 
-| Job | Function |
-|-----|----------|
-| **Summary** | Analyzes last 12h of interactions, extracts topics, updates `memories/topics/*.md` |
-| **Cleanup** | Identifies generic/redundant entries, removes them (fallback: date-based cleanup > 30 days) |
+| Job         | Function                                                                                     |
+|-------------|----------------------------------------------------------------------------------------------|
+| **Summary** | Analyzes last 12h of interactions, extracts topics, updates `memories/topics/*.md`           |
+| **Cleanup** | Identifies generic/redundant entries, removes them (fallback: date-based cleanup > 30 days)  |
 
 **Force-trigger via console:**
 
@@ -29,11 +29,11 @@ await window.__TAURI__.core.invoke("rebuild_topic_index")  // Regenerate index a
 
 ## 🧠 Feature: 3-Tier Memory Architecture
 
-| Tier | File(s) | Purpose | In Prompt | Retrieval |
-|------|---------|---------|-----------|-----------|
-| **1. Core** | `MEMORIES.json` | User preferences, critical facts | ✅ Always | Direct load |
-| **2. Focused** | `topics/*.md` + `index.json` | Topic-specific summaries | ⚠️ On demand | RAG (Top-1) |
-| **3. Interaction** | `interactions/*.jsonl` | Full conversation history | ❌ Never | RAG (Top-5) |
+| Tier               | File(s)                      | Purpose                          | In Prompt    | Retrieval   |
+|--------------------|------------------------------|----------------------------------|--------------|-------------|
+| **1. Core**        | `MEMORIES.json`              | User preferences, critical facts | ✅ Always    | Direct load |
+| **2. Focused**     | `topics/*.md` + `index.json` | Topic-specific summaries         | ⚠️ On demand | RAG (Top-1) |
+| **3. Interaction** | `interactions/*.jsonl`       | Full conversation history        | ❌ Never     | RAG (Top-5) |
 
 **Tier 1 - Core**: Always loaded into system prompt. Tool: `save_memory(category, content, importance)`
 
