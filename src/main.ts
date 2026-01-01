@@ -870,6 +870,7 @@ settingsModal.innerHTML = `
             <optgroup label="Gemini AI">
               <option value="gemini-2.5-flash-lite">2.5 Flash Lite</option>
               <option value="gemini-2.5-flash">2.5 Flash</option>
+              <option value="gemini-3-flash-preview">3 Flash Preview</option>
             </optgroup>
             <optgroup label="OpenRouter">
               <option value="google/gemma-3-27b-it:free">Gemma 3-27B</option>

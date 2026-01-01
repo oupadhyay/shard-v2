@@ -644,7 +644,7 @@ impl Agent {
         };
 
         let supports_thinking =
-            selected_model.contains("2.5") || selected_model.contains("thinking");
+            selected_model.contains("2.5") || selected_model.contains("gemini-3") || selected_model.contains("thinking");
 
         let request_body = GenerateContentRequest {
             contents,

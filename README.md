@@ -4,7 +4,7 @@ Shard is a high-performance, privacy-focused AI assistant built with **Tauri**, 
 
 ## 🚀 Key Features
 
-* **Multi-Model Support**: Gemini 2.0/2.5 Pro & Flash, Llama 3.3, GPT-OSS, Gemma 3 and Olmo 3.1.
+* **Multi-Model Support**: Gemini 2.5/3 Flash, Llama 3.3, GPT-OSS, Gemma 3 and Olmo 3.1.
 * **Autonomous Tools**: Weather, Wikipedia, Stocks, ArXiv (enhanced HTML parsing), Web Search.
 * **Multimodal Intelligence**: Take screenshots to chat about them. Shard can analyze and reason about visual content.
 * **Deep Research**: Capable of conducting in-depth research by synthesizing information from multiple sources (ArXiv, Wikipedia, Web) to answer complex queries.
