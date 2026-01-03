@@ -778,8 +778,9 @@ impl Agent {
                 tool_calls: Some(
                     tool_calls
                         .iter()
-                        .map(|fc| ToolCall {
-                            id: "call_".to_string() + &fc.function_call.name,
+                        .enumerate()
+                        .map(|(idx, fc)| ToolCall {
+                            id: format!("call_{}_{}", fc.function_call.name, idx),
                             tool_type: "function".to_string(),
                             function: FunctionCall {
                                 name: fc.function_call.name.clone(),
@@ -793,7 +794,7 @@ impl Agent {
                 images: None,
             });
 
-            for fc in tool_calls {
+            for (idx, fc) in tool_calls.into_iter().enumerate() {
                 let function_name = &fc.function_call.name;
                 let args = &fc.function_call.args;
 
@@ -822,7 +823,7 @@ impl Agent {
                     content: Some(tool_result),
                     reasoning: None,
                     tool_calls: None,
-                    tool_call_id: Some("call_".to_string() + &fc.function_call.name),
+                    tool_call_id: Some(format!("call_{}_{}", fc.function_call.name, idx)),
                     images: None,
                 });
             }
