@@ -159,7 +159,7 @@ body {
   box-shadow: none;
   transition: opacity 0.2s ease-in-out;
   opacity: 1;
-  background: radial-gradient(ellipse 150% 25% at bottom left, rgba(70, 70, 70, 0.8) 0%, transparent 70%);
+  background: radial-gradient(ellipse 150% 25% at bottom left, rgba(70, 70, 70, 0.5) 0%, transparent 70%);
 }
 
 .hidden-app {
@@ -470,16 +470,17 @@ body {
 
 /* Markdown content overflow control */
 .markdown-body {
-  overflow-x: auto;
   max-width: 100%;
+  overflow-y: visible; /* Never clip vertical content */
 }
 
-/* Table styles - constrain width and allow horizontal scroll */
+/* Table wrapper for horizontal scroll - apply to table directly */
 .markdown-body table {
   display: block;
-  width: max-content;
+  width: 100%;
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: visible;
   border-collapse: collapse;
   margin: 12px 0;
   font-size: 0.9em;
