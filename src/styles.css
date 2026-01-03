@@ -468,6 +468,40 @@ body {
   border-radius: 4px;
 }
 
+/* Markdown content overflow control */
+.markdown-body {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Table styles - constrain width and allow horizontal scroll */
+.markdown-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 0.9em;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 8px 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.markdown-body th {
+  background: rgba(255, 255, 255, 0.08);
+  font-weight: 600;
+}
+
+.markdown-body tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.03);
+}
+
 /* KaTeX Scrollbars */
 .katex-display {
   overflow-x: auto;
