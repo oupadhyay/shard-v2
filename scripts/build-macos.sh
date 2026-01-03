@@ -91,7 +91,8 @@ done
 
 echo ""
 echo "Step 5: Re-signing the app bundle..."
-codesign --force --deep --sign - "$APP_PATH"
+# Using "Shard Dev" self-signed certificate for stable identity (persists permission grants)
+codesign --force --deep --sign "Shard Dev" "$APP_PATH"
 
 echo ""
 echo "Step 6: Verifying..."
