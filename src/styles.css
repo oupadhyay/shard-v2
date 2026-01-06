@@ -236,6 +236,7 @@ body {
   border-radius: 8px;
   max-width: 93%;
   color: #fff;
+  position: relative;
 }
 
 .message.assistant {
@@ -245,6 +246,46 @@ body {
   border-radius: 8px;
   width: 93%;
   color: #e0e0e0;
+  position: relative;
+}
+
+/* Copy Button */
+.copy-btn {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s ease;
+  color: rgba(255, 255, 255, 0.6);
+  padding: 0;
+}
+
+.message:hover .copy-btn {
+  opacity: 1;
+}
+
+.copy-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  transform: scale(1.05);
+}
+
+.copy-btn:active {
+  transform: scale(0.95);
+}
+
+.copy-btn.copied {
+  background: rgba(80, 200, 120, 0.2);
+  color: rgba(80, 200, 120, 0.9);
 }
 
 /* Error Messages with Accordion and Retry Button */

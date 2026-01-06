@@ -17,6 +17,8 @@ import {
   TRASH_ICON,
   UNDO_ICON,
   RETRY_ICON,
+  COPY_ICON,
+  CHECK_ICON,
 } from "./ui";
 
 // DOM Elements
@@ -532,6 +534,32 @@ listen<string>("agent-response-chunk", (event) => {
   ) {
     const msgDiv = document.createElement("div");
     msgDiv.className = "message assistant markdown-body";
+
+    // Create content wrapper for streaming updates
+    const contentDiv = document.createElement("div");
+    contentDiv.className = "message-content";
+    msgDiv.appendChild(contentDiv);
+
+    // Add copy button
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-btn";
+    copyBtn.title = "Copy as Markdown";
+    copyBtn.innerHTML = COPY_ICON;
+    copyBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const raw = msgDiv.getAttribute("data-raw") || "";
+      navigator.clipboard.writeText(raw).then(() => {
+        const originalHTML = copyBtn.innerHTML;
+        copyBtn.innerHTML = CHECK_ICON;
+        copyBtn.classList.add("copied");
+        setTimeout(() => {
+          copyBtn.innerHTML = originalHTML;
+          copyBtn.classList.remove("copied");
+        }, 1500);
+      }).catch((err) => console.error("Failed to copy:", err));
+    });
+    msgDiv.appendChild(copyBtn);
+
     chatArea.appendChild(msgDiv);
     lastMsg = msgDiv;
   }
@@ -587,7 +615,14 @@ listen<string>("agent-response-chunk", (event) => {
     html = DOMPurify.sanitize(md.render(rawText));
   }
 
-  lastMsg.innerHTML = html;
+  // Update only the content div, not the full innerHTML (preserves copy button)
+  const contentDiv = lastMsg.querySelector(".message-content");
+  if (contentDiv) {
+    contentDiv.innerHTML = html;
+  } else {
+  // Fallback for messages without content wrapper (shouldn't happen)
+    lastMsg.innerHTML = html;
+  }
   chatArea.scrollTop = chatArea.scrollHeight;
 });
 

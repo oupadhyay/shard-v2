@@ -3,6 +3,7 @@
  */
 import DOMPurify from "dompurify";
 import { md } from "./markdown";
+import { COPY_ICON, CHECK_ICON } from "./icons";
 import type { ImageAttachment } from "../types";
 
 /**
@@ -80,6 +81,25 @@ export function updateToolResult(toolElement: Element, result: string) {
 }
 
 /**
+ * Copy text to clipboard and show feedback on button
+ */
+function copyToClipboard(text: string, button: HTMLElement) {
+  navigator.clipboard.writeText(text).then(() => {
+    // Show success feedback
+    const originalHTML = button.innerHTML;
+    button.innerHTML = CHECK_ICON;
+    button.classList.add("copied");
+
+    setTimeout(() => {
+      button.innerHTML = originalHTML;
+      button.classList.remove("copied");
+    }, 1500);
+  }).catch((err) => {
+    console.error("Failed to copy:", err);
+  });
+}
+
+/**
  * Add a message to the chat area
  */
 export function addMessage(
@@ -107,6 +127,8 @@ export function addMessage(
   const textDiv = document.createElement("div");
   textDiv.className = "message-content";
 
+  let rawContent = content || "";
+
   if (role === "assistant") {
     // Render Markdown
     const rawHtml = md.render(content);
@@ -124,6 +146,7 @@ export function addMessage(
           const textPart = parsed.parts.find((p: { text?: string }) => p.text);
           if (textPart) {
             textContent = textPart.text;
+            rawContent = textContent; // Use extracted text as raw content
           }
         }
       }
@@ -137,7 +160,24 @@ export function addMessage(
     textDiv.classList.add("markdown-body");
   }
 
+  // Store raw markdown for copy functionality
+  msgDiv.setAttribute("data-raw", rawContent);
+
   msgDiv.appendChild(textDiv);
+
+  // Add copy button
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "copy-btn";
+  copyBtn.title = "Copy as Markdown";
+  copyBtn.innerHTML = COPY_ICON;
+  copyBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const raw = msgDiv.getAttribute("data-raw") || "";
+    copyToClipboard(raw, copyBtn);
+  });
+  msgDiv.appendChild(copyBtn);
+
   chatArea.appendChild(msgDiv);
   chatArea.scrollTop = chatArea.scrollHeight;
 }
+
