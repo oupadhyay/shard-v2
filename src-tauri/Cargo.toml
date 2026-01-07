@@ -44,7 +44,12 @@ regex = "1.12.2"
 [dev-dependencies]
 tempfile = "3"
 criterion = "0.5"
+dotenvy = "0.15"
 
 [[bench]]
 name = "retrieval_bench"
+harness = false
+
+[[bench]]
+name = "vision_bench"
 harness = false
