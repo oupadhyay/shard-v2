@@ -174,6 +174,12 @@ async fn call_background_llm(
             "llama-3.3-70b"
         };
         ("https://api.cerebras.ai/v1/chat/completions", key, model_id)
+    } else if model.contains("(OpenRouter)") {
+        let key = config.openrouter_api_key.as_ref()
+            .ok_or("No OpenRouter API key configured for background jobs")?;
+        // Extract model ID from format like "google/gemma-3-27b-it:free (OpenRouter)"
+        let model_id = model.split(" (OpenRouter)").next().unwrap_or("google/gemma-3-27b-it:free");
+        ("https://openrouter.ai/api/v1/chat/completions", key, model_id.to_string().leak() as &str)
     } else {
         // Default to Groq
         let key = config.groq_api_key.as_ref()
@@ -378,6 +384,9 @@ async fn run_summary_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summar
     if background_model.contains("(Cerebras)") {
         config.cerebras_api_key.as_ref()
             .ok_or("No Cerebras API key configured for background jobs")?;
+    } else if background_model.contains("(OpenRouter)") {
+        config.openrouter_api_key.as_ref()
+            .ok_or("No OpenRouter API key configured for background jobs")?;
     } else {
         config.groq_api_key.as_ref()
             .ok_or("No Groq API key configured for background jobs")?;
@@ -620,6 +629,8 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
     // Verify we have the required API key
     let has_key = if background_model.contains("(Cerebras)") {
         config.cerebras_api_key.is_some()
+    } else if background_model.contains("(OpenRouter)") {
+        config.openrouter_api_key.is_some()
     } else {
         config.groq_api_key.is_some()
     };

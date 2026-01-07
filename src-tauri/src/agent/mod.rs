@@ -176,19 +176,22 @@ impl Agent {
 
         let mut history = self.history.lock().await;
 
-        // Process images: upload to Gemini Files API if using Gemini model
+        // Determine model type
+        let selected_model = config
+            .selected_model
+            .clone()
+            .unwrap_or("gemini-2.5-flash-lite".to_string());
+        let is_gemini = !selected_model.contains("/");
+
+        // Process images: upload to Gemini Files API if using Gemini model,
+        // or describe via Vision LLM for other providers
+        let mut image_descriptions: Vec<String> = Vec::new();
         let uploaded_images: Option<Vec<ImageAttachment>> = if let (Some(bases), Some(mimes)) =
             (images_base64.as_ref(), images_mime_types.as_ref())
         {
             if bases.is_empty() {
                 None
             } else {
-                let selected_model = config
-                    .selected_model
-                    .clone()
-                    .unwrap_or("gemini-2.5-flash-lite".to_string());
-                let is_gemini = !selected_model.contains("/");
-
                 let mut attachments = Vec::with_capacity(bases.len());
 
                 for (img_data, mime_type) in bases.iter().zip(mimes.iter()) {
@@ -217,7 +220,25 @@ impl Agent {
                             }
                         }
                     } else {
-                        None // OpenRouter doesn't use file URIs
+                        // For non-Gemini providers, use Vision LLM to describe the image
+                        match crate::integrations::vision_llm::describe_image(
+                            &self.http_client,
+                            img_data,
+                            mime_type,
+                            config,
+                        )
+                        .await
+                        {
+                            Ok(description) => {
+                                log::info!("[Agent] Vision LLM described image: {} chars", description.len());
+                                image_descriptions.push(description);
+                            }
+                            Err(e) => {
+                                log::warn!("[Agent] Vision LLM failed: {}", e);
+                                image_descriptions.push("[Image attached but could not be described]".to_string());
+                            }
+                        }
+                        None // No file URI for non-Gemini
                     };
 
                     attachments.push(ImageAttachment {
@@ -233,9 +254,17 @@ impl Agent {
             None
         };
 
+        // For non-Gemini providers, prepend image descriptions to the message
+        let augmented_message = if !is_gemini && !image_descriptions.is_empty() {
+            let descriptions = image_descriptions.join("\n\n");
+            format!("[Image Description]\n{}\n\n[User Message]\n{}", descriptions, message)
+        } else {
+            message.clone()
+        };
+
         history.push(ChatMessage {
             role: "user".to_string(),
-            content: Some(message.clone()),
+            content: Some(augmented_message),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
@@ -1033,8 +1062,8 @@ impl Agent {
 
                     // Rebuild request for OpenRouter
                     let openrouter_url = "https://openrouter.ai/api/v1/chat/completions";
-                    // Use GPT-OSS-20b on OpenRouter as fallback
-                    let fallback_model = "openai/gpt-oss-20b:free".to_string();
+                    // Use GPT-OSS-120b on OpenRouter as fallback
+                    let fallback_model = "openai/gpt-oss-120b:free".to_string();
 
                     let fallback_body = ChatCompletionRequest {
                         model: fallback_model,

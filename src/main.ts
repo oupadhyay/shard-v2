@@ -75,6 +75,11 @@ async function handleInput(skipUi = false) {
     inputField.style.height = "auto"; // Reset height
     // Pass all images for display
     addMessage("user", text, currentImages);
+
+    // Clear image preview immediately to prevent duplication
+    attachedImages = [];
+    const container = document.getElementById("image-preview-container");
+    if (container) container.innerHTML = "";
   } else {
     // Resending: reset cancelled state
     isCancelled = false;
@@ -109,7 +114,24 @@ async function handleInput(skipUi = false) {
       const config = await invoke<any>("get_config");
       const selectedModel = config?.selected_model || "";
 
-      if (selectedModel.includes("/")) {
+      // Heuristic: If it's not a Gemini model, we treat it as OpenRouter/Groq/etc and send OCR text
+      if (!selectedModel.toLowerCase().includes("gemini")) {
+        // Wait for any pending OCR
+        const pendingImages = imagesToSend.filter(img => img.ocrPromise);
+        if (pendingImages.length > 0) {
+          await Promise.all(imagesToSend.map(async (img) => {
+            if (img.ocrPromise) {
+              try {
+                const text = await img.ocrPromise;
+                img.ocrText = text;
+              } catch (e) {
+                console.error("OCR failed during wait:", e);
+                img.ocrText = "[OCR failed]";
+              }
+            }
+          }));
+        }
+
         // OpenRouter - use OCR text for all images
         const ocrTexts = imagesToSend.map((img) => img.ocrText).join("\n---\n");
         messagePayload.message = `[Image OCR]:\n${ocrTexts}\n\n${messagePayload.message}`;
@@ -118,11 +140,6 @@ async function handleInput(skipUi = false) {
         messagePayload.imagesBase64 = imagesToSend.map((img) => img.base64);
         messagePayload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
       }
-
-      // Clear image preview after determining what to send
-      attachedImages = [];
-      const container = document.getElementById("image-preview-container");
-      if (container) container.innerHTML = "";
     }
 
     console.log("Sending payload to backend:", {
@@ -235,6 +252,7 @@ inputField.addEventListener("keydown", (e) => {
 
 // Handle paste event for clipboard images
 inputField.addEventListener("paste", async (e) => {
+  console.log("[Paste] Event triggered");
   const clipboardData = e.clipboardData;
   if (!clipboardData) return;
 
@@ -243,54 +261,122 @@ inputField.addEventListener("paste", async (e) => {
   const imageItem = items.find((item) => item.type.startsWith("image/"));
 
   if (imageItem) {
+    console.log("[Paste] Image item found in clipboard");
     e.preventDefault(); // Prevent default paste behavior for images
 
     const file = imageItem.getAsFile();
     if (!file) return;
 
-    // Convert to base64
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = (reader.result as string).split(",")[1]; // Remove data:image/...;base64, prefix
+    // Yield to main thread immediately to allow browser to handle event
+    setTimeout(() => {
+      // Create object URL for instant preview
+      const objectUrl = URL.createObjectURL(file);
       const mimeType = file.type;
 
-      // Show preview immediately with placeholder OCR (non-blocking)
-      const imageData = {
-        base64,
+      // Predict index (since showImagePreview pushes)
+      const imageIndex = attachedImages.length;
+
+      // Define the async process immediately so the promise exists synchronously
+      const ocrTask = async () => {
+        try {
+          // 1. Read file
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve((reader.result as string).split(",")[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+
+          // Update base64 for Gemini (side effect)
+          if (attachedImages[imageIndex]) {
+            attachedImages[imageIndex].base64 = base64;
+          }
+
+          // 2. Resize
+          console.log("[Paste] Resizing image for OCR...");
+          const resizedBase64 = await resizeImage(base64, mimeType, 1024);
+
+          // 3. Invoke OCR
+          console.log("[Paste] Invoking ocr_image");
+          const text = await invoke<string>("ocr_image", { imageBase64: resizedBase64 });
+
+          console.log("[OCR] Success");
+          return text;
+        } catch (e) {
+          console.error("OCR Process failed:", e);
+          return "[OCR failed]";
+        }
+      };
+
+      // Create image data with the promise attached immediately
+      const imageData: AttachedImage = {
+        base64: "", // Will be filled by side-effect
         mimeType,
         ocrText: "[Processing...]",
+        previewUrl: objectUrl,
+        ocrPromise: ocrTask() // Promise is created NOW
       };
-      showImagePreview(imageData);
-      const imageIndex = attachedImages.length - 1; // Index of just-added image
 
-      // Run OCR in background (don't await)
-      invoke<string>("ocr_image", { imageBase64: base64 })
-        .then((ocrText) => {
-          // Update the image's OCR text once complete
+      console.log("[Paste] Calling showImagePreview with ObjectURL");
+      showImagePreview(imageData);
+
+      // Add side-effect to update ocrText when done
+      if (imageData.ocrPromise) {
+        imageData.ocrPromise.then(text => {
           if (attachedImages[imageIndex]) {
-            attachedImages[imageIndex].ocrText = ocrText;
-          }
-        })
-        .catch((err) => {
-          console.warn("OCR failed for pasted image:", err);
-          if (attachedImages[imageIndex]) {
-            attachedImages[imageIndex].ocrText = "[OCR failed]";
+            attachedImages[imageIndex].ocrText = text;
           }
         });
+      }
 
       inputField.focus();
-    };
-    reader.readAsDataURL(file);
+    }, 0);
   }
 });
 
-function showImagePreview(imageData: { base64: string; mimeType: string; ocrText: string }) {
+// Helper to resize image
+function resizeImage(base64: string, mimeType: string, maxWidth: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.src = `data:${mimeType};base64,${base64}`;
+    img.onload = () => {
+      let width = img.width;
+      let height = img.height;
+
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width = maxWidth;
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Could not get canvas context"));
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // Get base64 from canvas (always use jpeg for OCR to save space, or keep original mime?)
+      // Using jpeg with 0.8 quality is good for OCR and much smaller
+      const resizedDataUrl = canvas.toDataURL("image/jpeg", 0.8);
+      const resizedBase64 = resizedDataUrl.split(",")[1];
+      resolve(resizedBase64);
+    };
+    img.onerror = reject;
+  });
+}
+
+function showImagePreview(imageData: AttachedImage) {
+  console.log("[showImagePreview] Called with mimeType:", imageData.mimeType);
   // Add to images array
   attachedImages.push(imageData);
   const index = attachedImages.length - 1;
 
   let container = document.getElementById("image-preview-container");
   if (!container) {
+    console.log("[showImagePreview] Creating new container");
     container = document.createElement("div");
     container.id = "image-preview-container";
     container.className = "image-preview-container";
@@ -300,15 +386,20 @@ function showImagePreview(imageData: { base64: string; mimeType: string; ocrText
     if (bottomBar && inputContainer) {
       bottomBar.insertBefore(container, inputContainer);
     }
+  } else {
+    console.log("[showImagePreview] Container found");
   }
 
   // Create preview element for this image
   const preview = document.createElement("div");
   preview.className = "image-preview";
   preview.dataset.index = index.toString();
+
+  const imgSrc = imageData.previewUrl || `data:${imageData.mimeType};base64,${imageData.base64}`;
+
   preview.innerHTML = `
     <button class="image-close-btn" title="Remove image">×</button>
-    <img src="data:${imageData.mimeType};base64,${imageData.base64}" alt="Attached image ${index + 1}" />
+    <img src="${imgSrc}" alt="Attached image ${index + 1}" />
   `;
 
   // Add close handler
@@ -323,7 +414,9 @@ function showImagePreview(imageData: { base64: string; mimeType: string; ocrText
     });
   });
 
+  console.log("[showImagePreview] Appending preview to container");
   container.appendChild(preview);
+  console.log("[showImagePreview] Append complete");
 }
 
 ocrBtn.addEventListener("click", async () => {
@@ -337,6 +430,20 @@ ocrBtn.addEventListener("click", async () => {
         mimeType: result.mime_type,
         ocrText: result.text,
       });
+      const index = attachedImages.length - 1;
+
+      // Trigger OCR in background
+      const ocrPromise = invoke<string>("ocr_image", { imageBase64: result.image_base64 });
+      if (attachedImages[index]) attachedImages[index].ocrPromise = ocrPromise;
+
+      ocrPromise.then(text => {
+        console.log("[OCR] Screenshot text:", text.substring(0, 50) + "...");
+        if (attachedImages[index]) attachedImages[index].ocrText = text;
+      }).catch(err => {
+        console.error("OCR failed:", err);
+        if (attachedImages[index]) attachedImages[index].ocrText = "[OCR failed]";
+      });
+
       // Do NOT paste text into input
       inputField.focus();
     }
@@ -359,6 +466,20 @@ listen("trigger-ocr", async () => {
         mimeType: result.mime_type,
         ocrText: result.text,
       });
+      const index = attachedImages.length - 1;
+
+      // Trigger OCR in background
+      const ocrPromise = invoke<string>("ocr_image", { imageBase64: result.image_base64 });
+      if (attachedImages[index]) attachedImages[index].ocrPromise = ocrPromise;
+
+      ocrPromise.then(text => {
+        console.log("[OCR] Screenshot text:", text.substring(0, 50) + "...");
+        if (attachedImages[index]) attachedImages[index].ocrText = text;
+      }).catch(err => {
+        console.error("OCR failed:", err);
+        if (attachedImages[index]) attachedImages[index].ocrText = "[OCR failed]";
+      });
+
       inputField.focus();
     }
   } catch (error) {
@@ -880,7 +1001,7 @@ settingsModal.innerHTML = `
           <input type="password" id="gemini-key" placeholder="Enter Gemini API Key" />
         </div>
         <div class="setting-group">
-          <label>OpenRouter API Key</label>
+          <label>OpenRouter API Key <span class="required-hint">*</span></label>
           <input type="password" id="openrouter-key" placeholder="Enter OpenRouter API Key" />
         </div>
         <div class="setting-group">
@@ -888,7 +1009,7 @@ settingsModal.innerHTML = `
           <input type="password" id="cerebras-key" placeholder="Enter Cerebras API Key" />
         </div>
         <div class="setting-group">
-          <label>Groq API Key</label>
+          <label>Groq API Key <span class="required-hint">*</span></label>
           <input type="password" id="groq-key" placeholder="Enter Groq API Key" />
         </div>
         <div class="setting-group">
@@ -930,6 +1051,10 @@ settingsModal.innerHTML = `
             <optgroup label="Cerebras">
               <option value="gpt-oss-120b (Cerebras)">GPT-OSS 120B (Cerebras)</option>
               <option value="llama-3.3-70b (Cerebras)">LLaMA 3.3 70B (Cerebras)</option>
+            </optgroup>
+            <optgroup label="OpenRouter">
+              <option value="google/gemma-3-27b-it:free (OpenRouter)">Gemma 3-27B (OpenRouter)</option>
+              <option value="openai/gpt-oss-20b:free (OpenRouter)">GPT-OSS 20B (OpenRouter)</option>
             </optgroup>
           </select>
         </div>
@@ -1034,6 +1159,7 @@ modelInput.addEventListener("change", updateToolAvailability);
 const getProvider = (model: string): string | null => {
   if (model.includes("(Groq)")) return "groq";
   if (model.includes("(Cerebras)")) return "cerebras";
+  if (model.includes("(OpenRouter)")) return "openrouter";
   return null;
 };
 

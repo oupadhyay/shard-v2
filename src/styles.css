@@ -601,6 +601,12 @@ body {
   color: #aaa;
 }
 
+.required-hint {
+  color: #ff8844;
+  font-size: 10px;
+  margin-left: 2px;
+}
+
 .setting-group input {
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.1);

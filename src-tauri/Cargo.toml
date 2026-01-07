@@ -27,7 +27,6 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["full"] }
 tauri-plugin-log = "2"
 arboard = "3"
-leptess = "0.14"
 yahoo_finance_api = "2"
 wikipedia = "0.3"
 scraper = "0.19"

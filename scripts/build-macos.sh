@@ -1,6 +1,6 @@
 #!/bin/bash
-# Complete build script for Shard macOS distribution
-# This script handles the full build process including dylib bundling and DMG creation
+# Build script for Shard macOS distribution
+# Simplified after removing Tesseract/Leptonica native dependencies
 
 set -e
 
@@ -9,7 +9,7 @@ echo "  Shard macOS Build Script"
 echo "=========================================="
 echo ""
 
-# Step 1: Run Tauri build (without frameworks - we add them manually)
+# Step 1: Run Tauri build
 echo "Step 1: Building Shard..."
 npm run tauri build
 
@@ -18,91 +18,63 @@ if [ -d "src-tauri/target/release/bundle/macos/Shard.app" ]; then
     APP_PATH="src-tauri/target/release/bundle/macos/Shard.app"
 elif [ -d "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Shard.app" ]; then
     APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Shard.app"
+elif [ -d "src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Shard.app" ]; then
+    APP_PATH="src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Shard.app"
 else
     echo "Error: Could not find Shard.app bundle"
     exit 1
 fi
 
-BINARY="$APP_PATH/Contents/MacOS/shard"
-FRAMEWORKS="$APP_PATH/Contents/Frameworks"
-
 echo ""
 echo "Step 2: Copying frameworks..."
 
 # Create Frameworks directory
+FRAMEWORKS="$APP_PATH/Contents/Frameworks"
 mkdir -p "$FRAMEWORKS"
 
-# Dylib sources (Homebrew)
+# Only libarchive is still needed (for zip/archive operations)
 BREW_PREFIX="/opt/homebrew/opt"
-DYLIBS=(
-    "$BREW_PREFIX/libarchive/lib/libarchive.13.dylib"
-    "$BREW_PREFIX/tesseract/lib/libtesseract.5.dylib"
-    "$BREW_PREFIX/leptonica/lib/libleptonica.6.dylib"
-)
+LIBARCHIVE="$BREW_PREFIX/libarchive/lib/libarchive.13.dylib"
 
-# Copy dylibs with write permissions
-for src in "${DYLIBS[@]}"; do
-    name=$(basename "$src")
-    dst="$FRAMEWORKS/$name"
-    echo "  Copying $name..."
-    cp "$src" "$dst"
+if [ -f "$LIBARCHIVE" ]; then
+    BINARY="$APP_PATH/Contents/MacOS/shard"
+    dst="$FRAMEWORKS/libarchive.13.dylib"
+    echo "  Copying libarchive.13.dylib..."
+    cp "$LIBARCHIVE" "$dst"
     chmod u+w "$dst"
     xattr -cr "$dst" 2>/dev/null || true
-done
+
+    # Fix dylib path
+    echo "  Fixing dylib path..."
+    install_name_tool -change "$LIBARCHIVE" "@executable_path/../Frameworks/libarchive.13.dylib" "$BINARY" 2>/dev/null || true
+    install_name_tool -id "@executable_path/../Frameworks/libarchive.13.dylib" "$dst" 2>/dev/null || true
+else
+    echo "  Warning: libarchive not found, skipping..."
+fi
 
 echo ""
-echo "Step 3: Fixing dylib paths..."
-
-# Dylib mappings: name old_path
-fix_dylib_path() {
-    local name="$1"
-    local old_path="$2"
-    local new_path="@executable_path/../Frameworks/$name"
-
-    echo "  $name: rewriting binary path..."
-    install_name_tool -change "$old_path" "$new_path" "$BINARY" 2>/dev/null || true
-}
-
-fix_dylib_path "libarchive.13.dylib" "$BREW_PREFIX/libarchive/lib/libarchive.13.dylib"
-fix_dylib_path "libtesseract.5.dylib" "$BREW_PREFIX/tesseract/lib/libtesseract.5.dylib"
-fix_dylib_path "libleptonica.6.dylib" "$BREW_PREFIX/leptonica/lib/libleptonica.6.dylib"
+echo "Step 3: Re-signing the app bundle..."
+# Using "Shard Dev" self-signed certificate for stable identity
+codesign --force --deep --sign "Shard Dev" "$APP_PATH" || echo "  Warning: codesign failed (may need signing identity)"
 
 echo ""
-echo "Step 4: Fixing inter-library dependencies..."
-
-# Fix each bundled dylib's internal references
-fix_inter_deps() {
-    local dylib_file="$1"
-    local dylib_name=$(basename "$dylib_file")
-
-    # Set the dylib's own ID
-    install_name_tool -id "@executable_path/../Frameworks/$dylib_name" "$dylib_file" 2>/dev/null || true
-
-    # Fix references to other bundled dylibs
-    install_name_tool -change "$BREW_PREFIX/libarchive/lib/libarchive.13.dylib" "@executable_path/../Frameworks/libarchive.13.dylib" "$dylib_file" 2>/dev/null || true
-    install_name_tool -change "$BREW_PREFIX/tesseract/lib/libtesseract.5.dylib" "@executable_path/../Frameworks/libtesseract.5.dylib" "$dylib_file" 2>/dev/null || true
-    install_name_tool -change "$BREW_PREFIX/leptonica/lib/libleptonica.6.dylib" "@executable_path/../Frameworks/libleptonica.6.dylib" "$dylib_file" 2>/dev/null || true
-}
-
-for dylib_file in "$FRAMEWORKS"/*.dylib; do
-    echo "  Fixing $(basename "$dylib_file")..."
-    fix_inter_deps "$dylib_file"
-done
-
-echo ""
-echo "Step 5: Re-signing the app bundle..."
-# Using "Shard Dev" self-signed certificate for stable identity (persists permission grants)
-codesign --force --deep --sign "Shard Dev" "$APP_PATH"
-
-echo ""
-echo "Step 6: Verifying..."
-echo "Binary dependencies:"
-otool -L "$BINARY" | grep -E "(libarchive|libtesseract|libleptonica)"
-
-echo ""
-echo "Step 7: Creating DMG..."
+echo "Step 4: Creating DMG..."
 DMG_DIR=$(dirname "$APP_PATH")
-DMG_NAME="Shard_0.1.0_aarch64.dmg"
+
+# Detect architecture from path
+if [[ "$APP_PATH" == *"aarch64"* ]]; then
+    ARCH="aarch64"
+elif [[ "$APP_PATH" == *"x86_64"* ]]; then
+    ARCH="x86_64"
+else
+    # Fall back to current machine architecture
+    ARCH=$(uname -m)
+    if [ "$ARCH" = "arm64" ]; then
+        ARCH="aarch64"
+    fi
+fi
+
+DMG_NAME="Shard_0.1.0_${ARCH}.dmg"
 DMG_PATH="$DMG_DIR/$DMG_NAME"
 rm -f "$DMG_PATH"
 hdiutil create -volname "Shard" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
@@ -117,3 +89,7 @@ echo "  App: $APP_PATH"
 echo "  DMG: $DMG_PATH"
 echo ""
 echo "To install: Open the DMG and drag Shard to Applications."
+echo ""
+echo "For cross-architecture builds:"
+echo "  Intel: rustup target add x86_64-apple-darwin && npm run tauri build -- --target x86_64-apple-darwin"
+echo "  ARM64: rustup target add aarch64-apple-darwin && npm run tauri build -- --target aarch64-apple-darwin"

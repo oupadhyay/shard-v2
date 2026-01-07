@@ -11,6 +11,8 @@ export interface ImageAttachment {
 // Attached image with OCR text (for input state)
 export interface AttachedImage extends ImageAttachment {
   ocrText: string;
+  ocrPromise?: Promise<string>;
+  previewUrl?: string;
 }
 
 // Chat message from backend history

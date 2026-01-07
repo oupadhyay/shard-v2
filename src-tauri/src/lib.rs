@@ -24,7 +24,7 @@ pub mod retrieval;
 #[cfg(test)]
 mod tests;
 
-use integrations::ocr::perform_ocr;
+use integrations::vision_llm;
 use agent::Agent;
 
 // --- State Management ---
@@ -58,6 +58,9 @@ struct OcrResult {
 
 #[tauri::command]
 async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String> {
+    // Load config for API keys
+    // let config = config::load_config(&app_handle)?;
+
     // Use macOS native screencapture for interactive region selection
     let temp_dir = std::env::temp_dir();
     let temp_path = temp_dir.join("shard_ocr_capture.png");
@@ -83,38 +86,29 @@ async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String
     // Convert to base64
     let image_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
 
-    // Convert to DynamicImage for OCR
-    let dynamic_image = image::load_from_memory(&image_data)
-        .map_err(|e| format!("Failed to load image: {}", e))?;
-
-    // Perform OCR
-    let text = perform_ocr(&dynamic_image)?;
-
-    // Clean up
+    // Clean up temp file
     std::fs::remove_file(&temp_path).ok();
 
+    // Return image immediately without waiting for OCR
+    // OCR will be triggered by frontend separately
     Ok(OcrResult {
-        text,
+        text: "[Processing...]".to_string(),
         image_base64,
         mime_type: "image/png".to_string(),
     })
 }
 
-/// Perform OCR on a base64-encoded image (for pasted images)
+// Perform OCR on a base64-encoded image (for pasted images)
 #[tauri::command]
-async fn ocr_image(image_base64: String) -> Result<String, String> {
-    // Decode base64 to bytes
-    let image_data = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &image_base64)
-        .map_err(|e| format!("Failed to decode base64 image: {}", e))?;
+async fn ocr_image(app_handle: AppHandle, image_base64: String, mime_type: Option<String>) -> Result<String, String> {
+    // Load config for API keys
+    let config = config::load_config(&app_handle)?;
 
-    // Convert to DynamicImage for OCR
-    let dynamic_image = image::load_from_memory(&image_data)
-        .map_err(|e| format!("Failed to load image: {}", e))?;
+    let mime = mime_type.unwrap_or_else(|| "image/png".to_string());
 
-    // Perform OCR
-    let text = perform_ocr(&dynamic_image)?;
-
-    Ok(text)
+    // Use Vision LLM for OCR instead of Tesseract
+    let http_client = reqwest::Client::new();
+    vision_llm::describe_image(&http_client, &image_base64, &mime, &config).await
 }
 
 #[tauri::command]
