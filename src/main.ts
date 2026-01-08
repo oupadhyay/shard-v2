@@ -846,16 +846,13 @@ listen<string>("agent-reasoning-chunk", (event) => {
   // Handles model reasoning/thinking output and displays it in collapsible blocks.
   //
   // Logic:
-  // 1. Find the last incomplete thinking block, or the last complete one if short
-  // 2. Append content to it, or create a new block if none suitable
-  // 3. Short blocks (< 10 words) get merged with previous to reduce clutter
+  // 1. Find an incomplete thinking block (still streaming), or
+  // 2. If the last chat element is a thinking block, merge into it
+  // 3. Otherwise, create a new block
   // ============================================================================
 
   const content = event.payload;
   console.log("Received reasoning chunk:", content);
-
-  // Helper: count words in text
-  const countWords = (text: string) => text.trim().split(/\s+/).filter(w => w.length > 0).length;
 
   // Find existing thinking messages
   const allThinkingMsgs = Array.from(chatArea.querySelectorAll(".message.thinking-output")) as HTMLElement[];
