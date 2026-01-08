@@ -40,6 +40,7 @@ let attachedImages: AttachedImage[] = [];
 let lastUserMessage = "";
 let lastAttachedImages: AttachedImage[] = [];
 let isCancelled = false;
+let fallbackShownThisTurn = false; // Prevent duplicate "Moving to OpenRouter" messages
 
 // Open external links in default browser
 document.addEventListener("click", (e) => {
@@ -63,6 +64,9 @@ function addMessage(
 async function handleInput(skipUi = false) {
   const text = inputField.value.trim();
   if ((!text && !skipUi) || isProcessing) return;
+
+  // Reset fallback notification flag for new turn
+  fallbackShownThisTurn = false;
 
   // If skipping UI, we use the text passed in or the input value (which should be set by caller)
   // But actually, if skipUi is true, we expect the caller to have set inputField.value.
@@ -1067,6 +1071,13 @@ listen<string>("agent-error", (event) => {
 
 // Listen for provider fallback notifications (rate limit → OpenRouter)
 listen<string>("agent-fallback", (event) => {
+  // Only show the fallback message once per conversation turn
+  if (fallbackShownThisTurn) {
+    console.log("[Fallback] Skipping duplicate notification");
+    return;
+  }
+  fallbackShownThisTurn = true;
+
   try {
     const data = JSON.parse(event.payload);
     const title = data.title || "Provider Fallback";
