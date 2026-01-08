@@ -513,6 +513,7 @@ impl Agent {
                 let query = args["query"].as_str().unwrap_or_default();
                 match perform_web_search(query, config.brave_api_key.as_deref()).await {
                     Ok(results) => {
+                        // Full format with snippets for the model to understand
                         let snippets: Vec<String> = results
                             .iter()
                             .map(|r| format!("- [{}]({}) : {}", r.title, r.url, r.snippet))
@@ -1022,6 +1023,7 @@ impl Agent {
                             name: t.function.name.clone(),
                             description: t.function.description.clone(),
                             parameters: t.function.parameters.clone(),
+                            strict: t.function.strict, // Required by Cerebras
                         },
                     })
                     .collect(),
@@ -1113,6 +1115,7 @@ impl Agent {
         let mut full_reasoning = String::new();
         let mut tool_calls_buffer: Vec<ToolCall> = Vec::new();
         use futures_util::StreamExt;
+
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
 

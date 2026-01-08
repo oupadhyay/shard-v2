@@ -13,8 +13,10 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                     "properties": {
                         "location": { "type": "string", "description": "City name (e.g. 'Paris', 'London') or Zip code (e.g. '94102')" },
                     },
-                    "required": ["location"]
+                    "required": ["location"],
+                    "additionalProperties": false
                 }),
+                strict: Some(true),
             },
         },
         ToolDefinition {
@@ -27,8 +29,10 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                     "properties": {
                         "query": { "type": "string", "description": "Wikipedia article title. Use exact page title as it appears on Wikipedia (e.g., 'San Francisco 49ers', 'Albert Einstein'). For example, use 'SchedMD' and 'NVIDIA' not 'SchedMD acquisition by NVIDIA'" },
                     },
-                    "required": ["query"]
+                    "required": ["query"],
+                    "additionalProperties": false
                 }),
+                strict: Some(true),
             },
         },
         ToolDefinition {
@@ -41,8 +45,10 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                     "properties": {
                         "symbol": { "type": "string", "description": "Stock ticker symbol, e.g. AAPL, GOOGL, MSFT" },
                     },
-                    "required": ["symbol"]
+                    "required": ["symbol"],
+                    "additionalProperties": false
                 }),
+                strict: Some(true),
             },
         },
         ToolDefinition {
@@ -55,8 +61,10 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                     "properties": {
                         "query": { "type": "string", "description": "Academic search query, e.g. 'transformer attention mechanism' or 'quantum computing'" },
                     },
-                    "required": ["query"]
+                    "required": ["query"],
+                    "additionalProperties": false
                 }),
+                strict: Some(true),
             },
         },
         ToolDefinition {
@@ -69,8 +77,10 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                     "properties": {
                         "paper_id": { "type": "string", "description": "ArXiv paper ID (e.g., '2401.12345') or full arxiv.org URL" },
                     },
-                    "required": ["paper_id"]
+                    "required": ["paper_id"],
+                    "additionalProperties": false
                 }),
+                strict: Some(true),
             },
         },
         ToolDefinition {
@@ -83,8 +93,10 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                     "properties": {
                         "query": { "type": "string", "description": "Search query. Be specific: include year, team name, 'current', 'latest', or 'today' for time-sensitive queries." },
                     },
-                    "required": ["query"]
+                    "required": ["query"],
+                    "additionalProperties": false
                 }),
+                strict: Some(true),
             },
         },
         ToolDefinition {
@@ -101,10 +113,12 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                             "description": "Category of memory: 'preference' for user preferences, 'project' for project context, 'interaction' for conversation summaries, 'fact' for general facts about the user"
                         },
                         "content": { "type": "string", "description": "The information to remember. Be concise but complete." },
-                        "importance": { "type": "integer", "minimum": 1, "maximum": 5, "description": "Importance level 1-5 (5=critical, 1=nice-to-have)" }
+                        "importance": { "type": "integer", "description": "Importance level 1-5 (5=critical, 1=nice-to-have)" }
                     },
-                    "required": ["category", "content", "importance"]
+                    "required": ["category", "content", "importance"],
+                    "additionalProperties": false
                 }),
+                strict: Some(true),
             },
         },
         ToolDefinition {
@@ -118,8 +132,10 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                         "topic": { "type": "string", "description": "Topic name (e.g., 'SHARD', 'FINANCE'). Will be used as filename (SHARD.md)." },
                         "content": { "type": "string", "description": "The full markdown content of the summary. This overwrites the existing file, so ensure you include all relevant previous information plus new updates." },
                     },
-                    "required": ["topic", "content"]
+                    "required": ["topic", "content"],
+                    "additionalProperties": false
                 }),
+                strict: Some(true),
             },
         },
         ToolDefinition {
@@ -132,8 +148,10 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                     "properties": {
                         "topic": { "type": "string", "description": "Topic name (e.g., 'SHARD', 'FINANCE')." },
                     },
-                    "required": ["topic"]
+                    "required": ["topic"],
+                    "additionalProperties": false
                 }),
+                strict: Some(true),
             },
         },
     ]

@@ -12,6 +12,11 @@ import {
   createToolCallElement,
   updateToolResult,
   addMessage as addMessageToChat,
+  getOrCreateWebSearchContainer,
+  resetWebSearchContainer,
+  isWebSearchTool,
+  createWebSearchQueryElement,
+  updateWebSearchCount,
   RESEND_ICON,
   STOP_ICON,
   TRASH_ICON,
@@ -91,6 +96,14 @@ async function handleInput(skipUi = false) {
 
   isProcessing = true;
 
+  // Capture images for API call BEFORE any clearing
+  // For normal sends: use lastAttachedImages (set at line 77 before clearing)
+  // For resends: attachedImages was restored by caller
+  const imagesToSend = skipUi ? [...attachedImages] : [...lastAttachedImages];
+
+  // Reset web search container for new response
+  resetWebSearchContainer();
+
   // Reset stop button to stop mode
   stopBtn.style.display = "inline-flex";
   stopBtn.classList.add("loading");
@@ -99,13 +112,7 @@ async function handleInput(skipUi = false) {
 
   try {
     // Include image data or OCR text based on model
-    // Use attachedImage if present, otherwise use lastAttachedImage if resending?
-    // The plan said: Restore attachedImage = lastAttachedImage before calling handleInput(true)
-
     const messagePayload: any = { message: skipUi ? lastUserMessage : text };
-
-    // Use the images that are currently set (restored by caller if resending)
-    const imagesToSend = attachedImages;
 
     if (imagesToSend.length > 0) {
       // For OpenRouter models (don't support images), prepend OCR text
@@ -320,11 +327,17 @@ inputField.addEventListener("paste", async (e) => {
       console.log("[Paste] Calling showImagePreview with ObjectURL");
       showImagePreview(imageData);
 
-      // Add side-effect to update ocrText when done
+      // Add side-effect to update ocrText when done and remove loading state
       if (imageData.ocrPromise) {
         imageData.ocrPromise.then(text => {
           if (attachedImages[imageIndex]) {
             attachedImages[imageIndex].ocrText = text;
+          }
+          // Remove loading indicator from preview
+          const container = document.getElementById("image-preview-container");
+          const preview = container?.querySelector(`.image-preview[data-index="${imageIndex}"]`);
+          if (preview) {
+            preview.classList.remove("ocr-processing");
           }
         });
       }
@@ -392,7 +405,7 @@ function showImagePreview(imageData: AttachedImage) {
 
   // Create preview element for this image
   const preview = document.createElement("div");
-  preview.className = "image-preview";
+  preview.className = imageData.ocrPromise ? "image-preview ocr-processing" : "image-preview";
   preview.dataset.index = index.toString();
 
   const imgSrc = imageData.previewUrl || `data:${imageData.mimeType};base64,${imageData.base64}`;
@@ -425,26 +438,33 @@ ocrBtn.addEventListener("click", async () => {
   try {
     const result = await invoke<OcrResult>("perform_ocr_capture");
     if (result) {
+      // Create promise first so showImagePreview can detect it
+      const ocrPromise = invoke<string>("ocr_image", { imageBase64: result.image_base64 });
+
       showImagePreview({
         base64: result.image_base64,
         mimeType: result.mime_type,
-        ocrText: result.text,
+        ocrText: "[Processing...]",
+        ocrPromise,
       });
       const index = attachedImages.length - 1;
-
-      // Trigger OCR in background
-      const ocrPromise = invoke<string>("ocr_image", { imageBase64: result.image_base64 });
-      if (attachedImages[index]) attachedImages[index].ocrPromise = ocrPromise;
 
       ocrPromise.then(text => {
         console.log("[OCR] Screenshot text:", text.substring(0, 50) + "...");
         if (attachedImages[index]) attachedImages[index].ocrText = text;
+        // Remove loading indicator
+        const container = document.getElementById("image-preview-container");
+        const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
+        if (preview) preview.classList.remove("ocr-processing");
       }).catch(err => {
         console.error("OCR failed:", err);
         if (attachedImages[index]) attachedImages[index].ocrText = "[OCR failed]";
+        // Remove loading indicator
+        const container = document.getElementById("image-preview-container");
+        const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
+        if (preview) preview.classList.remove("ocr-processing");
       });
 
-      // Do NOT paste text into input
       inputField.focus();
     }
   } catch (error) {
@@ -461,23 +481,31 @@ listen("trigger-ocr", async () => {
   try {
     const result = await invoke<OcrResult>("perform_ocr_capture");
     if (result) {
+      // Create promise first so showImagePreview can detect it
+      const ocrPromise = invoke<string>("ocr_image", { imageBase64: result.image_base64 });
+
       showImagePreview({
         base64: result.image_base64,
         mimeType: result.mime_type,
-        ocrText: result.text,
+        ocrText: "[Processing...]",
+        ocrPromise,
       });
       const index = attachedImages.length - 1;
-
-      // Trigger OCR in background
-      const ocrPromise = invoke<string>("ocr_image", { imageBase64: result.image_base64 });
-      if (attachedImages[index]) attachedImages[index].ocrPromise = ocrPromise;
 
       ocrPromise.then(text => {
         console.log("[OCR] Screenshot text:", text.substring(0, 50) + "...");
         if (attachedImages[index]) attachedImages[index].ocrText = text;
+        // Remove loading indicator
+        const container = document.getElementById("image-preview-container");
+        const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
+        if (preview) preview.classList.remove("ocr-processing");
       }).catch(err => {
         console.error("OCR failed:", err);
         if (attachedImages[index]) attachedImages[index].ocrText = "[OCR failed]";
+        // Remove loading indicator
+        const container = document.getElementById("image-preview-container");
+        const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
+        if (preview) preview.classList.remove("ocr-processing");
       });
 
       inputField.focus();
@@ -559,6 +587,8 @@ async function loadChatHistory() {
     // Process messages sequentially
     for (const msg of history) {
       if (msg.role === "user") {
+        // Reset web search container for each user message (new turn)
+        resetWebSearchContainer();
         // Pass all images if present in history
         addMessage("user", msg.content || "", msg.images);
       } else if (msg.role === "assistant") {
@@ -571,13 +601,38 @@ async function loadChatHistory() {
         // 2. Render Tool Calls (if present)
         if (msg.tool_calls && msg.tool_calls.length > 0) {
           msg.tool_calls.forEach((toolCall: any) => {
-            const toolDiv = createToolCallElement(
-              toolCall.function.name,
-              toolCall.function.arguments,
-              toolCall.id,
-              false, // Closed by default on restore
-            );
-            chatArea.appendChild(toolDiv);
+            const toolName = toolCall.function.name;
+
+            if (isWebSearchTool(toolName)) {
+              // Group web searches into container
+              const container = getOrCreateWebSearchContainer(chatArea);
+              if (!chatArea.contains(container)) {
+                chatArea.appendChild(container);
+              }
+
+              const queriesContainer = container.querySelector(".web-search-queries");
+              if (queriesContainer) {
+                let query = "";
+                try {
+                  const args = JSON.parse(toolCall.function.arguments);
+                  query = args.query || "";
+                } catch (e) {
+                  query = toolCall.function.arguments;
+                }
+                const queryEl = createWebSearchQueryElement(query, toolCall.id);
+                queriesContainer.appendChild(queryEl);
+                updateWebSearchCount(container);
+              }
+            } else {
+            // Regular tool call
+              const toolDiv = createToolCallElement(
+                toolName,
+                toolCall.function.arguments,
+                toolCall.id,
+                false, // Closed by default on restore
+              );
+              chatArea.appendChild(toolDiv);
+            }
           });
         }
 
@@ -586,26 +641,59 @@ async function loadChatHistory() {
           addMessage("assistant", msg.content, msg.images);
         }
       } else if (msg.role === "tool") {
-        // Tool result message
-        // Find the most recent tool-output that matches
-        // We search backwards from the end of chatArea
-        const toolMessages = Array.from(chatArea.querySelectorAll(".tool-output"));
-        let matchingTool: Element | undefined;
+        // Tool result message - try to find matching element by ID
+        let matched = false;
 
-        // Try to match by ID first if available
+        // First, try to match web search query by ID
         if (msg.tool_call_id) {
-          matchingTool = toolMessages
-            .reverse()
-            .find((el) => el.getAttribute("data-tool-id") === msg.tool_call_id);
+          const webSearchQueries = Array.from(chatArea.querySelectorAll(".web-search-query"));
+          const matchingQuery = webSearchQueries.find((el) =>
+            el.getAttribute("data-tool-id") === msg.tool_call_id
+          );
+
+          if (matchingQuery && msg.content) {
+            const resultSection = matchingQuery.querySelector('.tool-result') as HTMLElement;
+            const resultContent = matchingQuery.querySelector('.tool-result-content');
+            if (resultSection && resultContent) {
+              // Simplify web search results for display (extract just title links)
+              const cleanResult = msg.content
+                .replace(/^Web Search Results:\n/, '')
+                // Extract markdown links and remove snippets after " : "
+                .split('\n')
+                .filter((line: string) => line.trim().startsWith('-'))
+                .map((line: string) => {
+                  // Match "- [title](url) : snippet" and keep just "- [title](url)"
+                  const match = line.match(/^(- \[[^\]]+\]\([^)]+\))/);
+                  return match ? match[1] : line;
+                })
+                .join('\n');
+              resultContent.innerHTML = DOMPurify.sanitize(md.render(cleanResult));
+              resultSection.style.display = 'grid';
+              matched = true;
+            }
+          }
         }
 
-        // Fallback to name matching or just the last one if no ID
-        if (!matchingTool) {
-          matchingTool = toolMessages[toolMessages.length - 1];
-        }
+        // If not matched as web search, try regular tool-output
+        if (!matched) {
+          const toolMessages = Array.from(chatArea.querySelectorAll(".tool-output"));
+          let matchingTool: Element | undefined;
 
-        if (matchingTool && msg.content) {
-          updateToolResult(matchingTool, msg.content);
+          // Try to match by ID first if available
+          if (msg.tool_call_id) {
+            matchingTool = toolMessages
+              .reverse()
+              .find((el) => el.getAttribute("data-tool-id") === msg.tool_call_id);
+          }
+
+          // Fallback to the last one if no ID match
+          if (!matchingTool) {
+            matchingTool = toolMessages[toolMessages.length - 1];
+          }
+
+          if (matchingTool && msg.content) {
+            updateToolResult(matchingTool, msg.content);
+          }
         }
       }
     }
@@ -748,20 +836,54 @@ listen<string>("agent-response-chunk", (event) => {
 });
 
 listen<string>("agent-reasoning-chunk", (event) => {
-  // Handle explicit reasoning chunks - create separate message bubble like tool calls
+  // ============================================================================
+  // REASONING CHUNK HANDLER
+  // ============================================================================
+  // Handles model reasoning/thinking output and displays it in collapsible blocks.
+  //
+  // Logic:
+  // 1. Find the last incomplete thinking block, or the last complete one if short
+  // 2. Append content to it, or create a new block if none suitable
+  // 3. Short blocks (< 10 words) get merged with previous to reduce clutter
+  // ============================================================================
+
   const content = event.payload;
   console.log("Received reasoning chunk:", content);
 
-  // Check if we have an existing thinking message that's not complete
-  let thinkingMsg: HTMLElement | null = null;
-  const allMessages = chatArea.querySelectorAll(".message.thinking-output");
+  // Helper: count words in text
+  const countWords = (text: string) => text.trim().split(/\s+/).filter(w => w.length > 0).length;
 
-  // Find the last thinking message that's not marked as complete
-  for (let i = allMessages.length - 1; i >= 0; i--) {
-    const msg = allMessages[i] as HTMLElement;
-    if (msg.getAttribute("data-complete") !== "true") {
+  // Find existing thinking messages
+  const allThinkingMsgs = Array.from(chatArea.querySelectorAll(".message.thinking-output")) as HTMLElement[];
+
+  let thinkingMsg: HTMLElement | null = null;
+
+  // Strategy: Find the best block to append to
+  // 1. First, look for an incomplete block (still streaming)
+  // 2. If the last element in chat is a thinking block (even if complete), merge into it
+  //    This ensures consecutive thoughts stay together
+  // 3. Otherwise, create a new block
+
+  for (let i = allThinkingMsgs.length - 1; i >= 0; i--) {
+    const msg = allThinkingMsgs[i];
+    const isComplete = msg.getAttribute("data-complete") === "true";
+
+    if (!isComplete) {
+      // Found an incomplete block - use it
       thinkingMsg = msg;
       break;
+    }
+
+    // Check if this is the last thinking block AND the last chat element
+    // If so, merge into it to keep consecutive thoughts together
+    if (i === allThinkingMsgs.length - 1) {
+      const lastChatElement = chatArea.lastElementChild;
+      if (lastChatElement === msg) {
+        // Last element is this thinking block - reopen it for merging
+        thinkingMsg = msg;
+        msg.removeAttribute("data-complete");
+        break;
+      }
     }
   }
 
@@ -772,12 +894,12 @@ listen<string>("agent-reasoning-chunk", (event) => {
     chatArea.appendChild(thinkingMsg);
   }
 
+  // Append content
   let thinkingText = thinkingMsg.getAttribute("data-thinking") || "";
   thinkingText += content;
   thinkingMsg.setAttribute("data-thinking", thinkingText);
 
-  // Render as standalone thinking block with Markdown
-  // Trim trailing newlines for cleaner display
+  // Render as collapsible thinking block with Markdown
   const trimmedThinking = thinkingText.trimEnd();
 
   thinkingMsg.innerHTML = `
@@ -792,8 +914,41 @@ listen<string>("agent-reasoning-chunk", (event) => {
 
 listen<string>("agent-tool-call", (event) => {
   const payload = JSON.parse(event.payload);
-  const toolDiv = createToolCallElement(payload.name, JSON.stringify(payload.args), payload.id);
-  chatArea.appendChild(toolDiv);
+  console.log("Received tool call:", payload.name, payload.args);
+
+  // Complete any open thinking blocks before showing tool call
+  const openThinking = chatArea.querySelector('.thinking-output:not([data-complete="true"])');
+  if (openThinking) {
+    openThinking.setAttribute("data-complete", "true");
+    const summary = openThinking.querySelector("summary");
+    if (summary) summary.textContent = "Thought";
+    const details = openThinking.querySelector("details");
+    if (details) details.removeAttribute("open");
+  }
+
+  if (isWebSearchTool(payload.name)) {
+    // Group web searches into a single container
+    const container = getOrCreateWebSearchContainer(chatArea);
+
+    // If this is the first web search, add the container to chat
+    if (!chatArea.contains(container)) {
+      chatArea.appendChild(container);
+    }
+
+    // Add the query to the container
+    const queriesContainer = container.querySelector(".web-search-queries");
+    if (queriesContainer) {
+      const query = payload.args?.query || "";
+      const queryEl = createWebSearchQueryElement(query, payload.id);
+      queriesContainer.appendChild(queryEl);
+      updateWebSearchCount(container);
+    }
+  } else {
+  // Regular tool call - render as accordion
+    const toolDiv = createToolCallElement(payload.name, JSON.stringify(payload.args), payload.id);
+    chatArea.appendChild(toolDiv);
+  }
+
   chatArea.scrollTop = chatArea.scrollHeight;
 });
 
@@ -803,17 +958,52 @@ listen<string>("agent-tool-result", (event) => {
   const name = payload.name;
   const result = payload.result;
 
-  // Find the most recent tool-output with matching name
-  const toolMessages = Array.from(chatArea.querySelectorAll(".tool-output"));
-  const matchingTool = toolMessages
-    .reverse()
-    .find((el) => el.getAttribute("data-tool-name") === name);
+  if (isWebSearchTool(name)) {
+    // Find matching web search query element
+    const webSearchQueries = Array.from(chatArea.querySelectorAll(".web-search-query"));
+    const matchingQuery = webSearchQueries
+      .reverse()
+      .find((el) => {
+        const resultSection = el.querySelector('.tool-result') as HTMLElement;
+        // Find the one that doesn't have a result yet
+        return resultSection && resultSection.style.display === 'none';
+      });
 
-  if (matchingTool) {
-    updateToolResult(
-      matchingTool,
-      typeof result === "string" ? result : JSON.stringify(result, null, 2),
-    );
+    if (matchingQuery) {
+      const resultSection = matchingQuery.querySelector('.tool-result') as HTMLElement;
+      const resultContent = matchingQuery.querySelector('.tool-result-content');
+      if (resultSection && resultContent) {
+        // Simplify web search results for display (extract just title links)
+        const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+        // Remove "Web Search Results:" prefix and extract just the links
+        const cleanResult = resultText
+          .replace(/^Web Search Results:\n/, '')
+          // Extract markdown links and remove snippets after " : "
+          .split('\n')
+          .filter((line: string) => line.trim().startsWith('-'))
+          .map((line: string) => {
+            // Match "- [title](url) : snippet" and keep just "- [title](url)"
+            const match = line.match(/^(- \[[^\]]+\]\([^)]+\))/);
+            return match ? match[1] : line;
+          })
+          .join('\n');
+        resultContent.innerHTML = DOMPurify.sanitize(md.render(cleanResult));
+        resultSection.style.display = 'grid';
+      }
+    }
+  } else {
+    // Find the most recent tool-output with matching name
+    const toolMessages = Array.from(chatArea.querySelectorAll(".tool-output"));
+    const matchingTool = toolMessages
+      .reverse()
+      .find((el) => el.getAttribute("data-tool-name") === name);
+
+    if (matchingTool) {
+      updateToolResult(
+        matchingTool,
+        typeof result === "string" ? result : JSON.stringify(result, null, 2),
+      );
+    }
   }
 });
 

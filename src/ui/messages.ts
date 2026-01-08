@@ -6,6 +6,9 @@ import { md } from "./markdown";
 import { COPY_ICON, CHECK_ICON } from "./icons";
 import type { ImageAttachment } from "../types";
 
+// Track the current web search container for grouping
+let currentWebSearchContainer: HTMLElement | null = null;
+
 /**
  * Create a thinking/reasoning block element
  */
@@ -26,6 +29,48 @@ export function createThinkingElement(content: string, isComplete: boolean = tru
     </details>
   `;
   return thinkingMsg;
+}
+
+/**
+ * Get or create the web search container for grouping web searches
+ */
+export function getOrCreateWebSearchContainer(chatArea: HTMLElement): HTMLElement {
+  // If we already have an active container, return it
+  if (currentWebSearchContainer && chatArea.contains(currentWebSearchContainer)) {
+    return currentWebSearchContainer;
+  }
+
+  // Create new web search container
+  const container = document.createElement("div");
+  container.className = "message web-search-container";
+
+  container.innerHTML = `
+    <details class="web-search-accordion" open>
+      <summary class="web-search-summary">
+        <span class="web-search-icon">🔍</span>
+        <span class="web-search-title">Web Search</span>
+        <span class="web-search-count"></span>
+      </summary>
+      <div class="web-search-queries"></div>
+    </details>
+  `;
+
+  currentWebSearchContainer = container;
+  return container;
+}
+
+/**
+ * Reset the web search container (call when assistant message starts)
+ */
+export function resetWebSearchContainer(): void {
+  currentWebSearchContainer = null;
+}
+
+/**
+ * Check if a tool is a web search tool
+ */
+export function isWebSearchTool(name: string): boolean {
+  return name === "web_search";
 }
 
 /**
@@ -66,6 +111,40 @@ export function createToolCallElement(name: string, argsStr: string, id?: string
     </details>
   `;
   return toolDiv;
+}
+
+/**
+ * Create a web search query element (simpler than regular tool call)
+ */
+export function createWebSearchQueryElement(query: string, id?: string): HTMLElement {
+  const queryDiv = document.createElement("div");
+  queryDiv.className = "web-search-query";
+  queryDiv.setAttribute("data-tool-name", "web_search");
+  if (id) queryDiv.setAttribute("data-tool-id", id);
+
+  queryDiv.innerHTML = `
+    <details>
+      <summary>
+        <span class="query-text">"${DOMPurify.sanitize(query)}"</span>
+      </summary>
+      <div class="tool-result" style="display: none;">
+        <div class="tool-result-content markdown-body"></div>
+      </div>
+    </details>
+  `;
+  return queryDiv;
+}
+
+/**
+ * Update the web search count in the container
+ */
+export function updateWebSearchCount(container: HTMLElement): void {
+  const queriesContainer = container.querySelector(".web-search-queries");
+  const countSpan = container.querySelector(".web-search-count");
+  if (queriesContainer && countSpan) {
+    const count = queriesContainer.children.length;
+    countSpan.textContent = count > 1 ? `(${count} queries)` : "";
+  }
 }
 
 /**
