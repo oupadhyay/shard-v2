@@ -147,6 +147,110 @@ impl Agent {
         backup.is_some()
     }
 
+    /// Retry the last response with a hint about KaTeX errors
+    /// Called by frontend when KaTeX parsing fails
+    pub async fn retry_with_katex_hint<R: Runtime>(
+        &self,
+        app_handle: &AppHandle<R>,
+        katex_errors: Vec<String>,
+        config: &crate::config::AppConfig,
+    ) -> Result<(), String> {
+        let mut history = self.history.lock().await;
+
+        // Check if retry on KaTeX is enabled
+        if !config.retry_on_katex.unwrap_or(true) {
+            return Ok(());
+        }
+
+        // Find and remove the last assistant message
+        if let Some(last_msg) = history.last() {
+            if last_msg.role == "assistant" || last_msg.role == "model" {
+                history.pop();
+
+                // Add the retry hint
+                let hint = RetryReason::MalformedLatex { errors: katex_errors }.get_hint();
+                history.push(ChatMessage {
+                    role: "user".to_string(),
+                    content: Some(hint),
+                    reasoning: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    images: None,
+                });
+
+                // Emit retry event
+                let retry_event = serde_json::json!({
+                    "reason": "katex_error",
+                    "attempt": 1,
+                    "max": config.max_auto_retries.unwrap_or(2)
+                });
+                app_handle.emit("agent-retry", retry_event.to_string()).ok();
+
+                // Release lock and run another turn
+                drop(history);
+
+                // Re-process with the hint
+                // Note: We need to trigger a new processing loop without a new user message
+                // This is handled by calling process_message with an empty message that gets ignored
+                // Actually, we'll just re-use the existing flow by calling the internal method
+                self.run_retry_turn(app_handle, config).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Internal method to run a retry turn after hint injection
+    async fn run_retry_turn<R: Runtime>(
+        &self,
+        app_handle: &AppHandle<R>,
+        config: &crate::config::AppConfig,
+    ) -> Result<(), String> {
+        let mut history = self.history.lock().await;
+
+        let stream_id = crate::CURRENT_STREAM_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+
+        let selected_model = config
+            .selected_model
+            .clone()
+            .unwrap_or("gemini-2.5-flash-lite".to_string());
+
+        let is_gemini = !selected_model.contains("/")
+            && !selected_model.contains("(Cerebras)")
+            && !selected_model.contains("(Groq)");
+
+        let _continue_turn = if is_gemini {
+            let api_key = config.gemini_api_key.as_ref().ok_or("No Gemini API key")?;
+            self.process_gemini_turn(
+                app_handle,
+                config,
+                &mut history,
+                stream_id,
+                &selected_model,
+                api_key,
+                None, // No RAG context for retry
+                false, // Not research mode
+            )
+            .await?
+        } else {
+            self.process_openrouter_turn(
+                app_handle,
+                config,
+                &mut history,
+                stream_id,
+                None,
+                false,
+            )
+            .await?
+        };
+
+        // Persist the new response
+        drop(history);
+        self.persist_history().await;
+
+        Ok(())
+    }
+
     /// Persist current chat history to disk
     pub async fn persist_history(&self) {
         let history = self.history.lock().await;
@@ -354,6 +458,12 @@ impl Agent {
         let max_turns = if is_research_mode { 15 } else { 5 };
         let mut current_turn = 0;
 
+        // Auto-retry state
+        let max_retries = config.max_auto_retries.unwrap_or(2);
+        let retry_on_empty = config.retry_on_empty.unwrap_or(true);
+        let mut retry_count = 0u32;
+        let mut pending_retry_hint: Option<String> = None;
+
         loop {
             if current_turn >= max_turns {
                 break;
@@ -369,6 +479,18 @@ impl Agent {
             let is_gemini = !selected_model.contains("/")
                 && !selected_model.contains("(Cerebras)")
                 && !selected_model.contains("(Groq)");
+
+            // Inject retry hint if pending (from previous failed attempt)
+            if let Some(hint) = pending_retry_hint.take() {
+                history.push(ChatMessage {
+                    role: "user".to_string(),
+                    content: Some(hint),
+                    reasoning: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    images: None,
+                });
+            }
 
             let continue_turn = if is_gemini {
                 let api_key = config.gemini_api_key.as_ref().ok_or("No Gemini API key")?;
@@ -395,6 +517,42 @@ impl Agent {
                 )
                 .await?
             };
+
+            // Check if we need to retry (empty response with reasoning)
+            if !continue_turn && retry_on_empty && retry_count < max_retries {
+                if let Some(last_msg) = history.last() {
+                    let has_reasoning = last_msg.reasoning.as_ref().map(|r| !r.is_empty()).unwrap_or(false);
+                    let has_content = last_msg.content.as_ref().map(|c| !c.trim().is_empty()).unwrap_or(false);
+                    let has_tools = last_msg.tool_calls.is_some();
+
+                    // Retry if: has reasoning but no content and no tool calls
+                    if has_reasoning && !has_content && !has_tools {
+                        retry_count += 1;
+                        log::info!(
+                            "[Agent] Empty response with reasoning detected, retry {}/{}",
+                            retry_count,
+                            max_retries
+                        );
+
+                        // Emit retry event to frontend
+                        let retry_event = serde_json::json!({
+                            "reason": "empty_response",
+                            "attempt": retry_count,
+                            "max": max_retries
+                        });
+                        app_handle.emit("agent-retry", retry_event.to_string()).ok();
+
+                        // Pop the failed response from history
+                        history.pop();
+
+                        // Set up retry hint for next iteration
+                        pending_retry_hint = Some(RetryReason::EmptyResponse.get_hint());
+
+                        // Don't break - continue the loop for retry
+                        continue;
+                    }
+                }
+            }
 
             if !continue_turn {
                 break;

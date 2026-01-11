@@ -116,6 +116,43 @@ pub struct FunctionDefinition {
 }
 
 // ============================================================================
+// Auto-Retry Types
+// ============================================================================
+
+/// Reason for auto-retrying a response
+#[derive(Debug, Clone)]
+pub enum RetryReason {
+    /// Model produced reasoning but no user-facing content
+    EmptyResponse,
+    /// Frontend detected KaTeX parse errors in the response
+    MalformedLatex { errors: Vec<String> },
+}
+
+impl RetryReason {
+    /// Get the retry hint to inject as a system message
+    pub fn get_hint(&self) -> String {
+        match self {
+            RetryReason::EmptyResponse => {
+                "[RETRY HINT] Your previous response contained only internal reasoning \
+                but no user-facing content. Please provide a complete, visible answer to the user's question."
+                    .to_string()
+            }
+            RetryReason::MalformedLatex { errors } => {
+                format!(
+                    "[RETRY HINT] Your previous response had LaTeX rendering errors:\n{}\n\n\
+                    Please rewrite using correct LaTeX syntax:\n\
+                    - Use single $ for inline math: $x^2$\n\
+                    - Use $$ on separate lines for display math (not inline)\n\
+                    - Ensure all delimiters are properly paired\n\
+                    - Avoid nested $ symbols like $a$b$ - use $a$ $b$ instead",
+                    errors.join("\n")
+                )
+            }
+        }
+    }
+}
+
+// ============================================================================
 // OpenRouter/OpenAI API Types
 // ============================================================================
 

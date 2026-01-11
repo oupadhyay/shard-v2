@@ -8,6 +8,9 @@ import "katex/dist/katex.min.css";
 import type { AttachedImage, ChatMessage, OcrResult } from "./types";
 import {
   md,
+  clearKatexErrors,
+  getKatexErrors,
+  detectUnrenderedLatex,
   createThinkingElement,
   createToolCallElement,
   updateToolResult,
@@ -41,6 +44,7 @@ let lastUserMessage = "";
 let lastAttachedImages: AttachedImage[] = [];
 let isCancelled = false;
 let fallbackShownThisTurn = false; // Prevent duplicate "Moving to OpenRouter" messages
+let currentThinkingBlock: HTMLElement | null = null; // Session-based thinking block for merging
 
 // Open external links in default browser
 document.addEventListener("click", (e) => {
@@ -108,6 +112,12 @@ async function handleInput(skipUi = false) {
   // Reset web search container for new response
   resetWebSearchContainer();
 
+  // Reset thinking block for new response (enables merging within this turn)
+  currentThinkingBlock = null;
+
+  // Clear KaTeX errors for new response (for auto-retry tracking)
+  clearKatexErrors();
+
   // Reset stop button to stop mode
   stopBtn.style.display = "inline-flex";
   stopBtn.classList.add("loading");
@@ -173,6 +183,35 @@ async function handleInput(skipUi = false) {
 
     if (!isCancelled) {
       stopBtn.style.display = "none"; // Hide Stop button only if NOT cancelled
+    }
+
+    // Ensure any open thinking blocks are marked complete
+    const openThinking = chatArea.querySelector('.thinking-output:not([data-complete="true"])');
+    if (openThinking) {
+      openThinking.setAttribute("data-complete", "true");
+      const summary = openThinking.querySelector("summary");
+      if (summary) summary.textContent = "Thought";
+    }
+
+    // Check for KaTeX errors (parse errors + unrendered LaTeX) and trigger retry if needed
+    if (!isCancelled) {
+      const parseErrors = getKatexErrors();
+
+      // Also check for unrendered LaTeX in the response (commands outside $ delimiters)
+      const lastAssistant = chatArea.querySelector('.message.assistant:last-of-type');
+      const responseText = lastAssistant?.getAttribute('data-raw') || lastAssistant?.textContent || '';
+      const unrenderedErrors = detectUnrenderedLatex(responseText);
+
+      const allErrors = [...parseErrors, ...unrenderedErrors];
+
+      if (allErrors.length > 0) {
+        console.log("[KaTeX] Detected rendering issues, requesting retry:", allErrors);
+        try {
+          await invoke("retry_with_katex_hint", { katexErrors: allErrors });
+        } catch (e) {
+          console.error("[KaTeX] Retry request failed:", e);
+        }
+      }
     }
   }
 
@@ -711,6 +750,49 @@ async function loadChatHistory() {
 
 loadChatHistory();
 
+// Listen for agent retry events (backend requesting UI clear before retry)
+listen<string>("agent-retry", (event) => {
+  try {
+    const payload = JSON.parse(event.payload);
+    console.log("[Agent Retry] Received retry event:", payload);
+
+    // Clear the failed response from UI before retry
+    // Remove elements in reverse order until we hit the user message
+    while (chatArea.lastElementChild) {
+      const el = chatArea.lastElementChild;
+      // Stop if we hit a user message
+      if (el.classList.contains("user")) break;
+
+      // Remove assistant, tool, thinking, and web search elements
+      if (
+        el.classList.contains("assistant") ||
+        el.classList.contains("tool-output") ||
+        el.classList.contains("thinking-output") ||
+        el.classList.contains("web-search-container")
+      ) {
+        el.remove();
+      } else {
+        break;
+      }
+    }
+
+    // Reset state for new response
+    resetWebSearchContainer();
+    currentThinkingBlock = null;
+    clearKatexErrors();
+
+    // Show retrying indicator
+    const retryingDiv = document.createElement("div");
+    retryingDiv.id = "loading-indicator";
+    retryingDiv.className = "message assistant";
+    retryingDiv.innerHTML = `<span class="loading-dots">Retrying (${payload.attempt}/${payload.max})...</span>`;
+    chatArea.appendChild(retryingDiv);
+    chatArea.scrollTop = chatArea.scrollHeight;
+  } catch (e) {
+    console.error("[Agent Retry] Failed to parse retry event:", e);
+  }
+});
+
 // Listen for agent streaming response chunks
 listen<string>("agent-response-chunk", (event) => {
   const chunk = event.payload;
@@ -843,68 +925,35 @@ listen<string>("agent-reasoning-chunk", (event) => {
   // ============================================================================
   // REASONING CHUNK HANDLER
   // ============================================================================
-  // Handles model reasoning/thinking output and displays it in collapsible blocks.
+  // Handles model reasoning/thinking output in collapsible blocks.
   //
-  // Logic:
-  // 1. Find an incomplete thinking block (still streaming), or
-  // 2. If the last chat element is a thinking block, merge into it
-  // 3. Otherwise, create a new block
+  // Uses session-based tracking via `currentThinkingBlock`:
+  // - All thoughts within a single response turn merge into ONE block
+  // - Block stays CLOSED to prevent visual flashing during fast inference
+  // - Reset when new response starts (in handleInput)
   // ============================================================================
 
   const content = event.payload;
   console.log("Received reasoning chunk:", content);
 
-  // Find existing thinking messages
-  const allThinkingMsgs = Array.from(chatArea.querySelectorAll(".message.thinking-output")) as HTMLElement[];
-
-  let thinkingMsg: HTMLElement | null = null;
-
-  // Strategy: Find the best block to append to
-  // 1. First, look for an incomplete block (still streaming)
-  // 2. If the last element in chat is a thinking block (even if complete), merge into it
-  //    This ensures consecutive thoughts stay together
-  // 3. Otherwise, create a new block
-
-  for (let i = allThinkingMsgs.length - 1; i >= 0; i--) {
-    const msg = allThinkingMsgs[i];
-    const isComplete = msg.getAttribute("data-complete") === "true";
-
-    if (!isComplete) {
-      // Found an incomplete block - use it
-      thinkingMsg = msg;
-      break;
-    }
-
-    // Check if this is the last thinking block AND the last chat element
-    // If so, merge into it to keep consecutive thoughts together
-    if (i === allThinkingMsgs.length - 1) {
-      const lastChatElement = chatArea.lastElementChild;
-      if (lastChatElement === msg) {
-        // Last element is this thinking block - reopen it for merging
-        thinkingMsg = msg;
-        msg.removeAttribute("data-complete");
-        break;
-      }
-    }
+  // Use the session thinking block, or create one if needed
+  if (!currentThinkingBlock || !chatArea.contains(currentThinkingBlock)) {
+    currentThinkingBlock = document.createElement("div");
+    currentThinkingBlock.className = "message thinking-output";
+    chatArea.appendChild(currentThinkingBlock);
   }
 
-  if (!thinkingMsg) {
-    // Create new thinking message bubble
-    thinkingMsg = document.createElement("div");
-    thinkingMsg.className = "message thinking-output";
-    chatArea.appendChild(thinkingMsg);
-  }
-
-  // Append content
-  let thinkingText = thinkingMsg.getAttribute("data-thinking") || "";
+  // Append content to the session block
+  let thinkingText = currentThinkingBlock.getAttribute("data-thinking") || "";
   thinkingText += content;
-  thinkingMsg.setAttribute("data-thinking", thinkingText);
+  currentThinkingBlock.setAttribute("data-thinking", thinkingText);
 
-  // Render as collapsible thinking block with Markdown
+  // Render as collapsible thinking block with Markdown (CLOSED by default to avoid flashing)
+  // Summary shows "Thinking..." during streaming, completion handlers change to "Thought"
   const trimmedThinking = thinkingText.trimEnd();
 
-  thinkingMsg.innerHTML = `
-        <details class="thought-block" open>
+  currentThinkingBlock.innerHTML = `
+        <details class="thought-block">
           <summary>Thinking...</summary>
           <div class="thought-content markdown-body">${DOMPurify.sanitize(md.render(trimmedThinking))}</div>
         </details>

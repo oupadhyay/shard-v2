@@ -21,6 +21,10 @@ pub struct AppConfig {
     pub research_mode: Option<bool>,
     pub groq_api_key: Option<String>,
     pub background_model: Option<String>,
+    // Auto-retry configuration
+    pub max_auto_retries: Option<u32>,   // Default: 2
+    pub retry_on_empty: Option<bool>,    // Retry empty responses after reasoning
+    pub retry_on_katex: Option<bool>,    // Retry on frontend KaTeX parse errors
 }
 
 impl Default for AppConfig {
@@ -40,6 +44,10 @@ impl Default for AppConfig {
             research_mode: Some(false),
             groq_api_key: None,
             background_model: Some("gpt-oss-120b (Groq)".to_string()),
+            // Auto-retry defaults
+            max_auto_retries: Some(2),
+            retry_on_empty: Some(true),
+            retry_on_katex: Some(true),
         }
     }
 }

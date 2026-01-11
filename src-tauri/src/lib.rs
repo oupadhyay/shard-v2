@@ -162,6 +162,18 @@ async fn rewind_history(state: tauri::State<'_, AppState>) -> Result<(), String>
     Ok(())
 }
 
+/// Retry the last response with a hint about KaTeX rendering errors
+/// Called by frontend when KaTeX parsing fails
+#[tauri::command]
+async fn retry_with_katex_hint(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+    katex_errors: Vec<String>,
+) -> Result<(), String> {
+    let config = config::load_config(&app_handle)?;
+    state.agent.retry_with_katex_hint(&app_handle, katex_errors, &config).await
+}
+
 #[tauri::command]
 async fn cancel_current_stream() -> Result<(), String> {
     let current_stream = CURRENT_STREAM_ID.load(Ordering::Relaxed);
@@ -340,7 +352,8 @@ pub fn run() {
             force_summary,
             rebuild_topic_index,
             rebuild_insight_index,
-            rebuild_bm25_index
+            rebuild_bm25_index,
+            retry_with_katex_hint
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
