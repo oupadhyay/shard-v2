@@ -1,7 +1,7 @@
 /**
  * UI module barrel exports
  */
-export { md, clearKatexErrors, getKatexErrors, hasKatexErrors, detectUnrenderedLatex } from "./markdown";
+export { md, clearKatexErrors, getKatexErrors, hasKatexErrors, detectUnrenderedLatex, preprocessMarkdown } from "./markdown";
 export {
   createThinkingElement,
   createToolCallElement,

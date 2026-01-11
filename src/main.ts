@@ -11,6 +11,7 @@ import {
   clearKatexErrors,
   getKatexErrors,
   detectUnrenderedLatex,
+  preprocessMarkdown,
   createThinkingElement,
   createToolCallElement,
   updateToolResult,
@@ -197,9 +198,12 @@ async function handleInput(skipUi = false) {
     if (!isCancelled) {
       const parseErrors = getKatexErrors();
 
-      // Also check for unrendered LaTeX in the response (commands outside $ delimiters)
-      const lastAssistant = chatArea.querySelector('.message.assistant:last-of-type');
-      const responseText = lastAssistant?.getAttribute('data-raw') || lastAssistant?.textContent || '';
+      // Find the last assistant message by iterating from the end
+      const allMessages = chatArea.querySelectorAll('.message.assistant:not(.tool-output):not(.thinking-output)');
+      const lastAssistant = allMessages.length > 0 ? allMessages[allMessages.length - 1] : null;
+      const responseText = lastAssistant?.getAttribute('data-raw') || '';
+
+      console.log("[KaTeX Check] Raw response text:", responseText.slice(0, 200));
       const unrenderedErrors = detectUnrenderedLatex(responseText);
 
       const allErrors = [...parseErrors, ...unrenderedErrors];
@@ -710,7 +714,7 @@ async function loadChatHistory() {
                   return match ? match[1] : line;
                 })
                 .join('\n');
-              resultContent.innerHTML = DOMPurify.sanitize(md.render(cleanResult));
+              resultContent.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(cleanResult)));
               resultSection.style.display = 'grid';
               matched = true;
             }
@@ -893,7 +897,7 @@ listen<string>("agent-response-chunk", (event) => {
               <summary>Thought</summary>
               <div class="thought-content">${DOMPurify.sanitize(thought)}</div>
             </details>
-            ${DOMPurify.sanitize(md.render(rest))}
+            ${DOMPurify.sanitize(md.render(preprocessMarkdown(rest)))}
           `;
     } else {
       // Open thought (still streaming)
@@ -906,8 +910,8 @@ listen<string>("agent-response-chunk", (event) => {
           `;
     }
   } else {
-    // No thought tags, render normally
-    html = DOMPurify.sanitize(md.render(rawText));
+    // No thought tags, render normally with preprocessing for KaTeX
+    html = DOMPurify.sanitize(md.render(preprocessMarkdown(rawText)));
   }
 
   // Update only the content div, not the full innerHTML (preserves copy button)
@@ -955,7 +959,7 @@ listen<string>("agent-reasoning-chunk", (event) => {
   currentThinkingBlock.innerHTML = `
         <details class="thought-block">
           <summary>Thinking...</summary>
-          <div class="thought-content markdown-body">${DOMPurify.sanitize(md.render(trimmedThinking))}</div>
+          <div class="thought-content markdown-body">${DOMPurify.sanitize(md.render(preprocessMarkdown(trimmedThinking)))}</div>
         </details>
     `;
 
@@ -1037,7 +1041,7 @@ listen<string>("agent-tool-result", (event) => {
             return match ? match[1] : line;
           })
           .join('\n');
-        resultContent.innerHTML = DOMPurify.sanitize(md.render(cleanResult));
+        resultContent.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(cleanResult)));
         resultSection.style.display = 'grid';
       }
     }

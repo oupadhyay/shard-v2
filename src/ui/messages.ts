@@ -2,7 +2,7 @@
  * Message rendering utilities for Shard chat
  */
 import DOMPurify from "dompurify";
-import { md } from "./markdown";
+import { md, preprocessMarkdown } from "./markdown";
 import { COPY_ICON, CHECK_ICON } from "./icons";
 import type { ImageAttachment } from "../types";
 
@@ -25,7 +25,7 @@ export function createThinkingElement(content: string, isComplete: boolean = tru
   thinkingMsg.innerHTML = `
     <details class="thought-block" ${openAttr}>
       <summary>${summaryText}</summary>
-      <div class="thought-content markdown-body">${DOMPurify.sanitize(md.render(trimmedThinking))}</div>
+      <div class="thought-content markdown-body">${DOMPurify.sanitize(md.render(preprocessMarkdown(trimmedThinking)))}</div>
     </details>
   `;
   return thinkingMsg;
@@ -209,8 +209,8 @@ export function addMessage(
   let rawContent = content || "";
 
   if (role === "assistant") {
-    // Render Markdown
-    const rawHtml = md.render(content);
+    // Render Markdown with preprocessing for KaTeX
+    const rawHtml = md.render(preprocessMarkdown(content));
     textDiv.innerHTML = DOMPurify.sanitize(rawHtml);
     textDiv.classList.add("markdown-body");
   } else {
@@ -233,8 +233,8 @@ export function addMessage(
       // Keep original content if parsing fails
     }
 
-    // Render markdown for user messages too
-    const rawHtml = md.render(textContent);
+    // Render markdown for user messages too with preprocessing for KaTeX
+    const rawHtml = md.render(preprocessMarkdown(textContent));
     textDiv.innerHTML = DOMPurify.sanitize(rawHtml);
     textDiv.classList.add("markdown-body");
   }

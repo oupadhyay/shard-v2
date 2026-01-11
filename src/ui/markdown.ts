@@ -35,10 +35,13 @@ export function hasKatexErrors(): boolean {
 const LATEX_COMMANDS = [
   '\\frac', '\\dfrac', '\\tfrac', '\\sqrt', '\\sum', '\\prod', '\\int',
   '\\lim', '\\sin', '\\cos', '\\tan', '\\log', '\\ln', '\\exp',
-  '\\alpha', '\\beta', '\\gamma', '\\delta', '\\theta', '\\pi',
+  '\\alpha', '\\beta', '\\gamma', '\\delta', '\\theta', '\\pi', '\\tau',
   '\\infty', '\\partial', '\\nabla', '\\cdot', '\\times', '\\div',
-  '\\leq', '\\geq', '\\neq', '\\approx', '\\equiv',
+  '\\leq', '\\geq', '\\neq', '\\approx', '\\equiv', '\\sim', '\\propto',
   '\\begin{', '\\end{', '\\left', '\\right', '\\top', '\\bot',
+  '\\tilde', '\\hat', '\\bar', '\\vec', '\\dot', '\\ddot', // Accents
+  '\\text{', '\\mathrm{', '\\mathbf{', '\\mathit{', // Text/font
+  '\\quad', '\\qquad', '\\,', '\\;', '\\!', // Spacing
   '^{', '_{', // Common subscript/superscript patterns
 ];
 
@@ -49,10 +52,23 @@ const LATEX_COMMANDS = [
 export function detectUnrenderedLatex(text: string): string[] {
   const errors: string[] = [];
 
+  // Check for unbalanced $$ delimiters (odd count = missing opening or closing)
+  const displayDelimiters = (text.match(/\$\$/g) || []).length;
+  if (displayDelimiters % 2 !== 0) {
+    errors.push('Unbalanced $$: missing opening or closing delimiter for display math');
+  }
+
+  // Check for unbalanced single $ (trickier - need to exclude $$)
+  const textWithoutDisplay = text.replace(/\$\$/g, '');
+  const inlineDelimiters = (textWithoutDisplay.match(/\$/g) || []).length;
+  if (inlineDelimiters % 2 !== 0) {
+    errors.push('Unbalanced $: missing opening or closing delimiter for inline math');
+  }
+
   // Remove content inside $ delimiters (properly rendered math)
   const textWithoutMath = text
-    .replace(/\$\$[^$]+\$\$/g, '')  // Remove display math
-    .replace(/\$[^$]+\$/g, '');      // Remove inline math
+    .replace(/\$\$[\s\S]*?\$\$/g, '')  // Remove display math (multiline)
+    .replace(/\$[^$\n]+\$/g, '');       // Remove inline math (single line)
 
   // Check for LaTeX commands in remaining text
   for (const cmd of LATEX_COMMANDS) {
@@ -63,6 +79,7 @@ export function detectUnrenderedLatex(text: string): string[] {
       const end = Math.min(textWithoutMath.length, idx + cmd.length + 20);
       const context = textWithoutMath.slice(start, end).trim();
       errors.push(`Unrendered LaTeX: "${context}..." - use $...$ delimiters`);
+      break; // One example is enough for the retry hint
     }
   }
 
@@ -98,3 +115,22 @@ md.use(mk, {
     console.warn('[KaTeX Error]', errorMsg);
   }
 });
+
+/**
+ * Preprocess markdown to fix common LaTeX formatting issues
+ * that break KaTeX rendering.
+ *
+ * The markdown-it-katex plugin requires display math ($$) to be on its own
+ * paragraph with blank lines before and after.
+ */
+export function preprocessMarkdown(text: string): string {
+  return text
+    // Ensure blank line BEFORE $$ (if not already at start or after blank line)
+    .replace(/([^\n])\n*(\$\$)/g, '$1\n\n$2')
+    // Ensure blank line AFTER $$ (if not already before another $$ or end)
+    .replace(/(\$\$)\n*([^\n$])/g, '$1\n\n$2')
+    // Clean up excessive newlines (more than 2 consecutive)
+    .replace(/\n{3,}/g, '\n\n')
+    // Remove trailing spaces on lines
+    .replace(/[ \t]+$/gm, '');
+}
