@@ -166,22 +166,6 @@ pub fn cache_result<R: Runtime>(
     save_cache(app_handle, &cache);
 }
 
-/// Clear all cached entries (for testing or manual cleanup)
-pub fn clear_cache<R: Runtime>(app_handle: &AppHandle<R>) {
-    let cache = ToolCache::default();
-    save_cache(app_handle, &cache);
-    log::info!("[Cache] Cleared all entries");
-}
-
-/// Get cache statistics
-pub fn get_cache_stats<R: Runtime>(app_handle: &AppHandle<R>) -> (usize, usize) {
-    let cache = load_cache(app_handle);
-    let now = Utc::now();
-    let total = cache.entries.len();
-    let valid = cache.entries.values().filter(|e| e.expires_at > now).count();
-    (total, valid)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

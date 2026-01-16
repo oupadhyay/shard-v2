@@ -6,5 +6,5 @@ mod research_tests;
 pub mod prompts_tests;
 mod background_tests;
 mod memories_tests;
-
+mod cache_tests;
 mod interactions_tests;
