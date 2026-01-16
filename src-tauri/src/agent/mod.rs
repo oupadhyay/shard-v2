@@ -1084,7 +1084,11 @@ impl Agent {
         } else {
             history.push(ChatMessage {
                 role: "assistant".to_string(),
-                content: Some(full_text),
+                content: if full_text.is_empty() {
+                    None
+                } else {
+                    Some(full_text)
+                },
                 reasoning: if full_reasoning.is_empty() {
                     None
                 } else {
@@ -1439,7 +1443,7 @@ impl Agent {
             }
         }
 
-        if !full_content.is_empty() || !tool_calls_buffer.is_empty() {
+        if !full_content.is_empty() || !tool_calls_buffer.is_empty() || !full_reasoning.is_empty() {
             history.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: if full_content.is_empty() {
