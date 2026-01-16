@@ -615,6 +615,28 @@ impl Agent {
         args: &Value,
         config: &crate::config::AppConfig,
     ) -> String {
+        // Check cache first for cacheable tools
+        if let Some(cached) = crate::cache::get_cached_result(app_handle, function_name, args) {
+            log::info!("[Tool] Cache HIT for {} - returning cached result", function_name);
+            return cached;
+        }
+
+        let result = self.execute_tool_uncached(app_handle, function_name, args, config).await;
+
+        // Cache the result if eligible
+        crate::cache::cache_result(app_handle, function_name, args, &result);
+
+        result
+    }
+
+    /// The actual tool execution logic (separated for caching wrapper)
+    async fn execute_tool_uncached<R: Runtime>(
+        &self,
+        app_handle: &AppHandle<R>,
+        function_name: &str,
+        args: &Value,
+        config: &crate::config::AppConfig,
+    ) -> String {
         match function_name {
             "get_weather" => {
                 let location = args["location"].as_str().unwrap_or_default();
