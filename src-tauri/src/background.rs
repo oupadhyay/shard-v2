@@ -768,6 +768,15 @@ pub async fn force_summary<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summ
     Ok(result)
 }
 
+/// Run memory refresh from agent tool call
+/// Alias for force_summary - provides semantic clarity when called from agent context
+pub async fn run_summary_job_from_agent<R: Runtime>(
+    app_handle: &AppHandle<R>,
+) -> Result<SummaryResult, String> {
+    log::info!("[Background] Agent-initiated memory refresh");
+    force_summary(app_handle).await
+}
+
 /// Force-trigger the cleanup job (public API for on-demand cleanup)
 /// Also updates the last run timestamp to prevent redundant scheduled runs
 pub async fn force_cleanup<R: Runtime>(app_handle: &AppHandle<R>) -> Result<CleanupResult, String> {

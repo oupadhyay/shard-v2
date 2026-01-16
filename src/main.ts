@@ -1234,8 +1234,6 @@ const settingsModal = document.createElement("div");
 settingsModal.className = "settings-modal hidden";
 settingsModal.innerHTML = `
   <div class="settings-content">
-    <h3>API Keys Settings</h3>
-
     <!-- Tab Navigation -->
     <div class="settings-tabs">
       <button class="settings-tab active" data-tab="api-keys">API Keys</button>
@@ -1316,16 +1314,16 @@ settingsModal.innerHTML = `
 
       <!-- Capabilities Panel -->
       <div class="settings-panel" id="panel-capabilities">
-        <div class="setting-group">
+        <div class="setting-group checkbox-setting">
           <label>
             <input type="checkbox" id="enable-tools" />
-            Enable Tools (Weather, Search, etc.)
+            <span class="checkbox-label">Enable Tools (Search, etc.)</span>
           </label>
         </div>
-        <div class="setting-group">
+        <div class="setting-group checkbox-setting">
           <label>
             <input type="checkbox" id="incognito-mode" />
-            Incognito Mode (no logging/history)
+            <span class="checkbox-label">Incognito Mode (No Memories)</span>
           </label>
         </div>
       </div>

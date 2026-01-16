@@ -375,11 +375,19 @@ impl Agent {
             images: uploaded_images,
         });
 
+        // Incognito mode: skip all RAG/memory retrieval and storage
+        let incognito = config.incognito_mode.unwrap_or(false);
+
         // RAG: Generate embedding and retrieve relevant interactions using hybrid search (BM25 + Dense + RRF)
-        let user_embedding = if let Some(api_key) = &config.gemini_api_key {
-            crate::interactions::generate_embedding(&self.http_client, &message, api_key)
-                .await
-                .ok()
+        // Skip in incognito mode to avoid using previous context
+        let user_embedding = if !incognito {
+            if let Some(api_key) = &config.gemini_api_key {
+                crate::interactions::generate_embedding(&self.http_client, &message, api_key)
+                    .await
+                    .ok()
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -559,9 +567,7 @@ impl Agent {
             }
         }
 
-        // Log interactions for future RAG (skip in incognito mode)
-        let incognito = config.incognito_mode.unwrap_or(false);
-
+        // Log interactions for future RAG (skip in incognito mode - use variable defined earlier)
         if !incognito {
             // 1. Log user message
             if let Some(emb) = user_embedding {
@@ -682,6 +688,10 @@ impl Agent {
                 }
             }
             "save_memory" => {
+                // Block in incognito mode
+                if config.incognito_mode.unwrap_or(false) {
+                    return "Skipped: Memory saving is disabled in incognito mode.".to_string();
+                }
                 // Quiet tool - no UI feedback, just log
                 let category_str = args["category"].as_str().unwrap_or("fact");
                 let content = args["content"].as_str().unwrap_or_default().to_string();
@@ -701,6 +711,10 @@ impl Agent {
                 }
             }
             "update_topic_summary" => {
+                // Block in incognito mode
+                if config.incognito_mode.unwrap_or(false) {
+                    return "Skipped: Topic updates are disabled in incognito mode.".to_string();
+                }
                 let topic = args["topic"].as_str().unwrap_or_default();
                 let content = args["content"].as_str().unwrap_or_default();
                 if let Some(api_key) = config.gemini_api_key.as_ref() {
@@ -721,10 +735,34 @@ impl Agent {
                 }
             }
             "read_topic_summary" => {
+                // Allow reading in incognito mode (no persistence)
                 let topic = args["topic"].as_str().unwrap_or_default();
                 match crate::memories::read_topic_summary(app_handle, topic) {
                     Ok(content) => content,
                     Err(e) => format!("Failed to read topic summary: {}", e),
+                }
+            }
+            "refresh_memories" => {
+                // Block in incognito mode
+                if config.incognito_mode.unwrap_or(false) {
+                    return "Skipped: Memory refresh is disabled in incognito mode.".to_string();
+                }
+                match crate::background::run_summary_job_from_agent(app_handle).await {
+                    Ok(result) => {
+                        let mut msg = format!(
+                            "Memory refresh complete: {} topics updated, {} insights created",
+                            result.topics_updated.len(),
+                            result.insights_created.len()
+                        );
+                        if !result.topics_updated.is_empty() {
+                            msg.push_str(&format!("\nTopics: {}", result.topics_updated.join(", ")));
+                        }
+                        if !result.insights_created.is_empty() {
+                            msg.push_str(&format!("\nInsights: {}", result.insights_created.join(", ")));
+                        }
+                        msg
+                    }
+                    Err(e) => format!("Memory refresh failed: {}", e),
                 }
             }
             _ => format!("Unknown tool: {}", function_name),
@@ -797,12 +835,17 @@ impl Agent {
             selected_model, api_key
         );
 
-        // Load memories for injection into system prompt
-        let memory_context = crate::memories::get_memories_for_prompt(app_handle)
-            .ok()
-            .filter(|s| !s.is_empty());
+        // Load memories for injection into system prompt (skip in incognito mode)
+        let incognito_mode = config.incognito_mode.unwrap_or(false);
+        let memory_context = if incognito_mode {
+            None
+        } else {
+            crate::memories::get_memories_for_prompt(app_handle)
+                .ok()
+                .filter(|s| !s.is_empty())
+        };
 
-        let system_prompt_content = if config.incognito_mode.unwrap_or(false) {
+        let system_prompt_content = if incognito_mode {
             crate::prompts::get_jailbreak_prompt(&selected_model)
         } else if is_research_mode {
             crate::prompts::get_research_system_prompt()
@@ -1099,12 +1142,17 @@ impl Agent {
 
         let url = format!("{}chat/completions", base_url);
 
-        // Load memories for injection into system prompt
-        let memory_context = crate::memories::get_memories_for_prompt(app_handle)
-            .ok()
-            .filter(|s| !s.is_empty());
+        // Load memories for injection into system prompt (skip in incognito mode)
+        let incognito_mode = config.incognito_mode.unwrap_or(false);
+        let memory_context = if incognito_mode {
+            None
+        } else {
+            crate::memories::get_memories_for_prompt(app_handle)
+                .ok()
+                .filter(|s| !s.is_empty())
+        };
 
-        let system_prompt_content = if config.incognito_mode.unwrap_or(false) {
+        let system_prompt_content = if incognito_mode {
             crate::prompts::get_jailbreak_prompt(&model)
         } else if is_research_mode {
             crate::prompts::get_research_system_prompt()

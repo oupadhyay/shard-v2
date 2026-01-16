@@ -14,6 +14,7 @@ mod tests {
         assert!(tool_names.contains(&"get_stock_price".to_string()));
         assert!(tool_names.contains(&"search_arxiv".to_string()));
         assert!(tool_names.contains(&"web_search".to_string()));
+        assert!(tool_names.contains(&"refresh_memories".to_string()));
     }
 
     #[test]

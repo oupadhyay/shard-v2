@@ -154,5 +154,18 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                 strict: Some(true),
             },
         },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "refresh_memories".to_string(),
+                description: "Run background memory analysis to update topic summaries and insights from recent conversations. Use only when the user explicitly requests a memory update AND there is significant new information to remember.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
     ]
 }
