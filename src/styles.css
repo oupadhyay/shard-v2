@@ -1,6 +1,6 @@
 :root {
   /* Typography */
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Segoe UI", system-ui, sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color-scheme: dark;
