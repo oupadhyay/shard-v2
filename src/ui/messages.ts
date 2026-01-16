@@ -194,12 +194,13 @@ export function addMessage(
   if (images && images.length > 0) {
     const imgContainer = document.createElement("div");
     imgContainer.className = "message-image-container";
-    for (const image of images) {
+    images.forEach((image, idx) => {
       const img = document.createElement("img");
       img.src = `data:${image.mimeType};base64,${image.base64}`;
       img.className = "message-image";
+      img.alt = `Attached image ${idx + 1}`;
       imgContainer.appendChild(img);
-    }
+    });
     msgDiv.appendChild(imgContainer);
   }
 
@@ -248,6 +249,7 @@ export function addMessage(
   const copyBtn = document.createElement("button");
   copyBtn.className = "copy-btn";
   copyBtn.title = "Copy as Markdown";
+  copyBtn.setAttribute("aria-label", "Copy as Markdown");
   copyBtn.innerHTML = COPY_ICON;
   copyBtn.addEventListener("click", (e) => {
     e.stopPropagation();
