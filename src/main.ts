@@ -5,7 +5,7 @@ import DOMPurify from "dompurify";
 import "katex/dist/katex.min.css";
 
 // Internal modules
-import type { AttachedImage, ChatMessage, OcrResult } from "./types";
+import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, AppConfig } from "./types";
 import {
   md,
   clearKatexErrors,
@@ -127,13 +127,13 @@ async function handleInput(skipUi = false) {
 
   try {
     // Include image data or OCR text based on model
-    const messagePayload: any = { message: skipUi ? lastUserMessage : text };
+    const messagePayload: ChatMessagePayload = { message: skipUi ? lastUserMessage : text };
 
     if (imagesToSend.length > 0) {
       // For OpenRouter models (don't support images), prepend OCR text
       // For Gemini models, send image data
       // Simple heuristic: if there's a slash in model name, it's OpenRouter
-      const config = await invoke<any>("get_config");
+      const config = await invoke<AppConfig>("get_config");
       const selectedModel = config?.selected_model || "";
 
       // Heuristic: If it's not a Gemini model, we treat it as OpenRouter/Groq/etc and send OCR text
@@ -166,9 +166,9 @@ async function handleInput(skipUi = false) {
 
     console.log("Sending payload to backend:", {
       message: messagePayload.message,
-      hasImage: !!messagePayload.imageBase64,
-      imageLen: messagePayload.imageBase64?.length,
-      mime: messagePayload.imageMimeType,
+      hasImage: !!messagePayload.imagesBase64,
+      imageLen: messagePayload.imagesBase64?.length,
+      mime: messagePayload.imagesMimeTypes,
     });
     await invoke("chat", messagePayload);
     // Note: The actual response handling might need to be event-based if streaming
@@ -516,7 +516,16 @@ ocrBtn.addEventListener("click", async () => {
     }
   } catch (error) {
     console.error("OCR error:", error);
-    alert(`OCR Failed: ${error}`);
+    const errorDiv = document.createElement("div");
+    errorDiv.className = "message error-message";
+    errorDiv.innerHTML = `
+      <details class="error-accordion">
+        <summary class="error-summary">OCR Error</summary>
+        <div class="error-details">${DOMPurify.sanitize(String(error))}</div>
+      </details>
+    `;
+    chatArea.appendChild(errorDiv);
+    chatArea.scrollTop = chatArea.scrollHeight;
     inputField.focus();
   }
 });
@@ -605,7 +614,16 @@ trashBtn.addEventListener("click", async () => {
       location.reload();
     } catch (error) {
       console.error("Restore error:", error);
-      alert(`Failed to restore: ${error}`);
+      const errorDiv = document.createElement("div");
+      errorDiv.className = "message error-message";
+      errorDiv.innerHTML = `
+        <details class="error-accordion">
+          <summary class="error-summary">Restore Error</summary>
+          <div class="error-details">${DOMPurify.sanitize(String(error))}</div>
+        </details>
+      `;
+      chatArea.appendChild(errorDiv);
+      chatArea.scrollTop = chatArea.scrollHeight;
     }
   } else {
     // Delete chat (no confirmation needed as we have undo)
@@ -618,7 +636,16 @@ trashBtn.addEventListener("click", async () => {
       console.log("Button states updated");
     } catch (error) {
       console.error("Delete error:", error);
-      alert(`Failed to delete: ${error}`);
+      const errorDiv = document.createElement("div");
+      errorDiv.className = "message error-message";
+      errorDiv.innerHTML = `
+        <details class="error-accordion">
+          <summary class="error-summary">Delete Error</summary>
+          <div class="error-details">${DOMPurify.sanitize(String(error))}</div>
+        </details>
+      `;
+      chatArea.appendChild(errorDiv);
+      chatArea.scrollTop = chatArea.scrollHeight;
     }
   }
 });
@@ -1177,7 +1204,7 @@ listen<string>("agent-fallback", (event) => {
       lastFocus = now;
       setFocused(now);
     }
-  }, 500);
+  }, 2000);
 })();
 
 // Window Visibility Logic

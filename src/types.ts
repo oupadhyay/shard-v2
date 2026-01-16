@@ -53,3 +53,11 @@ export interface AppConfig {
   incognito_mode?: boolean;
   research_mode?: boolean;
 }
+
+// Payload for chat command
+export interface ChatMessagePayload {
+  message: string;
+  imagesBase64?: string[];
+  imagesMimeTypes?: string[];
+  [key: string]: unknown; // Index signature for Tauri invoke compatibility
+}

@@ -36,11 +36,6 @@ struct AppState {
 // --- Commands ---
 
 #[tauri::command]
-async fn greet(name: &str) -> Result<String, String> {
-    Ok(format!("Hello, {}! You've been greeted from Rust!", name))
-}
-
-#[tauri::command]
 async fn get_config(app_handle: AppHandle) -> Result<config::AppConfig, String> {
     config::load_config(&app_handle)
 }
@@ -88,7 +83,9 @@ async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String
     let image_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
 
     // Clean up temp file
-    std::fs::remove_file(&temp_path).ok();
+    if let Err(e) = std::fs::remove_file(&temp_path) {
+        log::warn!("Failed to remove temp OCR file {}: {}", temp_path.display(), e);
+    }
 
     // Return image immediately without waiting for OCR
     // OCR will be triggered by frontend separately
@@ -334,7 +331,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
             get_config,
             save_config,
             perform_ocr_capture,
