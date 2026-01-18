@@ -611,7 +611,10 @@ trashBtn.addEventListener("click", async () => {
     // Restore chat
     try {
       await invoke("restore_chat");
-      location.reload();
+      // Reload chat history without page refresh to avoid flash
+      chatArea.innerHTML = "";
+      await loadChatHistory();
+      await updateButtonStates();
     } catch (error) {
       console.error("Restore error:", error);
       const errorDiv = document.createElement("div");
