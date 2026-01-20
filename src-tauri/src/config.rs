@@ -25,6 +25,8 @@ pub struct AppConfig {
     pub max_auto_retries: Option<u32>,   // Default: 2
     pub retry_on_empty: Option<bool>,    // Retry empty responses after reasoning
     pub retry_on_katex: Option<bool>,    // Retry on frontend KaTeX parse errors
+    // Screen context capture
+    pub enable_screen_context: Option<bool>, // Default: false
 }
 
 impl Default for AppConfig {
@@ -48,6 +50,8 @@ impl Default for AppConfig {
             max_auto_retries: Some(2),
             retry_on_empty: Some(true),
             retry_on_katex: Some(true),
+            // Screen context capture (off by default for privacy)
+            enable_screen_context: Some(false),
         }
     }
 }

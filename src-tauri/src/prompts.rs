@@ -104,4 +104,5 @@ Examples:
 - "Find the stock price of Apple" -> NO (simple tool call)
 - "Find the weather in Tokyo" -> NO (simple tool call)
 - "Investigate the impact of AI on healthcare employment trends" -> YES
+- "Rewrite sentence in iambic pentameter" -> YES (simple search)
 "#;

@@ -26,6 +26,7 @@ pub mod retrieval;
 mod tests;
 
 use integrations::vision_llm;
+use integrations::screen_context;
 use agent::Agent;
 
 // --- State Management ---
@@ -98,7 +99,12 @@ async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String
 
 // Perform OCR on a base64-encoded image (for pasted images)
 #[tauri::command]
-async fn ocr_image(app_handle: AppHandle, image_base64: String, mime_type: Option<String>) -> Result<String, String> {
+async fn ocr_image(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+    image_base64: String,
+    mime_type: Option<String>,
+) -> Result<String, String> {
     // Load config for API keys
     let config = config::load_config(&app_handle)?;
 
@@ -106,7 +112,7 @@ async fn ocr_image(app_handle: AppHandle, image_base64: String, mime_type: Optio
 
     // Use Vision LLM for OCR instead of Tesseract
     let http_client = reqwest::Client::new();
-    vision_llm::describe_image(&http_client, &image_base64, &mime, &config).await
+    vision_llm::describe_image(&state.agent, &http_client, &image_base64, &mime, &config).await
 }
 
 #[tauri::command]
@@ -252,6 +258,32 @@ async fn rebuild_bm25_index(app_handle: AppHandle) -> Result<usize, String> {
     retrieval::rebuild_bm25_index(&app_handle)
 }
 
+/// Capture screen context and return suggestions
+/// This is triggered when the window is shown via Ctrl+Space
+#[tauri::command]
+async fn capture_screen_context(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<screen_context::ScreenContext, String> {
+    let config = config::load_config(&app_handle)?;
+
+    // Check if feature is enabled and not in incognito mode
+    if !config.enable_screen_context.unwrap_or(false) {
+        return Err("Screen context disabled".to_string());
+    }
+    if config.incognito_mode.unwrap_or(false) {
+        return Err("Screen context disabled in incognito mode".to_string());
+    }
+
+    let http_client = reqwest::Client::new();
+    let context = screen_context::capture_and_analyze(&state.agent, &http_client, &config).await?;
+
+    // Emit event to frontend
+    app_handle.emit("screen-context-ready", &context).ok();
+
+    Ok(context)
+}
+
 // --- Main Run Function ---
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -304,18 +336,47 @@ pub fn run() {
 
             // Ctrl+Space: Toggle window visibility
             let window_for_space = app.get_webview_window("main").unwrap();
+            let app_handle_for_space = app.handle().clone();
             app.handle().global_shortcut().on_shortcut(ctrl_space, move |_app, _shortcut, event| {
                 if event.state == tauri_gs::ShortcutState::Pressed {
                     if window_for_space.is_visible().unwrap_or(false) {
                         // Trigger fade out in frontend
                         window_for_space.emit("start-hide", ()).ok();
                     } else {
-                        // Show immediately (opacity will be 0 from previous hide if we managed state right,
-                        // but we rely on frontend to be in "hidden" state or we force it)
+                        // Show window immediately
                         window_for_space.show().ok();
                         window_for_space.set_focus().ok();
                         // Trigger fade in
                         window_for_space.emit("start-show", ()).ok();
+
+                        // Spawn async task to capture screen context (non-blocking)
+                        let app_handle_clone = app_handle_for_space.clone();
+                        tauri::async_runtime::spawn(async move {
+                            // Small delay to let the window fade in first
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                            if let Ok(config) = config::load_config(&app_handle_clone) {
+                                if config.enable_screen_context.unwrap_or(false)
+                                   && !config.incognito_mode.unwrap_or(false) {
+                                    let http_client = reqwest::Client::builder()
+                                        .timeout(std::time::Duration::from_secs(30))
+                                        .build()
+                                        .unwrap_or_else(|_| reqwest::Client::new());
+
+                                    // Get Agent from state
+                                    let state = app_handle_clone.state::<AppState>();
+                                    match screen_context::capture_and_analyze(&state.agent, &http_client, &config).await {
+                                        Ok(context) => {
+                                            log::info!("[ScreenContext] Captured {} suggestions", context.suggestions.len());
+                                            app_handle_clone.emit("screen-context-ready", &context).ok();
+                                        }
+                                        Err(e) => {
+                                            log::warn!("[ScreenContext] Capture failed: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                        });
                     }
                 }
             }).ok();
@@ -350,7 +411,8 @@ pub fn run() {
             rebuild_topic_index,
             rebuild_insight_index,
             rebuild_bm25_index,
-            retry_with_katex_hint
+            retry_with_katex_hint,
+            capture_screen_context
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

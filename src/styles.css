@@ -748,6 +748,81 @@ body {
 }
 
 /* ============================================
+   Suggestion Pills (Screen Context)
+   ============================================ */
+
+.suggestion-pills {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 8px 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  animation: suggestionsSlideIn 0.3s ease;
+}
+
+.suggestion-pills::-webkit-scrollbar {
+  display: none;
+}
+
+.suggestion-pills.hidden {
+  display: none;
+}
+
+@keyframes suggestionsSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.suggestion-pill {
+  flex-shrink: 0;
+  background: linear-gradient(135deg, rgba(20, 20, 22, 0.9) 0%, rgba(12, 12, 14, 0.92) 100%);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  padding: 6px 12px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggestion-pill:hover {
+  background: linear-gradient(135deg, rgba(30, 30, 32, 0.9) 0%, rgba(20, 20, 22, 0.92) 100%);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+
+.suggestion-pill:active {
+  transform: translateY(0);
+}
+
+.suggestion-pill.loading-pill {
+  opacity: 0.6;
+  cursor: default;
+  animation: loadingPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes loadingPulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.7; }
+}
+
+.suggestion-pills.loading .suggestion-pill {
+  pointer-events: none;
+}
+
+/* ============================================
    Bottom Bar & Input
    ============================================ */
 

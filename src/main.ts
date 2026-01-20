@@ -1231,7 +1231,7 @@ listen("start-hide", () => {
   startHide();
 });
 
-listen("start-show", () => {
+listen("start-show", async () => {
   const app = document.getElementById("app");
   if (app) {
     // Small delay to ensure window is rendered before fading in
@@ -1241,6 +1241,116 @@ listen("start-show", () => {
       inputField.focus();
     }, 50);
   }
+
+  // Show loading chips if screen context is enabled (check config)
+  try {
+    const config = await invoke<{ enable_screen_context?: boolean; incognito_mode?: boolean }>("get_config");
+    if (config.enable_screen_context && !config.incognito_mode) {
+      showLoadingChips();
+    }
+  } catch (e) {
+    console.warn("[ScreenContext] Failed to check config:", e);
+  }
+});
+
+// Screen Context Suggestions
+interface ScreenContext {
+  capture_time_ms: number;
+  suggestions: string[];
+  context_summary: string;
+  image_base64: string;
+  mime_type: string;
+  ocr_text: string;
+}
+
+let suggestionTimeout: ReturnType<typeof setTimeout> | null = null;
+let currentScreenContextImage: { base64: string; mimeType: string; ocrText: string } | null = null;
+
+// Create suggestions container (positioned above bottom-bar)
+const suggestionsContainer = document.createElement("div");
+suggestionsContainer.className = "suggestion-pills hidden";
+suggestionsContainer.id = "suggestion-pills";
+document.getElementById("app")?.querySelector(".bottom-bar")?.before(suggestionsContainer);
+
+// Hide suggestions when user starts typing
+inputField.addEventListener("input", () => {
+  hideSuggestions();
+});
+
+let currentSuggestions: string[] = []; // Store full prompts
+
+function showSuggestions(suggestions: string[]) {
+  if (suggestions.length === 0) return;
+
+  currentSuggestions = suggestions; // Store for click handler
+
+  // Generate short display names (max 30 chars) with full prompt in title
+  suggestionsContainer.innerHTML = suggestions.map((s, i) => {
+    const displayName = s.length > 30 ? s.substring(0, 27) + "..." : s;
+    // Escape HTML for title attribute
+    const escapedTitle = s.replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    return `<button class="suggestion-pill" data-index="${i}" title="${escapedTitle}">${displayName}</button>`;
+  }).join("");
+
+  // Add click handlers
+  suggestionsContainer.querySelectorAll(".suggestion-pill").forEach((pill) => {
+    pill.addEventListener("click", (e) => {
+      e.stopPropagation(); // Prevent click-to-hide
+      const index = parseInt((pill as HTMLElement).dataset.index || "0", 10);
+      inputField.value = currentSuggestions[index] || pill.textContent || "";
+
+      // Attach the screen context image to chat (if available)
+      if (currentScreenContextImage) {
+        showImagePreview({
+          base64: currentScreenContextImage.base64,
+          mimeType: currentScreenContextImage.mimeType,
+          ocrText: currentScreenContextImage.ocrText,
+        });
+      }
+
+      inputField.focus();
+      hideSuggestions();
+      // Trigger input resize
+      inputField.dispatchEvent(new Event("input"));
+    });
+  });
+
+  suggestionsContainer.classList.remove("hidden");
+  suggestionsContainer.classList.remove("loading");
+
+  // Auto-hide after 15 seconds
+  if (suggestionTimeout) clearTimeout(suggestionTimeout);
+  suggestionTimeout = setTimeout(hideSuggestions, 15000);
+}
+
+function showLoadingChips() {
+  suggestionsContainer.innerHTML = `
+    <span class="suggestion-pill loading-pill">Analyzing screen...</span>
+  `;
+  suggestionsContainer.classList.remove("hidden");
+  suggestionsContainer.classList.add("loading");
+}
+
+function hideSuggestions() {
+  suggestionsContainer.classList.add("hidden");
+  suggestionsContainer.classList.remove("loading");
+  if (suggestionTimeout) {
+    clearTimeout(suggestionTimeout);
+    suggestionTimeout = null;
+  }
+}
+
+listen<ScreenContext>("screen-context-ready", (event) => {
+  console.log("[ScreenContext] Received suggestions:", event.payload);
+
+  // Store image for when a suggestion is clicked
+  currentScreenContextImage = {
+    base64: event.payload.image_base64,
+    mimeType: event.payload.mime_type,
+    ocrText: event.payload.ocr_text
+  };
+
+  showSuggestions(event.payload.suggestions);
 });
 
 // Click-to-Hide Logic
@@ -1251,7 +1361,7 @@ document.addEventListener("click", (e) => {
   // If user selects text, they might click? No, selection is drag. Click is click.
 
   const isInteractive = target.closest(
-    ".input-container, .message, .settings-modal, .bottom-bar, .action-btn, .stop-btn, .image-preview",
+    ".input-container, .message, .settings-modal, .bottom-bar, .action-btn, .stop-btn, .image-preview, .suggestion-pills",
   );
 
   if (!isInteractive) {
@@ -1308,10 +1418,9 @@ settingsModal.innerHTML = `
               <option value="gemini-3-flash-preview">3 Flash Preview</option>
             </optgroup>
             <optgroup label="OpenRouter">
-              <option value="google/gemma-3-27b-it:free">Gemma 3-27B</option>
-              <option value="openai/gpt-oss-20b:free">GPT-OSS 20B</option>
-              <option value="mistralai/devstral-2512:free">Devstral 2512</option>
-              <option value="allenai/olmo-3.1-32b-think:free">Olmo 3.1-32B</option>
+            <option value="openai/gpt-oss-120b:free">GPT-OSS 20B</option>
+            <option value="mistralai/devstral-2512:free">Devstral 2512</option>
+            <option value="google/gemma-3-27b-it:free">Gemma 3-27B</option>
               <option value="meta-llama/llama-3.3-70b-instruct:free">LLaMA 3.3 70B</option>
             </optgroup>
             <optgroup label="Other Providers">
@@ -1354,6 +1463,12 @@ settingsModal.innerHTML = `
           <label>
             <input type="checkbox" id="incognito-mode" />
             <span class="checkbox-label">Incognito Mode (No Memories)</span>
+          </label>
+        </div>
+        <div class="setting-group checkbox-setting">
+          <label>
+            <input type="checkbox" id="enable-screen-context" />
+            <span class="checkbox-label">Screen Context (Beta)</span>
           </label>
         </div>
       </div>
@@ -1401,6 +1516,7 @@ const backgroundModelInput = document.getElementById("background-model-id") as H
 const providerConflictWarning = document.getElementById("provider-conflict-warning") as HTMLDivElement;
 const enableToolsCheckbox = document.getElementById("enable-tools") as HTMLInputElement;
 const incognitoModeCheckbox = document.getElementById("incognito-mode") as HTMLInputElement;
+const enableScreenContextCheckbox = document.getElementById("enable-screen-context") as HTMLInputElement;
 const saveSettingsBtn = document.getElementById("save-settings") as HTMLButtonElement;
 const closeSettingsBtn = document.getElementById("close-settings") as HTMLButtonElement;
 
@@ -1468,6 +1584,10 @@ settingsBtn.addEventListener("click", async () => {
     backgroundModelInput.value = config.background_model || "gpt-oss-120b (Groq)";
     enableToolsCheckbox.checked = config.enable_tools || false;
     incognitoModeCheckbox.checked = config.incognito_mode || false;
+    enableScreenContextCheckbox.checked = config.enable_screen_context || false;
+
+    // Disable screen context when incognito mode is enabled
+    enableScreenContextCheckbox.disabled = incognitoModeCheckbox.checked;
 
     updateToolAvailability(); // Run check on open
     checkProviderConflict(); // Check for provider conflicts
@@ -1495,6 +1615,7 @@ saveSettingsBtn.addEventListener("click", async () => {
     enable_web_search: true, // Default to true for now
     enable_tools: enableToolsCheckbox.checked,
     incognito_mode: incognitoModeCheckbox.checked,
+    enable_screen_context: enableScreenContextCheckbox.checked,
   };
 
   try {
