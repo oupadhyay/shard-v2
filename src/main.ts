@@ -1318,6 +1318,14 @@ function showSuggestions(suggestions: string[]) {
   suggestionsContainer.classList.remove("hidden");
   suggestionsContainer.classList.remove("loading");
 
+  // Force reflow to ensure transition plays on first appearance
+  void suggestionsContainer.offsetHeight;
+
+  // Scroll chat to bottom so suggestions don't obscure messages
+  setTimeout(() => {
+    chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
+  }, 50);
+
   // Auto-hide after 15 seconds
   if (suggestionTimeout) clearTimeout(suggestionTimeout);
   suggestionTimeout = setTimeout(hideSuggestions, 15000);
@@ -1327,8 +1335,16 @@ function showLoadingChips() {
   suggestionsContainer.innerHTML = `
     <span class="suggestion-pill loading-pill">Analyzing screen...</span>
   `;
+  // Start hidden, force reflow, then show to trigger animation
+  suggestionsContainer.classList.add("hidden");
+  void suggestionsContainer.offsetHeight; // Force reflow
   suggestionsContainer.classList.remove("hidden");
   suggestionsContainer.classList.add("loading");
+
+  // Scroll chat to bottom after CSS transition completes (300ms)
+  setTimeout(() => {
+    chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
+  }, 200);
 }
 
 function hideSuggestions() {
@@ -1412,38 +1428,13 @@ settingsModal.innerHTML = `
         <div class="setting-group">
           <label>Chat Model</label>
           <select id="model-id">
-            <optgroup label="Gemini AI">
-              <option value="gemini-2.5-flash-lite">2.5 Flash Lite</option>
-              <option value="gemini-2.5-flash">2.5 Flash</option>
-              <option value="gemini-3-flash-preview">3 Flash Preview</option>
-            </optgroup>
-            <optgroup label="OpenRouter">
-            <option value="openai/gpt-oss-120b:free">GPT-OSS 20B</option>
-            <option value="mistralai/devstral-2512:free">Devstral 2512</option>
-            <option value="google/gemma-3-27b-it:free">Gemma 3-27B</option>
-              <option value="meta-llama/llama-3.3-70b-instruct:free">LLaMA 3.3 70B</option>
-            </optgroup>
-            <optgroup label="Other Providers">
-              <option value="gpt-oss-120b (Cerebras)">GPT-OSS 120B (Cerebras)</option>
-              <option value="gpt-oss-120b (Groq)">GPT-OSS 120B (Groq)</option>
-            </optgroup>
+            <!-- Dynamically populated from backend -->
           </select>
         </div>
         <div class="setting-group">
           <label>Background Job Model</label>
           <select id="background-model-id">
-            <optgroup label="Groq">
-              <option value="gpt-oss-20b (Groq)">GPT-OSS 20B (Groq)</option>
-              <option value="gpt-oss-120b (Groq)">GPT-OSS 120B (Groq)</option>
-            </optgroup>
-            <optgroup label="Cerebras">
-              <option value="gpt-oss-120b (Cerebras)">GPT-OSS 120B (Cerebras)</option>
-              <option value="llama-3.3-70b (Cerebras)">LLaMA 3.3 70B (Cerebras)</option>
-            </optgroup>
-            <optgroup label="OpenRouter">
-              <option value="google/gemma-3-27b-it:free (OpenRouter)">Gemma 3-27B (OpenRouter)</option>
-              <option value="openai/gpt-oss-20b:free (OpenRouter)">GPT-OSS 20B (OpenRouter)</option>
-            </optgroup>
+            <!-- Dynamically populated from backend -->
           </select>
         </div>
         <div id="provider-conflict-warning" style="color: #ff8844; font-size: 0.8em; display: none;">
@@ -1572,16 +1563,102 @@ const checkProviderConflict = () => {
 modelInput.addEventListener("change", checkProviderConflict);
 backgroundModelInput.addEventListener("change", checkProviderConflict);
 
+// Model types from backend
+interface ModelInfo {
+  id: string;
+  display_name: string;
+  provider: "gemini" | "openrouter" | "groq" | "cerebras";
+  category: "chat" | "vision" | "background";
+  supports_tools: boolean;
+}
+
+interface ModelsResponse {
+  chat_models: ModelInfo[];
+  vision_models: ModelInfo[];
+  background_models: ModelInfo[];
+}
+
+// Helper to populate a dropdown with models grouped by provider
+function populateModelDropdown(
+  selectEl: HTMLSelectElement,
+  models: ModelInfo[],
+  selectedValue: string | null
+) {
+  // Clear existing options
+  selectEl.innerHTML = "";
+
+  // Group models by provider display name
+  const providerDisplayNames: Record<string, string> = {
+    gemini: "Gemini AI",
+    openrouter: "OpenRouter",
+    groq: "Groq",
+    cerebras: "Cerebras",
+  };
+
+  const groups: Record<string, ModelInfo[]> = {};
+  for (const model of models) {
+    const providerKey = model.provider;
+    if (!groups[providerKey]) {
+      groups[providerKey] = [];
+    }
+    groups[providerKey].push(model);
+  }
+
+  // Create optgroups in order: gemini, openrouter, groq, cerebras
+  const providerOrder = ["gemini", "openrouter", "groq", "cerebras"];
+  for (const provider of providerOrder) {
+    const modelsInGroup = groups[provider];
+    if (!modelsInGroup || modelsInGroup.length === 0) continue;
+
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = providerDisplayNames[provider] || provider;
+
+    for (const model of modelsInGroup) {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = model.display_name;
+      optgroup.appendChild(option);
+    }
+
+    selectEl.appendChild(optgroup);
+  }
+
+  // Set selected value if provided and exists
+  if (selectedValue) {
+    // Check if the value exists in options
+    const exists = Array.from(selectEl.options).some(opt => opt.value === selectedValue);
+    if (exists) {
+      selectEl.value = selectedValue;
+    }
+  }
+}
+
 settingsBtn.addEventListener("click", async () => {
   try {
+    // Load models from backend first
+    const modelsResponse = await invoke<ModelsResponse>("get_available_models");
+
+    // Load config
     const config = await invoke<any>("get_config");
+
+    // Populate dropdowns with models from backend
+    populateModelDropdown(
+      modelInput,
+      modelsResponse.chat_models,
+      config.selected_model || "gemini-2.5-flash"
+    );
+    populateModelDropdown(
+      backgroundModelInput,
+      modelsResponse.background_models,
+      config.background_model || "gpt-oss-120b (Groq)"
+    );
+
+    // Set other config values
     geminiKeyInput.value = config.gemini_api_key || "";
     openRouterKeyInput.value = config.openrouter_api_key || "";
     cerebrasKeyInput.value = config.cerebras_api_key || "";
     groqKeyInput.value = config.groq_api_key || "";
     braveKeyInput.value = config.brave_api_key || "";
-    modelInput.value = config.selected_model || "gemini-2.5-flash";
-    backgroundModelInput.value = config.background_model || "gpt-oss-120b (Groq)";
     enableToolsCheckbox.checked = config.enable_tools || false;
     incognitoModeCheckbox.checked = config.incognito_mode || false;
     enableScreenContextCheckbox.checked = config.enable_screen_context || false;

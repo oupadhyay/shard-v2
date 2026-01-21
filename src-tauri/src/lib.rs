@@ -20,6 +20,7 @@ mod memories;
 mod interactions;
 mod background;
 mod cache;
+mod models;
 pub mod retrieval;
 
 #[cfg(test)]
@@ -39,6 +40,23 @@ struct AppState {
 #[tauri::command]
 async fn get_config(app_handle: AppHandle) -> Result<config::AppConfig, String> {
     config::load_config(&app_handle)
+}
+
+/// Response structure for get_available_models command
+#[derive(serde::Serialize)]
+struct ModelsResponse {
+    chat_models: Vec<models::ModelInfo>,
+    vision_models: Vec<models::ModelInfo>,
+    background_models: Vec<models::ModelInfo>,
+}
+
+#[tauri::command]
+async fn get_available_models() -> Result<ModelsResponse, String> {
+    Ok(ModelsResponse {
+        chat_models: models::get_chat_models(),
+        vision_models: models::get_vision_models(),
+        background_models: models::get_background_models(),
+    })
 }
 
 #[tauri::command]
@@ -393,6 +411,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_config,
+            get_available_models,
             save_config,
             perform_ocr_capture,
             ocr_image,

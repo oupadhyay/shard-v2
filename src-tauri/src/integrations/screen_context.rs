@@ -35,10 +35,10 @@ lazy_static::lazy_static! {
 }
 
 /// Minimum time between captures (debounce)
-const CAPTURE_DEBOUNCE_MS: u64 = 2000;
+const CAPTURE_DEBOUNCE_MS: u64 = 5000;
 
 /// Cache TTL for context results
-const CACHE_TTL_MS: u64 = 30000;
+const CACHE_TTL_MS: u64 = 20000;
 
 /// Load the OCR engine using bundled PaddleOCR models
 async fn get_ocr_engine(app_handle: &tauri::AppHandle) -> Result<OcrEngine, String> {
