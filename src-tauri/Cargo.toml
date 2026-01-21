@@ -55,3 +55,7 @@ harness = false
 [[bench]]
 name = "vision_bench"
 harness = false
+
+[[bench]]
+name = "screen_context_bench"
+harness = false

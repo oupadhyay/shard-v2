@@ -98,24 +98,31 @@ pub fn capture_screen() -> Result<(String, String, image::RgbImage), String> {
 
     let width = image.width();
     let height = image.height();
-    let rgba_data = image.rgba().to_vec(); // One clone for processing and background save
+
+    // OPTIMIZATION: Only 2 copies instead of 3
+    // Copy 1: For resize/encode processing (will be consumed)
+    // Copy 2: For OCR return value (full resolution)
+    let rgba_data_for_ocr = image.rgba().to_vec();
+    let rgba_data_for_resize = rgba_data_for_ocr.clone();
 
     log::info!("[ScreenContext] Captured {}x{} image", width, height);
 
-    // Save FULL resolution debug image in BACKGROUND
-    let rgba_data_for_full = rgba_data.clone();
-    let rgba_data_for_return = rgba_data.clone(); // Clone for return value
-    std::thread::spawn(move || {
-        let full_debug_path = "/tmp/shard_screen_debug_full.jpg";
-        if let Some(full_rgba) = image::RgbaImage::from_raw(width, height, rgba_data_for_full) {
-            let _ = image::DynamicImage::ImageRgba8(full_rgba)
-                .to_rgb8()
-                .save(full_debug_path);
-        }
-    });
+    // Save FULL resolution debug image in BACKGROUND (shares data with OCR copy)
+    #[cfg(debug_assertions)]
+    {
+        let rgba_data_for_debug = rgba_data_for_ocr.clone(); // Only in debug builds
+        std::thread::spawn(move || {
+            let full_debug_path = "/tmp/shard_screen_debug_full.jpg";
+            if let Some(full_rgba) = image::RgbaImage::from_raw(width, height, rgba_data_for_debug) {
+                let _ = image::DynamicImage::ImageRgba8(full_rgba)
+                    .to_rgb8()
+                    .save(full_debug_path);
+            }
+        });
+    }
 
-    // Create image buffer for processing
-    let rgba_image = image::RgbaImage::from_raw(width, height, rgba_data)
+    // Create image buffer for resize processing
+    let rgba_image = image::RgbaImage::from_raw(width, height, rgba_data_for_resize)
         .ok_or("Failed to create image buffer")?;
 
     // Resize to max 1280px width for faster processing
@@ -147,17 +154,19 @@ pub fn capture_screen() -> Result<(String, String, image::RgbImage), String> {
         .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
 
     // DEBUG: Save resized image to tmp for inspection (also background)
-    let resized_jpeg = jpeg_data.clone();
-    std::thread::spawn(move || {
-        let _ = std::fs::write("/tmp/shard_screen_debug.jpg", resized_jpeg);
-    });
+    #[cfg(debug_assertions)]
+    {
+        let resized_jpeg = jpeg_data.clone();
+        std::thread::spawn(move || {
+            let _ = std::fs::write("/tmp/shard_screen_debug.jpg", resized_jpeg);
+        });
+    }
 
     let base64_data = base64::engine::general_purpose::STANDARD.encode(&jpeg_data);
 
-    // Return FULL RESOLUTION image for OCR
-    let full_res_rgb = image::RgbaImage::from_raw(width, height, rgba_data_for_return)
-        .ok_or("Failed to recreate full res image")?
-        .into(); // Convert to DynamicImage
+    // Return FULL RESOLUTION image for OCR (using the original copy)
+    let full_res_rgb = image::RgbaImage::from_raw(width, height, rgba_data_for_ocr)
+        .ok_or("Failed to recreate full res image")?;
     let full_res_rgb = image::DynamicImage::ImageRgba8(full_res_rgb).to_rgb8();
 
     Ok((base64_data, "image/jpeg".to_string(), full_res_rgb))
@@ -165,7 +174,11 @@ pub fn capture_screen() -> Result<(String, String, image::RgbImage), String> {
 
 /// Check if we should capture based on debounce timing
 pub fn should_capture() -> bool {
-    let cache = CONTEXT_CACHE.lock().unwrap();
+    // Use unwrap_or_else to recover from poisoned mutex
+    let cache = CONTEXT_CACHE.lock().unwrap_or_else(|e| {
+        log::warn!("[ScreenContext] Cache mutex was poisoned, recovering");
+        e.into_inner()
+    });
     match cache.last_capture {
         None => true,
         Some(last) => last.elapsed().as_millis() as u64 >= CAPTURE_DEBOUNCE_MS,
@@ -174,7 +187,10 @@ pub fn should_capture() -> bool {
 
 /// Get cached context if still valid
 pub fn get_cached_context() -> Option<ScreenContext> {
-    let cache = CONTEXT_CACHE.lock().unwrap();
+    let cache = CONTEXT_CACHE.lock().unwrap_or_else(|e| {
+        log::warn!("[ScreenContext] Cache mutex was poisoned, recovering");
+        e.into_inner()
+    });
     if let (Some(last), Some(ctx)) = (&cache.last_capture, &cache.last_context) {
         if (last.elapsed().as_millis() as u64) < CACHE_TTL_MS {
             return Some(ctx.clone());
@@ -202,30 +218,50 @@ pub async fn capture_and_analyze(
 
     // Update last capture time
     {
-        let mut cache = CONTEXT_CACHE.lock().unwrap();
+        let mut cache = CONTEXT_CACHE.lock().unwrap_or_else(|e| {
+            log::warn!("[ScreenContext] Cache mutex was poisoned, recovering");
+            e.into_inner()
+        });
         cache.last_capture = Some(Instant::now());
     }
 
+    let capture_start = Instant::now();
     log::info!("[ScreenContext] Capturing screen...");
     let (image_base64, mime_type, rgb_image) = capture_screen()?;
+    let capture_elapsed = capture_start.elapsed();
+    log::info!("[ScreenContext] Screen capture took {:?}", capture_elapsed);
 
-    // Step 1: Local OCR with ocrs
+    // Step 1: Local OCR with ocrs (with fallback on failure)
+    let ocr_start = Instant::now();
     log::info!("[ScreenContext] Running local OCR...");
-    let ocr_engine = get_ocr_engine(&agent.app_handle).await?;
 
-    // Use FULL resolution image for OCR (as requested)
-    // ocr-rs 2.0.2 expects a &DynamicImage
-    let dynamic_image = image::DynamicImage::ImageRgb8(rgb_image);
-    let results = ocr_engine
-        .recognize(&dynamic_image)
-        .map_err(|e| format!("OCR recognition failed: {}", e))?;
+    let local_ocr_text = match get_ocr_engine(&agent.app_handle).await {
+        Ok(ocr_engine) => {
+            // Use FULL resolution image for OCR (as requested)
+            // ocr-rs 2.0.2 expects a &DynamicImage
+            let dynamic_image = image::DynamicImage::ImageRgb8(rgb_image);
+            match ocr_engine.recognize(&dynamic_image) {
+                Ok(results) => {
+                    results
+                        .iter()
+                        .map(|r| r.text.clone())
+                        .collect::<Vec<String>>()
+                        .join("\n")
+                }
+                Err(e) => {
+                    log::warn!("[ScreenContext] OCR recognition failed, continuing without OCR: {}", e);
+                    String::new()
+                }
+            }
+        }
+        Err(e) => {
+            log::warn!("[ScreenContext] Failed to load OCR engine, continuing without OCR: {}", e);
+            String::new()
+        }
+    };
 
-    // Combine results into a single string
-    let local_ocr_text = results
-        .iter()
-        .map(|r| r.text.clone())
-        .collect::<Vec<String>>()
-        .join("\n");
+    let ocr_elapsed = ocr_start.elapsed();
+    log::info!("[ScreenContext] OCR took {:?}, extracted {} chars", ocr_elapsed, local_ocr_text.len());
 
     log::info!(
         "[ScreenContext] Local OCR Result: {} chars",
@@ -233,6 +269,7 @@ pub async fn capture_and_analyze(
     );
 
     // Step 2: Analyze with Vision LLM (Image + Local OCR Context)
+    let vision_start = Instant::now();
     log::info!("[ScreenContext] Analyzing with Vision LLM (Image + Local OCR)...");
 
     let enriched_prompt = format!(
@@ -250,7 +287,10 @@ pub async fn capture_and_analyze(
     )
     .await?;
 
-    // Parse JSON response
+    let vision_elapsed = vision_start.elapsed();
+    log::info!("[ScreenContext] Vision LLM analysis took {:?}", vision_elapsed);
+
+    // Parse JSON response (with fallback for malformed responses)
     let (summary, suggestions) = parse_analysis_response(&analysis)?;
 
     let context = ScreenContext {
@@ -267,9 +307,19 @@ pub async fn capture_and_analyze(
 
     // Cache the result
     {
-        let mut cache = CONTEXT_CACHE.lock().unwrap();
+        let mut cache = CONTEXT_CACHE.lock().unwrap_or_else(|e| {
+            log::warn!("[ScreenContext] Cache mutex was poisoned, recovering");
+            e.into_inner()
+        });
         cache.last_context = Some(context.clone());
     }
+
+    // Log total timing
+    let total_elapsed = capture_start.elapsed();
+    log::info!(
+        "[ScreenContext] Total pipeline: {:?} (capture: {:?}, OCR: {:?}, vision: {:?})",
+        total_elapsed, capture_elapsed, ocr_elapsed, vision_elapsed
+    );
 
     log::info!(
         "[ScreenContext] Generated {} suggestions",
@@ -279,29 +329,54 @@ pub async fn capture_and_analyze(
 }
 
 /// Parse Vision LLM response into (summary, suggestions)
+/// Handles edge cases: markdown wrapping, missing fields, empty arrays
 fn parse_analysis_response(response: &str) -> Result<(String, Vec<String>), String> {
     // Try to extract JSON from response (may be wrapped in markdown code block)
     let json_str = response
         .trim()
         .trim_start_matches("```json")
+        .trim_start_matches("```JSON")
         .trim_start_matches("```")
         .trim_end_matches("```")
         .trim();
 
+    // Handle empty response
+    if json_str.is_empty() {
+        log::warn!("[ScreenContext] Empty response from Vision LLM");
+        return Ok(("Unable to analyze screen content".to_string(), vec![]));
+    }
+
     #[derive(serde::Deserialize)]
     struct AnalysisResponse {
-        summary: String,
+        #[serde(default)]
+        summary: Option<String>,
+        #[serde(default)]
         suggestions: Vec<String>,
     }
 
-    let parsed: AnalysisResponse = serde_json::from_str(json_str).map_err(|e| {
-        format!(
-            "Failed to parse analysis JSON: {} - Response: {}",
-            e, response
-        )
-    })?;
-
-    Ok((parsed.summary, parsed.suggestions))
+    match serde_json::from_str::<AnalysisResponse>(json_str) {
+        Ok(parsed) => {
+            let summary = parsed.summary.unwrap_or_else(|| "Screen content analyzed".to_string());
+            Ok((summary, parsed.suggestions))
+        }
+        Err(e) => {
+            log::warn!("[ScreenContext] Failed to parse JSON, attempting regex fallback: {}", e);
+            // Fallback: try to extract any JSON object from the response
+            if let Some(start) = response.find('{') {
+                if let Some(end) = response.rfind('}') {
+                    let json_substr = &response[start..=end];
+                    if let Ok(parsed) = serde_json::from_str::<AnalysisResponse>(json_substr) {
+                        let summary = parsed.summary.unwrap_or_else(|| "Screen content analyzed".to_string());
+                        return Ok((summary, parsed.suggestions));
+                    }
+                }
+            }
+            Err(format!(
+                "Failed to parse analysis JSON: {} - Response: {}",
+                e, &response[..response.len().min(200)]
+            ))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -321,5 +396,65 @@ mod tests {
         let json = "```json\n{\"summary\": \"test\", \"suggestions\": [\"a\"]}\n```";
         let (summary, _suggestions) = parse_analysis_response(json).unwrap();
         assert_eq!(summary, "test");
+    }
+
+    #[test]
+    fn test_parse_uppercase_json_tag() {
+        let json = "```JSON\n{\"summary\": \"test\", \"suggestions\": [\"a\", \"b\"]}\n```";
+        let (summary, suggestions) = parse_analysis_response(json).unwrap();
+        assert_eq!(summary, "test");
+        assert_eq!(suggestions.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_empty_suggestions() {
+        let json = r#"{"summary": "Empty desktop", "suggestions": []}"#;
+        let (summary, suggestions) = parse_analysis_response(json).unwrap();
+        assert_eq!(summary, "Empty desktop");
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_parse_missing_summary() {
+        let json = r#"{"suggestions": ["Do something"]}"#;
+        let (summary, suggestions) = parse_analysis_response(json).unwrap();
+        assert_eq!(summary, "Screen content analyzed"); // Default fallback
+        assert_eq!(suggestions.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_empty_response() {
+        let (summary, suggestions) = parse_analysis_response("").unwrap();
+        assert_eq!(summary, "Unable to analyze screen content");
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_parse_whitespace_only() {
+        let (summary, suggestions) = parse_analysis_response("   \n\t  ").unwrap();
+        assert_eq!(summary, "Unable to analyze screen content");
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_parse_embedded_json() {
+        // Vision LLM sometimes adds prose around the JSON
+        let response = "Here is my analysis:\n{\"summary\": \"coding\", \"suggestions\": [\"help\"]}\nHope that helps!";
+        let (summary, suggestions) = parse_analysis_response(response).unwrap();
+        assert_eq!(summary, "coding");
+        assert_eq!(suggestions.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_invalid_json_fails() {
+        let result = parse_analysis_response("this is not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_debounce_constants() {
+        // Verify constants are reasonable
+        assert!(CAPTURE_DEBOUNCE_MS >= 1000, "Debounce should be at least 1s");
+        assert!(CACHE_TTL_MS >= CAPTURE_DEBOUNCE_MS, "Cache TTL should be >= debounce");
     }
 }
