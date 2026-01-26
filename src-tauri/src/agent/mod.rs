@@ -892,7 +892,19 @@ impl Agent {
             Some(vec![GeminiTool {
                 function_declarations: crate::tools::get_all_tools()
                     .iter()
-                    .map(|t| t.function.clone())
+                    .map(|t| {
+                        // Strip OpenAI-specific fields from parameters
+                        let mut params = t.function.parameters.clone();
+                        if let Some(obj) = params.as_object_mut() {
+                            obj.remove("additionalProperties");
+                            obj.remove("strict");
+                        }
+                        GeminiFunctionDefinition {
+                            name: t.function.name.clone(),
+                            description: t.function.description.clone(),
+                            parameters: params,
+                        }
+                    })
                     .collect(),
             }])
         } else {

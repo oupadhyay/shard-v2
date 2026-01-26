@@ -245,10 +245,18 @@ pub struct GeminiFileData {
     pub file_uri: String,
 }
 
+/// Gemini-specific function definition (excludes OpenAI fields like 'strict')
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GeminiFunctionDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GeminiTool {
     #[serde(rename = "functionDeclarations")]
-    pub function_declarations: Vec<FunctionDefinition>,
+    pub function_declarations: Vec<GeminiFunctionDefinition>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
