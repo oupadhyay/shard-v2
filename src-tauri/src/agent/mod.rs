@@ -438,6 +438,110 @@ impl Agent {
             }
         }
 
+        // ====================================================================
+        // Compaction: Check if we're approaching context window limits
+        // ====================================================================
+        let compaction_enabled = config.enable_compaction.unwrap_or(true) && !incognito;
+        log::info!(
+            "[Agent] Compaction check: enabled={}, incognito={}, history_len={}",
+            compaction_enabled,
+            incognito,
+            history.len()
+        );
+
+        if compaction_enabled {
+            let selected_model = config
+                .selected_model
+                .clone()
+                .unwrap_or("gemini-2.5-flash-lite".to_string());
+            let threshold = config.compaction_threshold;
+
+            let current_tokens = crate::compaction::estimate_history_tokens(&history);
+            let context_size = crate::compaction::get_context_size(&selected_model);
+            let threshold_pct = threshold.unwrap_or(crate::compaction::DEFAULT_THRESHOLD);
+            let threshold_tokens = (context_size as f32 * threshold_pct) as usize;
+
+            log::info!(
+                "[Agent] Compaction: model={}, tokens={}, context={}, threshold={}% ({} tokens)",
+                selected_model,
+                current_tokens,
+                context_size,
+                (threshold_pct * 100.0) as u32,
+                threshold_tokens
+            );
+
+            if crate::compaction::should_compact(&history, &selected_model, Some(threshold_pct)) {
+                log::info!(
+                    "[Agent] Context approaching {}% of window - triggering compaction",
+                    (threshold_pct * 100.0) as u32
+                );
+
+                // Emit compaction event for UI feedback
+                let compaction_event = serde_json::json!({
+                    "status": "starting",
+                    "history_len": history.len()
+                });
+                app_handle.emit("agent-compaction", compaction_event.to_string()).ok();
+
+                // Pre-compaction flush: extract important facts before summarization
+                match crate::compaction::pre_compaction_flush(
+                    app_handle,
+                    &self.http_client,
+                    config,
+                    &history,
+                )
+                .await
+                {
+                    Ok(flush_result) => {
+                        if flush_result.extracted {
+                            log::info!(
+                                "[Agent] Pre-compaction flush: {} facts saved to daily log",
+                                flush_result.fact_count
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("[Agent] Pre-compaction flush failed: {}", e);
+                        // Continue with compaction even if flush fails
+                    }
+                }
+
+                // Compact history
+                match crate::compaction::compact_history(
+                    app_handle,
+                    &self.http_client,
+                    config,
+                    &mut history,
+                )
+                .await
+                {
+                    Ok(result) => {
+                        log::info!(
+                            "[Agent] Compacted {} turns, preserved {}, saved ~{} tokens",
+                            result.compacted_turns,
+                            result.preserved_turns,
+                            result.tokens_saved
+                        );
+
+                        // Emit completion event
+                        let complete_event = serde_json::json!({
+                            "status": "complete",
+                            "compacted_turns": result.compacted_turns,
+                            "preserved_turns": result.preserved_turns,
+                            "tokens_saved": result.tokens_saved
+                        });
+                        app_handle.emit("agent-compaction", complete_event.to_string()).ok();
+                    }
+                    Err(e) => {
+                        log::error!("[Agent] Compaction failed: {}", e);
+                        // Continue processing without compaction
+                    }
+                }
+            } else {
+                log::info!("[Agent] Compaction not needed: {} < {} tokens", current_tokens, threshold_tokens);
+            }
+        }
+
         app_handle.emit("agent-processing-start", ()).ok();
         let stream_id =
             crate::CURRENT_STREAM_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;

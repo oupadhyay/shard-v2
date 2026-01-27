@@ -158,7 +158,7 @@ pub struct CleanupDecision {
 
 /// Make an LLM call for background processing
 /// Routes to Groq or Cerebras based on the model name
-async fn call_background_llm(
+pub async fn call_background_llm(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,
     model: &str,
@@ -166,7 +166,9 @@ async fn call_background_llm(
 ) -> Result<String, String> {
     // Parse model to determine provider and model ID
     let (url, api_key, model_id) = if model.contains("(Cerebras)") {
-        let key = config.cerebras_api_key.as_ref()
+        let key = config
+            .cerebras_api_key
+            .as_ref()
             .ok_or("No Cerebras API key configured for background jobs")?;
         let model_id = if model.contains("120b") {
             "gpt-oss-120b"
@@ -175,21 +177,36 @@ async fn call_background_llm(
         };
         ("https://api.cerebras.ai/v1/chat/completions", key, model_id)
     } else if model.contains("(OpenRouter)") {
-        let key = config.openrouter_api_key.as_ref()
+        let key = config
+            .openrouter_api_key
+            .as_ref()
             .ok_or("No OpenRouter API key configured for background jobs")?;
         // Extract model ID from format like "google/gemma-3-27b-it:free (OpenRouter)"
-        let model_id = model.split(" (OpenRouter)").next().unwrap_or("google/gemma-3-27b-it:free");
-        ("https://openrouter.ai/api/v1/chat/completions", key, model_id.to_string().leak() as &str)
+        let model_id = model
+            .split(" (OpenRouter)")
+            .next()
+            .unwrap_or("google/gemma-3-27b-it:free");
+        (
+            "https://openrouter.ai/api/v1/chat/completions",
+            key,
+            model_id.to_string().leak() as &str,
+        )
     } else {
         // Default to Groq
-        let key = config.groq_api_key.as_ref()
+        let key = config
+            .groq_api_key
+            .as_ref()
             .ok_or("No Groq API key configured for background jobs")?;
         let model_id = if model.contains("20b") {
             "openai/gpt-oss-20b"
         } else {
             "openai/gpt-oss-120b"
         };
-        ("https://api.groq.com/openai/v1/chat/completions", key, model_id)
+        (
+            "https://api.groq.com/openai/v1/chat/completions",
+            key,
+            model_id,
+        )
     };
 
     let payload = serde_json::json!({
@@ -377,18 +394,26 @@ async fn run_summary_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summar
     let interactions_dir = app_data_dir.join("interactions");
 
     let config = crate::config::load_config(app_handle)?;
-    let background_model = config.background_model.as_deref()
+    let background_model = config
+        .background_model
+        .as_deref()
         .unwrap_or(DEFAULT_BACKGROUND_MODEL);
 
     // Verify we have the required API key
     if background_model.contains("(Cerebras)") {
-        config.cerebras_api_key.as_ref()
+        config
+            .cerebras_api_key
+            .as_ref()
             .ok_or("No Cerebras API key configured for background jobs")?;
     } else if background_model.contains("(OpenRouter)") {
-        config.openrouter_api_key.as_ref()
+        config
+            .openrouter_api_key
+            .as_ref()
             .ok_or("No OpenRouter API key configured for background jobs")?;
     } else {
-        config.groq_api_key.as_ref()
+        config
+            .groq_api_key
+            .as_ref()
             .ok_or("No Groq API key configured for background jobs")?;
     };
 
@@ -414,15 +439,30 @@ async fn run_summary_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summar
     let existing_insights = load_insight_summaries_context(app_handle);
 
     // Get promotion candidates (insights with >= 3 updates)
-    let promotion_candidates = crate::memories::get_promotion_candidates(app_handle, 3).unwrap_or_default();
+    let promotion_candidates =
+        crate::memories::get_promotion_candidates(app_handle, 3).unwrap_or_default();
     let mut candidates_context = String::new();
     if !promotion_candidates.is_empty() {
         candidates_context.push_str("CANDIDATES FOR PROMOTION TO TOPIC (Review these):\n");
         for title in &promotion_candidates {
             if let Ok(content) = crate::memories::read_insight(app_handle, title) {
-                candidates_context.push_str(&format!("- Title: {}\n  Content: {}\n", title, content));
+                candidates_context
+                    .push_str(&format!("- Title: {}\n  Content: {}\n", title, content));
             }
         }
+    }
+
+    // Read daily logs from pre-compaction flushes (staging area for insights)
+    let daily_logs = crate::memories::read_all_daily_logs(app_handle).unwrap_or_default();
+    let mut daily_logs_context = String::new();
+    let logs_to_archive: Vec<String> = daily_logs.iter().map(|(date, _)| date.clone()).collect();
+    if !daily_logs.is_empty() {
+        daily_logs_context
+            .push_str("\nPRE-COMPACTION EXTRACTED FACTS (process these into insights):\n");
+        for (date, content) in &daily_logs {
+            daily_logs_context.push_str(&format!("--- {} ---\n{}\n", date, content));
+        }
+        log::info!("[Summary] Processing {} daily logs", daily_logs.len());
     }
 
     // Call LLM to extract topics AND insights
@@ -435,6 +475,10 @@ EXISTING TOPIC SUMMARIES (broad categories):
 EXISTING INSIGHTS (specific facts/Q&A):
 {}
 
+DAILY LOGS (process these into insights):
+{}
+
+CANDIDATES FOR PROMOTION TO TOPIC (Review these):
 {}
 
 NEW INTERACTIONS TO ANALYZE:
@@ -462,6 +506,7 @@ INSTRUCTIONS:
 8. UP-LEVELING: Review the \"CANDIDATES FOR PROMOTION\". If an insight has enough distinct info to be a broad topic:
    - Create/Update the TOPIC with the insight's content
    - Add a \"promotions\" entry to delete the old insight
+9. PRE-COMPACTION FACTS: Process these extracted facts into INSIGHTS (they're already curated)
 
 Return JSON object:
 {{
@@ -472,7 +517,12 @@ Return JSON object:
 
 Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries.
 "#,
-        LOOKBACK_HOURS, existing_topics, existing_insights, candidates_context, interactions
+        LOOKBACK_HOURS,
+        existing_topics,
+        existing_insights,
+        daily_logs_context,
+        candidates_context,
+        interactions
     );
 
     let http_client = reqwest::Client::new();
@@ -530,7 +580,10 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
                             .await
                             {
                                 Ok(_) => {
-                                    log::info!("[Summary] Created/Updated insight: {}", insight.title);
+                                    log::info!(
+                                        "[Summary] Created/Updated insight: {}",
+                                        insight.title
+                                    );
                                     insights_created.push(insight.title);
                                 }
                                 Err(e) => {
@@ -546,16 +599,28 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
 
                     // Process promotions (delete old insights)
                     for promotion in extraction.promotions {
-                        match crate::memories::delete_insight(app_handle, &promotion.insight_title) {
+                        match crate::memories::delete_insight(app_handle, &promotion.insight_title)
+                        {
                             Ok(true) => {
-                                log::info!("[Summary] Promoted insight {} to topic {}", promotion.insight_title, promotion.new_topic);
+                                log::info!(
+                                    "[Summary] Promoted insight {} to topic {}",
+                                    promotion.insight_title,
+                                    promotion.new_topic
+                                );
                                 insights_promoted.push(promotion.insight_title);
                             }
                             Ok(false) => {
-                                log::warn!("[Summary] Failed to find insight to promote: {}", promotion.insight_title);
+                                log::warn!(
+                                    "[Summary] Failed to find insight to promote: {}",
+                                    promotion.insight_title
+                                );
                             }
                             Err(e) => {
-                                log::warn!("[Summary] Error promoting insight {}: {}", promotion.insight_title, e);
+                                log::warn!(
+                                    "[Summary] Error promoting insight {}: {}",
+                                    promotion.insight_title,
+                                    e
+                                );
                             }
                         }
                     }
@@ -597,6 +662,16 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
     // TODO: Up-leveling phase - check insights with reference_count >= INSIGHT_UPLEVEL_THRESHOLD
     // and merge/promote them to topics
 
+    // Archive processed daily logs (move to archived/ folder)
+    if !logs_to_archive.is_empty() && !insights_created.is_empty() {
+        for date in &logs_to_archive {
+            if let Err(e) = crate::memories::archive_daily_log(app_handle, date) {
+                log::warn!("[Summary] Failed to archive daily log {}: {}", date, e);
+            }
+        }
+        log::info!("[Summary] Archived {} daily logs", logs_to_archive.len());
+    }
+
     Ok(SummaryResult {
         total_interactions: stats.total_interactions,
         user_messages: stats.user_messages,
@@ -623,7 +698,9 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
     let interactions_dir = app_data_dir.join("interactions");
 
     let config = crate::config::load_config(app_handle)?;
-    let background_model = config.background_model.as_deref()
+    let background_model = config
+        .background_model
+        .as_deref()
         .unwrap_or(DEFAULT_BACKGROUND_MODEL);
 
     // Verify we have the required API key
@@ -636,7 +713,10 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
     };
 
     if !has_key {
-        log::info!("[Cleanup] No API key for {}, falling back to date-based cleanup", background_model);
+        log::info!(
+            "[Cleanup] No API key for {}, falling back to date-based cleanup",
+            background_model
+        );
         return cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS);
     }
 

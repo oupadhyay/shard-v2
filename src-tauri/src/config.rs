@@ -27,6 +27,10 @@ pub struct AppConfig {
     pub retry_on_katex: Option<bool>,    // Retry on frontend KaTeX parse errors
     // Screen context capture
     pub enable_screen_context: Option<bool>, // Default: false
+    // Compaction configuration
+    pub enable_compaction: Option<bool>,       // Default: true
+    pub compaction_threshold: Option<f32>,     // Default: 0.5 (50%)
+    pub compaction_preserve_turns: Option<u32>, // Default: 5
 }
 
 impl Default for AppConfig {
@@ -52,6 +56,10 @@ impl Default for AppConfig {
             retry_on_katex: Some(true),
             // Screen context capture (off by default for privacy)
             enable_screen_context: Some(false),
+            // Compaction defaults
+            enable_compaction: Some(true),
+            compaction_threshold: Some(0.001),
+            compaction_preserve_turns: Some(5),
         }
     }
 }
@@ -71,7 +79,22 @@ pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, S
     }
     let content = fs::read_to_string(&config_path)
         .map_err(|e| format!("Failed to read config file: {}", e))?;
-    toml::from_str(&content).map_err(|e| format!("Failed to parse config file: {}", e))
+    let mut loaded: AppConfig = toml::from_str(&content)
+        .map_err(|e| format!("Failed to parse config file: {}", e))?;
+
+    // Merge with defaults: if a field is None in loaded config, use Default impl value
+    let defaults = AppConfig::default();
+    if loaded.enable_compaction.is_none() {
+        loaded.enable_compaction = defaults.enable_compaction;
+    }
+    if loaded.compaction_threshold.is_none() {
+        loaded.compaction_threshold = defaults.compaction_threshold;
+    }
+    if loaded.compaction_preserve_turns.is_none() {
+        loaded.compaction_preserve_turns = defaults.compaction_preserve_turns;
+    }
+
+    Ok(loaded)
 }
 
 pub fn save_config<R: Runtime>(app_handle: &AppHandle<R>, config: &AppConfig) -> Result<(), String> {

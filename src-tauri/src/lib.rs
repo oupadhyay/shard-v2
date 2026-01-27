@@ -21,6 +21,7 @@ mod interactions;
 mod background;
 mod cache;
 mod models;
+pub mod compaction;
 pub mod retrieval;
 
 #[cfg(test)]

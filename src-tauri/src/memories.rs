@@ -739,3 +739,120 @@ pub fn get_memories_for_prompt<R: Runtime>(app_handle: &AppHandle<R>) -> Result<
     Ok(store.format_for_prompt())
 }
 
+// ============================================================================
+// Daily Log (Clawdbot-style memory files)
+// ============================================================================
+
+/// Get the path to the daily memory log directory
+pub fn get_memory_log_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
+    let memories_dir = get_memories_dir(app_handle)?;
+    let log_dir = memories_dir.join("memory");
+
+    if !log_dir.exists() {
+        fs::create_dir_all(&log_dir)
+            .map_err(|e| format!("Failed to create memory log directory: {}", e))?;
+    }
+
+    Ok(log_dir)
+}
+
+/// Get the path to today's daily log file
+pub fn get_today_log_path<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
+    let log_dir = get_memory_log_dir(app_handle)?;
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    Ok(log_dir.join(format!("{}.md", today)))
+}
+
+/// Append content to today's daily memory log
+///
+/// Used by pre-compaction flush to save extracted facts before summarization.
+/// Creates the file with a header if it doesn't exist.
+pub fn append_to_daily_log<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    content: &str,
+) -> Result<(), String> {
+    use std::io::Write;
+
+    let log_path = get_today_log_path(app_handle)?;
+
+    // If file doesn't exist, create with header
+    let needs_header = !log_path.exists();
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("Failed to open daily log: {}", e))?;
+
+    if needs_header {
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        writeln!(file, "# {}\n", today)
+            .map_err(|e| format!("Failed to write header: {}", e))?;
+    }
+
+    write!(file, "{}", content)
+        .map_err(|e| format!("Failed to append to daily log: {}", e))?;
+
+    log::info!("[Memory] Appended to daily log: {}", log_path.display());
+    Ok(())
+}
+
+/// Read all daily log files and return their contents
+/// Returns Vec of (date, content) pairs, oldest first
+pub fn read_all_daily_logs<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Vec<(String, String)>, String> {
+    let log_dir = get_memory_log_dir(app_handle)?;
+
+    if !log_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut logs: Vec<(String, String)> = Vec::new();
+
+    let entries = fs::read_dir(&log_dir)
+        .map_err(|e| format!("Failed to read memory log dir: {}", e))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map(|e| e == "md").unwrap_or(false) {
+            if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
+                // Skip today's log (still being written to)
+                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                if filename == today {
+                    continue;
+                }
+
+                if let Ok(content) = fs::read_to_string(&path) {
+                    logs.push((filename.to_string(), content));
+                }
+            }
+        }
+    }
+
+    // Sort by date (oldest first)
+    logs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    Ok(logs)
+}
+
+/// Archive a processed daily log by moving to archived/ subdirectory
+pub fn archive_daily_log<R: Runtime>(app_handle: &AppHandle<R>, date: &str) -> Result<(), String> {
+    let log_dir = get_memory_log_dir(app_handle)?;
+    let archived_dir = log_dir.join("archived");
+
+    if !archived_dir.exists() {
+        fs::create_dir_all(&archived_dir)
+            .map_err(|e| format!("Failed to create archived dir: {}", e))?;
+    }
+
+    let src = log_dir.join(format!("{}.md", date));
+    let dst = archived_dir.join(format!("{}.md", date));
+
+    if src.exists() {
+        fs::rename(&src, &dst)
+            .map_err(|e| format!("Failed to archive daily log: {}", e))?;
+        log::info!("[Memory] Archived daily log: {} -> archived/", date);
+    }
+
+    Ok(())
+}
+
