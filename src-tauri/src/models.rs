@@ -43,6 +43,8 @@ pub struct ModelInfo {
     pub category: Category,
     /// Whether this model supports function/tool calling
     pub supports_tools: bool,
+    /// Whether this model can directly process images (vision-capable)
+    pub supports_vision: bool,
 }
 
 
@@ -60,6 +62,7 @@ pub fn get_chat_models() -> Vec<ModelInfo> {
             provider: Provider::Gemini,
             category: Category::Chat,
             supports_tools: true,
+            supports_vision: true, // Native vision via Files API
         },
         ModelInfo {
             id: "gemini-2.5-flash".to_string(),
@@ -67,6 +70,7 @@ pub fn get_chat_models() -> Vec<ModelInfo> {
             provider: Provider::Gemini,
             category: Category::Chat,
             supports_tools: true,
+            supports_vision: true, // Native vision via Files API
         },
         ModelInfo {
             id: "gemini-3-flash-preview".to_string(),
@@ -74,6 +78,7 @@ pub fn get_chat_models() -> Vec<ModelInfo> {
             provider: Provider::Gemini,
             category: Category::Chat,
             supports_tools: true,
+            supports_vision: true, // Native vision via Files API
         },
         // OpenRouter
         ModelInfo {
@@ -82,20 +87,17 @@ pub fn get_chat_models() -> Vec<ModelInfo> {
             provider: Provider::OpenRouter,
             category: Category::Chat,
             supports_tools: true,
+            supports_vision: false, // Text-only model
         },
-        ModelInfo {
-            id: "google/gemma-3-27b-it:free".to_string(),
-            display_name: "Gemma 3-27B".to_string(),
-            provider: Provider::OpenRouter,
-            category: Category::Chat,
-            supports_tools: true,
-        },
+        // Gemma 3 27B removed from chat to avoid hitting free tier rate limit
+        // (used internally for vision processing in vision_llm.rs)
         ModelInfo {
             id: "meta-llama/llama-3.3-70b-instruct:free".to_string(),
             display_name: "LLaMA 3.3 70B".to_string(),
             provider: Provider::OpenRouter,
             category: Category::Chat,
             supports_tools: true,
+            supports_vision: false, // Text-only model
         },
         // Other Providers
         ModelInfo {
@@ -104,6 +106,7 @@ pub fn get_chat_models() -> Vec<ModelInfo> {
             provider: Provider::Cerebras,
             category: Category::Chat,
             supports_tools: true,
+            supports_vision: false, // Text-only model
         },
         ModelInfo {
             id: "gpt-oss-120b (Groq)".to_string(),
@@ -111,6 +114,7 @@ pub fn get_chat_models() -> Vec<ModelInfo> {
             provider: Provider::Groq,
             category: Category::Chat,
             supports_tools: true,
+            supports_vision: false, // Text-only model
         },
     ]
 }
@@ -128,6 +132,7 @@ pub fn get_vision_models() -> Vec<ModelInfo> {
             provider: Provider::OpenRouter,
             category: Category::Vision,
             supports_tools: false,
+            supports_vision: true, // Vision model
         },
         ModelInfo {
             id: "nvidia/nemotron-nano-12b-v2-vl:free".to_string(),
@@ -135,6 +140,7 @@ pub fn get_vision_models() -> Vec<ModelInfo> {
             provider: Provider::OpenRouter,
             category: Category::Vision,
             supports_tools: true,
+            supports_vision: true, // Vision model
         },
         ModelInfo {
             id: "qwen/qwen-2.5-vl-7b-instruct:free".to_string(),
@@ -142,6 +148,7 @@ pub fn get_vision_models() -> Vec<ModelInfo> {
             provider: Provider::OpenRouter,
             category: Category::Vision,
             supports_tools: false,
+            supports_vision: true, // Vision model
         },
     ]
 }
@@ -160,6 +167,7 @@ pub fn get_background_models() -> Vec<ModelInfo> {
             provider: Provider::Groq,
             category: Category::Background,
             supports_tools: true,
+            supports_vision: false, // Text-only
         },
         ModelInfo {
             id: "gpt-oss-120b (Groq)".to_string(),
@@ -167,6 +175,7 @@ pub fn get_background_models() -> Vec<ModelInfo> {
             provider: Provider::Groq,
             category: Category::Background,
             supports_tools: true,
+            supports_vision: false, // Text-only
         },
         // Cerebras
         ModelInfo {
@@ -175,6 +184,7 @@ pub fn get_background_models() -> Vec<ModelInfo> {
             provider: Provider::Cerebras,
             category: Category::Background,
             supports_tools: true,
+            supports_vision: false, // Text-only
         },
         ModelInfo {
             id: "llama-3.3-70b (Cerebras)".to_string(),
@@ -182,6 +192,7 @@ pub fn get_background_models() -> Vec<ModelInfo> {
             provider: Provider::Cerebras,
             category: Category::Background,
             supports_tools: true,
+            supports_vision: false, // Text-only
         },
         // OpenRouter
         ModelInfo {
@@ -190,6 +201,7 @@ pub fn get_background_models() -> Vec<ModelInfo> {
             provider: Provider::OpenRouter,
             category: Category::Background,
             supports_tools: true,
+            supports_vision: true, // Multimodal
         },
         ModelInfo {
             id: "openai/gpt-oss-20b:free (OpenRouter)".to_string(),
@@ -197,6 +209,7 @@ pub fn get_background_models() -> Vec<ModelInfo> {
             provider: Provider::OpenRouter,
             category: Category::Background,
             supports_tools: true,
+            supports_vision: false, // Text-only
         },
     ]
 }
@@ -235,6 +248,7 @@ mod tests {
             provider: Provider::Gemini,
             category: Category::Chat,
             supports_tools: true,
+            supports_vision: false,
         };
 
         let json = serde_json::to_string(&model).unwrap();

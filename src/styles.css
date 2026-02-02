@@ -108,10 +108,25 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
+  padding-bottom: 10px; /* Match gap between action buttons and input */
   display: flex;
   flex-direction: column;
   gap: 8px;
   scrollbar-width: none;
+  position: relative;
+  /* Mask that fades content to transparent at bottom */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    black calc(100% - 20px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    black calc(100% - 20px),
+    transparent 100%
+  );
 }
 
 .chat-area::-webkit-scrollbar {
@@ -150,7 +165,8 @@ body {
 
 .message.user {
   align-self: stretch;
-  background: linear-gradient(135deg, rgba(14, 14, 15, 0.92) 0%, rgba(8, 8, 9, 0.94) 100%);
+  background: linear-gradient(135deg, rgba(18, 18, 20, 0.98) 0%, rgba(10, 10, 12, 0.99) 100%);
+
   border: 1px solid var(--border-subtle);
   padding: 10px 14px;
   border-radius: 12px;

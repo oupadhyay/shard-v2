@@ -163,6 +163,194 @@ pub async fn describe_image(
     )
 }
 
+/// Process an image with the user's actual question for contextual understanding.
+/// This is used when the selected chat model doesn't support vision - we use a
+/// vision-capable model (Gemma 3 27B) to understand the image in context of the query.
+///
+/// Unlike `describe_image()` which uses a fixed OCR prompt, this function passes
+/// the user's actual question to enable contextual visual understanding.
+pub async fn process_image_with_context(
+    http_client: &Client,
+    image_base64: &str,
+    mime_type: &str,
+    user_question: &str,
+    config: &AppConfig,
+) -> Result<String, String> {
+    // Primary model: Gemma 3 27B - strong multimodal capabilities
+    const CONTEXT_VISION_MODEL: &str = "google/gemma-3-27b-it:free";
+
+    // Build a prompt that includes the user's question for contextual understanding
+    let contextual_prompt = format!(
+        r#"You are a helpful vision assistant. The user has attached an image and asked a question about it.
+
+USER'S QUESTION: {}
+
+Please analyze the image carefully and provide a helpful response that directly addresses the user's question. Focus on the visual elements that are relevant to their query. Be detailed but concise."#,
+        user_question
+    );
+
+    let data_uri = format!("data:{};base64,{}", mime_type, image_base64);
+
+    // Try OpenRouter with Gemma 3 27B
+    if let Some(openrouter_key) = &config.openrouter_api_key {
+        log::info!("[VisionLLM] Processing image with context using {}", CONTEXT_VISION_MODEL);
+
+        let request = OpenAIVisionRequest {
+            model: CONTEXT_VISION_MODEL.to_string(),
+            messages: vec![VisionMessage {
+                role: "user".to_string(),
+                content: vec![
+                    VisionContent::Text {
+                        text: contextual_prompt.clone(),
+                    },
+                    VisionContent::ImageUrl {
+                        image_url: ImageUrlPayload {
+                            url: data_uri.clone(),
+                        },
+                    },
+                ],
+            }],
+            max_completion_tokens: Some(2048), // More tokens for detailed contextual response
+            max_tokens: None,
+            temperature: Some(0.7),
+        };
+
+        let response = http_client
+            .post("https://openrouter.ai/api/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", openrouter_key))
+            .header("Content-Type", "application/json")
+            .timeout(std::time::Duration::from_secs(45)) // Longer timeout for contextual response
+            .json(&request)
+            .send()
+            .await;
+
+        if let Ok(resp) = response {
+            if resp.status().is_success() {
+                if let Ok(body) = resp.json::<OpenAIResponse>().await {
+                    if let Some(content) = body
+                        .choices
+                        .and_then(|c| c.into_iter().next())
+                        .and_then(|choice| choice.message.content)
+                    {
+                        log::info!(
+                            "[VisionLLM] Contextual vision success with {} ({} chars)",
+                            CONTEXT_VISION_MODEL,
+                            content.len()
+                        );
+                        return Ok(content);
+                    }
+                }
+            } else {
+                let status = resp.status();
+                let error_text = resp.text().await.unwrap_or_default();
+                log::warn!(
+                    "[VisionLLM] {} failed with status {}: {}",
+                    CONTEXT_VISION_MODEL,
+                    status,
+                    &error_text[..error_text.len().min(200)]
+                );
+            }
+        }
+
+        // Fallback to other vision models if Gemma 3 fails
+        for model in OPENROUTER_VISION_MODELS {
+            let request = OpenAIVisionRequest {
+                model: model.to_string(),
+                messages: vec![VisionMessage {
+                    role: "user".to_string(),
+                    content: vec![
+                        VisionContent::Text {
+                            text: contextual_prompt.clone(),
+                        },
+                        VisionContent::ImageUrl {
+                            image_url: ImageUrlPayload {
+                                url: data_uri.clone(),
+                            },
+                        },
+                    ],
+                }],
+                max_completion_tokens: Some(2048),
+                max_tokens: None,
+                temperature: Some(0.7),
+            };
+
+            log::info!("[VisionLLM] Trying fallback vision model: {}", model);
+
+            let response = http_client
+                .post("https://openrouter.ai/api/v1/chat/completions")
+                .header("Authorization", format!("Bearer {}", openrouter_key))
+                .header("Content-Type", "application/json")
+                .timeout(std::time::Duration::from_secs(45))
+                .json(&request)
+                .send()
+                .await;
+
+            if let Ok(resp) = response {
+                if resp.status().is_success() {
+                    if let Ok(body) = resp.json::<OpenAIResponse>().await {
+                        if let Some(content) = body
+                            .choices
+                            .and_then(|c| c.into_iter().next())
+                            .and_then(|choice| choice.message.content)
+                        {
+                            log::info!("[VisionLLM] Fallback success with {}", model);
+                            return Ok(content);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Final fallback to Groq if OpenRouter unavailable
+    if let Some(groq_key) = &config.groq_api_key {
+        log::info!("[VisionLLM] Trying Groq for contextual vision...");
+
+        let request = OpenAIVisionRequest {
+            model: GROQ_VISION_MODEL.to_string(),
+            messages: vec![VisionMessage {
+                role: "user".to_string(),
+                content: vec![
+                    VisionContent::Text {
+                        text: contextual_prompt,
+                    },
+                    VisionContent::ImageUrl {
+                        image_url: ImageUrlPayload { url: data_uri },
+                    },
+                ],
+            }],
+            max_completion_tokens: Some(2048),
+            max_tokens: None,
+            temperature: Some(0.7),
+        };
+
+        let response = http_client
+            .post("https://api.groq.com/openai/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", groq_key))
+            .header("Content-Type", "application/json")
+            .timeout(std::time::Duration::from_secs(45))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if response.status().is_success() {
+            let body: OpenAIResponse = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+            return body
+                .choices
+                .and_then(|c| c.into_iter().next())
+                .and_then(|choice| choice.message.content)
+                .ok_or_else(|| "No content in response".to_string());
+        }
+    }
+
+    Err("No Vision LLM API key configured or all attempts failed for contextual processing".to_string())
+}
+
 /// Call an OpenAI-compatible vision API endpoint
 async fn call_vision_api(
     http_client: &Client,

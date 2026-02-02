@@ -326,23 +326,24 @@ impl Agent {
                             }
                         }
                     } else {
-                        // For non-Gemini providers, use Vision LLM to describe the image
-                        match crate::integrations::vision_llm::describe_image(
-                            self,
+                        // For non-Gemini providers, use Vision LLM to process image WITH context
+                        // This passes the user's actual question for contextual understanding
+                        match crate::integrations::vision_llm::process_image_with_context(
                             &self.http_client,
                             img_data,
                             mime_type,
+                            &message, // Pass user's question for contextual response
                             config,
                         )
                         .await
                         {
-                            Ok(description) => {
-                                log::info!("[Agent] Vision LLM described image: {} chars", description.len());
-                                image_descriptions.push(description);
+                            Ok(contextual_response) => {
+                                log::info!("[Agent] Vision LLM contextual response: {} chars", contextual_response.len());
+                                image_descriptions.push(contextual_response);
                             }
                             Err(e) => {
-                                log::warn!("[Agent] Vision LLM failed: {}", e);
-                                image_descriptions.push("[Image attached but could not be described]".to_string());
+                                log::warn!("[Agent] Vision LLM contextual processing failed: {}", e);
+                                image_descriptions.push("[Image attached but could not be analyzed]".to_string());
                             }
                         }
                         None // No file URI for non-Gemini
@@ -361,10 +362,10 @@ impl Agent {
             None
         };
 
-        // For non-Gemini providers, prepend image descriptions to the message
+        // For non-Gemini providers, prepend contextual image analysis to the message
         let augmented_message = if !is_gemini && !image_descriptions.is_empty() {
-            let descriptions = image_descriptions.join("\n\n");
-            format!("[Image Description]\n{}\n\n[User Message]\n{}", descriptions, message)
+            let analysis = image_descriptions.join("\n\n");
+            format!("[Visual Analysis]\n{}\n\n[User Message]\n{}", analysis, message)
         } else {
             message.clone()
         };
