@@ -58,7 +58,7 @@ impl Default for AppConfig {
             enable_screen_context: Some(false),
             // Compaction defaults
             enable_compaction: Some(true),
-            compaction_threshold: Some(0.001),
+            compaction_threshold: Some(0.5),
             compaction_preserve_turns: Some(5),
         }
     }

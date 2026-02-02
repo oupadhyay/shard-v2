@@ -202,7 +202,6 @@ pub fn get_cached_context() -> Option<ScreenContext> {
 /// Capture screen and analyze with Vision LLM
 pub async fn capture_and_analyze(
     agent: &crate::agent::Agent,
-    http_client: &reqwest::Client,
     config: &AppConfig,
 ) -> Result<ScreenContext, String> {
     // Check cache first
@@ -277,11 +276,11 @@ pub async fn capture_and_analyze(
         SCREEN_CONTEXT_PROMPT, local_ocr_text
     );
 
-    let analysis = vision_llm::analyze_with_prompt(
-        agent,
-        http_client,
-        Some(&image_base64),
-        Some(&mime_type),
+    let http_client = reqwest::Client::new();
+    let analysis = vision_llm::process_image_with_context(
+        &http_client,
+        &image_base64,
+        &mime_type,
         &enriched_prompt,
         config,
     )

@@ -116,22 +116,30 @@ async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String
     })
 }
 
-// Perform OCR on a base64-encoded image (for pasted images)
+// Perform contextual image analysis on a base64-encoded image
+// If user_query is provided, analyses image in context of the question
+// Otherwise uses a default description prompt
 #[tauri::command]
 async fn ocr_image(
     app_handle: AppHandle,
-    state: tauri::State<'_, AppState>,
+    _state: tauri::State<'_, AppState>,
     image_base64: String,
     mime_type: Option<String>,
+    user_query: Option<String>,
 ) -> Result<String, String> {
     // Load config for API keys
     let config = config::load_config(&app_handle)?;
 
     let mime = mime_type.unwrap_or_else(|| "image/png".to_string());
 
-    // Use Vision LLM for OCR instead of Tesseract
+    // Use the user's query or a default description prompt
+    let query = user_query.unwrap_or_else(|| {
+        "Describe this image in detail, including any visible text.".to_string()
+    });
+
+    // Use contextual Vision LLM for image understanding
     let http_client = reqwest::Client::new();
-    vision_llm::describe_image(&state.agent, &http_client, &image_base64, &mime, &config).await
+    vision_llm::process_image_with_context(&http_client, &image_base64, &mime, &query, &config).await
 }
 
 #[tauri::command]
@@ -294,8 +302,7 @@ async fn capture_screen_context(
         return Err("Screen context disabled in incognito mode".to_string());
     }
 
-    let http_client = reqwest::Client::new();
-    let context = screen_context::capture_and_analyze(&state.agent, &http_client, &config).await?;
+    let context = screen_context::capture_and_analyze(&state.agent, &config).await?;
 
     // Emit event to frontend
     app_handle.emit("screen-context-ready", &context).ok();
@@ -377,14 +384,9 @@ pub fn run() {
                             if let Ok(config) = config::load_config(&app_handle_clone) {
                                 if config.enable_screen_context.unwrap_or(false)
                                    && !config.incognito_mode.unwrap_or(false) {
-                                    let http_client = reqwest::Client::builder()
-                                        .timeout(std::time::Duration::from_secs(30))
-                                        .build()
-                                        .unwrap_or_else(|_| reqwest::Client::new());
-
                                     // Get Agent from state
                                     let state = app_handle_clone.state::<AppState>();
-                                    match screen_context::capture_and_analyze(&state.agent, &http_client, &config).await {
+                                    match screen_context::capture_and_analyze(&state.agent, &config).await {
                                         Ok(context) => {
                                             log::info!("[ScreenContext] Captured {} suggestions", context.suggestions.len());
                                             app_handle_clone.emit("screen-context-ready", &context).ok();
