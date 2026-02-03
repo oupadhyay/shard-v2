@@ -7,19 +7,19 @@ const CONFIG_FILENAME: &str = "config.toml";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppConfig {
-    // API keys - stored in OS keyring, NOT in config.toml
-    // skip_serializing prevents saving to TOML; default allows reading for migration
-    #[serde(skip_serializing, default)]
+    // API keys - stored in OS keyring at runtime, but serializable to frontend
+    // Note: These are manually cleared before saving to TOML (see save_config_internal)
+    #[serde(default)]
     pub api_key: Option<String>,
-    #[serde(skip_serializing, default)]
+    #[serde(default)]
     pub gemini_api_key: Option<String>,
-    #[serde(skip_serializing, default)]
+    #[serde(default)]
     pub openrouter_api_key: Option<String>,
-    #[serde(skip_serializing, default)]
+    #[serde(default)]
     pub cerebras_api_key: Option<String>,
-    #[serde(skip_serializing, default)]
+    #[serde(default)]
     pub brave_api_key: Option<String>,
-    #[serde(skip_serializing, default)]
+    #[serde(default)]
     pub groq_api_key: Option<String>,
 
     // Non-sensitive settings - stored in config.toml
@@ -153,6 +153,7 @@ pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, S
 }
 
 /// Internal save that just writes TOML (no keyring interaction)
+/// Clears API keys before serialization to prevent saving sensitive data to disk
 fn save_config_internal(config_path: &PathBuf, config: &AppConfig) -> Result<(), String> {
     if let Some(parent_dir) = config_path.parent() {
         if !parent_dir.exists() {
@@ -160,8 +161,18 @@ fn save_config_internal(config_path: &PathBuf, config: &AppConfig) -> Result<(),
                 .map_err(|e| format!("Failed to create config directory: {}", e))?;
         }
     }
-    let toml_string =
-        toml::to_string_pretty(config).map_err(|e| format!("Failed to serialize config: {}", e))?;
+
+    // Clone and clear API keys before serializing to TOML
+    let mut config_for_toml = config.clone();
+    config_for_toml.api_key = None;
+    config_for_toml.gemini_api_key = None;
+    config_for_toml.openrouter_api_key = None;
+    config_for_toml.cerebras_api_key = None;
+    config_for_toml.brave_api_key = None;
+    config_for_toml.groq_api_key = None;
+
+    let toml_string = toml::to_string_pretty(&config_for_toml)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
     fs::write(config_path, toml_string).map_err(|e| format!("Failed to write config file: {}", e))
 }
 
@@ -169,6 +180,10 @@ pub fn save_config<R: Runtime>(app_handle: &AppHandle<R>, config: &AppConfig) ->
     use crate::secrets::{self, ApiKeyType};
 
     // Save API keys to keyring
+    // Only update keyring when explicitly provided:
+    // - Some(non-empty) -> store the key
+    // - Some("") -> delete the key (user cleared it)
+    // - None -> keep existing keyring value (field not provided in partial update)
     let key_saves = [
         (&config.api_key, ApiKeyType::OpenAI),
         (&config.gemini_api_key, ApiKeyType::Gemini),
@@ -181,16 +196,22 @@ pub fn save_config<R: Runtime>(app_handle: &AppHandle<R>, config: &AppConfig) ->
     for (key_value, key_type) in key_saves {
         match key_value {
             Some(value) if !value.is_empty() => {
+                log::info!("[Config] Storing {:?} to keyring (len={})", key_type, value.len());
                 secrets::store_secret(key_type, value)?;
             }
-            _ => {
-                // Delete empty/None keys from keyring
+            Some(_) => {
+                // Empty string = explicit delete
+                log::info!("[Config] Deleting {:?} from keyring (empty value)", key_type);
                 secrets::delete_secret(key_type)?;
+            }
+            None => {
+                // None = not provided, keep existing keyring value
+                log::debug!("[Config] Keeping existing {:?} (not provided)", key_type);
             }
         }
     }
 
-    // Save non-sensitive config to TOML (API keys skipped via serde attribute)
+    // Save non-sensitive config to TOML (API keys cleared before serialization)
     let config_path = get_config_path(app_handle)?;
     save_config_internal(&config_path, config)
 }

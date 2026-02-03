@@ -57,12 +57,23 @@ pub fn store_secret(key_type: ApiKeyType, value: &str) -> Result<(), String> {
         return delete_secret(key_type);
     }
 
+    log::info!("[Secrets] Creating entry for service='{}', account='{}'", SERVICE_NAME, key_type.entry_name());
+
     let entry = Entry::new(SERVICE_NAME, key_type.entry_name())
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+        .map_err(|e| {
+            log::error!("[Secrets] Failed to create entry: {}", e);
+            format!("Failed to create keyring entry: {}", e)
+        })?;
 
     entry
         .set_password(value)
-        .map_err(|e| format!("Failed to store secret in keyring: {}", e))
+        .map_err(|e| {
+            log::error!("[Secrets] Failed to set password: {}", e);
+            format!("Failed to store secret in keyring: {}", e)
+        })?;
+
+    log::info!("[Secrets] Successfully stored {:?}", key_type);
+    Ok(())
 }
 
 /// Retrieve a secret from the OS keyring
@@ -75,13 +86,27 @@ pub fn store_secret(key_type: ApiKeyType, value: &str) -> Result<(), String> {
 /// * `Ok(None)` if no secret exists for this key type
 /// * `Err(String)` if retrieval failed
 pub fn get_secret(key_type: ApiKeyType) -> Result<Option<String>, String> {
+    log::debug!("[Secrets] Getting {:?} from keyring", key_type);
+
     let entry = Entry::new(SERVICE_NAME, key_type.entry_name())
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+        .map_err(|e| {
+            log::error!("[Secrets] Failed to create entry for get: {}", e);
+            format!("Failed to create keyring entry: {}", e)
+        })?;
 
     match entry.get_password() {
-        Ok(password) => Ok(Some(password)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("Failed to retrieve secret from keyring: {}", e)),
+        Ok(password) => {
+            log::info!("[Secrets] Found {:?} (len={})", key_type, password.len());
+            Ok(Some(password))
+        }
+        Err(keyring::Error::NoEntry) => {
+            log::debug!("[Secrets] No entry for {:?}", key_type);
+            Ok(None)
+        }
+        Err(e) => {
+            log::error!("[Secrets] Failed to get {:?}: {}", key_type, e);
+            Err(format!("Failed to retrieve secret from keyring: {}", e))
+        }
     }
 }
 
