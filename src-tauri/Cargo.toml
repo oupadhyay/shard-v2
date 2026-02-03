@@ -41,6 +41,8 @@ urlencoding = "2.1"
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1.12.2"
 lazy_static = "1.4"
+dirs = "5"
+keyring = "3"
 ocr-rs = "2.0.2"
 
 [dev-dependencies]

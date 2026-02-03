@@ -40,6 +40,10 @@ const CAPTURE_DEBOUNCE_MS: u64 = 5000;
 /// Cache TTL for context results
 const CACHE_TTL_MS: u64 = 20000;
 
+/// Environment variable to enable debug screenshot output
+/// Set SHARD_DEBUG_SCREENSHOTS=1 to write screenshots to disk
+const SHARD_DEBUG_SCREENSHOTS_ENV: &str = "SHARD_DEBUG_SCREENSHOTS";
+
 /// Load the OCR engine using bundled PaddleOCR models
 async fn get_ocr_engine(app_handle: &tauri::AppHandle) -> Result<OcrEngine, String> {
     let resource_dir = app_handle.path().resource_dir()
@@ -107,16 +111,21 @@ pub fn capture_screen() -> Result<(String, String, image::RgbImage), String> {
 
     log::info!("[ScreenContext] Captured {}x{} image", width, height);
 
-    // Save FULL resolution debug image in BACKGROUND (shares data with OCR copy)
-    #[cfg(debug_assertions)]
-    {
-        let rgba_data_for_debug = rgba_data_for_ocr.clone(); // Only in debug builds
+    // Save FULL resolution debug image in BACKGROUND (only when env var is set)
+    if std::env::var(SHARD_DEBUG_SCREENSHOTS_ENV).is_ok() {
+        log::warn!("[ScreenContext] DEBUG: Writing full-resolution screenshot to disk");
+        let rgba_data_for_debug = rgba_data_for_ocr.clone();
         std::thread::spawn(move || {
-            let full_debug_path = "/tmp/shard_screen_debug_full.jpg";
-            if let Some(full_rgba) = image::RgbaImage::from_raw(width, height, rgba_data_for_debug) {
-                let _ = image::DynamicImage::ImageRgba8(full_rgba)
-                    .to_rgb8()
-                    .save(full_debug_path);
+            // Use app cache dir instead of world-readable /tmp
+            if let Some(cache_dir) = dirs::cache_dir() {
+                let debug_dir = cache_dir.join("shard").join("debug");
+                let _ = std::fs::create_dir_all(&debug_dir);
+                let full_debug_path = debug_dir.join("shard_screen_debug_full.jpg");
+                if let Some(full_rgba) = image::RgbaImage::from_raw(width, height, rgba_data_for_debug) {
+                    let _ = image::DynamicImage::ImageRgba8(full_rgba)
+                        .to_rgb8()
+                        .save(full_debug_path);
+                }
             }
         });
     }
@@ -153,12 +162,17 @@ pub fn capture_screen() -> Result<(String, String, image::RgbImage), String> {
         .encode_image(&dynamic_image.to_rgb8())
         .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
 
-    // DEBUG: Save resized image to tmp for inspection (also background)
-    #[cfg(debug_assertions)]
-    {
+    // DEBUG: Save resized image for inspection (only when env var is set)
+    if std::env::var(SHARD_DEBUG_SCREENSHOTS_ENV).is_ok() {
+        log::warn!("[ScreenContext] DEBUG: Writing resized screenshot to disk");
         let resized_jpeg = jpeg_data.clone();
         std::thread::spawn(move || {
-            let _ = std::fs::write("/tmp/shard_screen_debug.jpg", resized_jpeg);
+            if let Some(cache_dir) = dirs::cache_dir() {
+                let debug_dir = cache_dir.join("shard").join("debug");
+                let _ = std::fs::create_dir_all(&debug_dir);
+                let debug_path = debug_dir.join("shard_screen_debug.jpg");
+                let _ = std::fs::write(debug_path, resized_jpeg);
+            }
         });
     }
 

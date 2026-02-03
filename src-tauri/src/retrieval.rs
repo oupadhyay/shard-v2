@@ -19,12 +19,25 @@ use tauri::{AppHandle, Manager, Runtime};
 // ============================================================================
 
 /// BM25 inverted index for lexical retrieval
+///
+/// Uses integer document IDs internally for efficiency:
+/// - `inverted_index`: term -> [(internal_doc_id, term_frequency)]
+/// - `doc_id_map`: internal_doc_id -> external_doc_id string
+/// - `id_to_doc`: external_doc_id string -> internal_doc_id (for fast lookup)
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct BM25Index {
-    /// Inverted index: term -> [(doc_id, term_frequency)]
-    pub inverted_index: HashMap<String, Vec<(String, u32)>>,
-    /// Document lengths (in tokens)
-    pub doc_lengths: HashMap<String, u32>,
+    /// Inverted index: term -> [(internal_doc_id, term_frequency)]
+    pub inverted_index: HashMap<String, Vec<(u32, u32)>>,
+    /// Document lengths (in tokens): internal_doc_id -> length
+    pub doc_lengths: HashMap<u32, u32>,
+    /// Reverse lookup: internal_doc_id -> external_doc_id string
+    pub doc_id_map: HashMap<u32, String>,
+    /// Forward lookup: external_doc_id string -> internal_doc_id
+    #[serde(default)]
+    pub id_to_doc: HashMap<String, u32>,
+    /// Next available internal document ID
+    #[serde(default)]
+    pub next_doc_id: u32,
     /// Total token count across all documents (for avg calculation)
     pub total_tokens: u64,
     /// Total document count
@@ -108,14 +121,20 @@ impl BM25Index {
     }
 
     /// Add a document to the index
+    ///
+    /// External doc_id (string) is mapped to internal u32 ID for efficient storage.
     pub fn add_document(&mut self, doc_id: &str, content: &str) {
         let tokens = tokenize(content);
         let doc_length = tokens.len() as u32;
 
         // If document already exists, remove it first
-        if self.doc_lengths.contains_key(doc_id) {
+        if self.id_to_doc.contains_key(doc_id) {
             self.remove_document(doc_id);
         }
+
+        // Assign new internal ID
+        let internal_id = self.next_doc_id;
+        self.next_doc_id += 1;
 
         // Count term frequencies
         let mut term_freqs: HashMap<String, u32> = HashMap::new();
@@ -123,33 +142,41 @@ impl BM25Index {
             *term_freqs.entry(token.clone()).or_insert(0) += 1;
         }
 
-        // Update inverted index
+        // Update inverted index with internal ID
         for (term, freq) in term_freqs {
             self.inverted_index
                 .entry(term)
                 .or_insert_with(Vec::new)
-                .push((doc_id.to_string(), freq));
+                .push((internal_id, freq));
         }
 
-        // Update document stats
-        self.doc_lengths.insert(doc_id.to_string(), doc_length);
+        // Update document stats and mappings
+        self.doc_lengths.insert(internal_id, doc_length);
+        self.doc_id_map.insert(internal_id, doc_id.to_string());
+        self.id_to_doc.insert(doc_id.to_string(), internal_id);
         self.total_tokens += doc_length as u64;
         self.doc_count += 1;
     }
 
     /// Remove a document from the index
     pub fn remove_document(&mut self, doc_id: &str) {
-        if let Some(doc_length) = self.doc_lengths.remove(doc_id) {
-            self.total_tokens = self.total_tokens.saturating_sub(doc_length as u64);
-            self.doc_count = self.doc_count.saturating_sub(1);
+        // Look up internal ID
+        if let Some(internal_id) = self.id_to_doc.remove(doc_id) {
+            if let Some(doc_length) = self.doc_lengths.remove(&internal_id) {
+                self.total_tokens = self.total_tokens.saturating_sub(doc_length as u64);
+                self.doc_count = self.doc_count.saturating_sub(1);
 
-            // Remove from inverted index
-            for postings in self.inverted_index.values_mut() {
-                postings.retain(|(id, _)| id != doc_id);
+                // Remove from inverted index
+                for postings in self.inverted_index.values_mut() {
+                    postings.retain(|(id, _)| *id != internal_id);
+                }
+
+                // Clean up empty terms
+                self.inverted_index.retain(|_, v| !v.is_empty());
             }
 
-            // Clean up empty terms
-            self.inverted_index.retain(|_, v| !v.is_empty());
+            // Remove from reverse lookup
+            self.doc_id_map.remove(&internal_id);
         }
     }
 
@@ -171,6 +198,8 @@ impl BM25Index {
     }
 
     /// Search the index with BM25 scoring
+    ///
+    /// Internally uses u32 IDs for scoring, then maps back to external string IDs.
     pub fn search(&self, query: &str, limit: usize) -> Vec<ScoredDocument> {
         let query_tokens = tokenize(query);
         if query_tokens.is_empty() {
@@ -178,7 +207,8 @@ impl BM25Index {
         }
 
         let avg_dl = self.avg_doc_length();
-        let mut scores: HashMap<String, f32> = HashMap::new();
+        // Use internal u32 IDs for scoring (avoid String allocations during hot loop)
+        let mut scores: HashMap<u32, f32> = HashMap::new();
 
         for token in &query_tokens {
             let idf = self.idf(token);
@@ -187,8 +217,8 @@ impl BM25Index {
             }
 
             if let Some(postings) = self.inverted_index.get(token) {
-                for (doc_id, tf) in postings {
-                    let doc_length = *self.doc_lengths.get(doc_id).unwrap_or(&1) as f32;
+                for (internal_id, tf) in postings {
+                    let doc_length = *self.doc_lengths.get(internal_id).unwrap_or(&1) as f32;
                     let tf_f = *tf as f32;
 
                     // BM25 scoring formula
@@ -196,15 +226,19 @@ impl BM25Index {
                     let denominator = tf_f + BM25_K1 * (1.0 - BM25_B + BM25_B * doc_length / avg_dl);
                     let score = idf * numerator / denominator;
 
-                    *scores.entry(doc_id.clone()).or_insert(0.0) += score;
+                    *scores.entry(*internal_id).or_insert(0.0) += score;
                 }
             }
         }
 
-        // Sort by score descending
+        // Convert internal IDs back to external doc_ids
         let mut results: Vec<ScoredDocument> = scores
             .into_iter()
-            .map(|(doc_id, score)| ScoredDocument { doc_id, score })
+            .filter_map(|(internal_id, score)| {
+                self.doc_id_map.get(&internal_id).map(|doc_id| {
+                    ScoredDocument { doc_id: doc_id.clone(), score }
+                })
+            })
             .collect();
 
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
@@ -439,11 +473,12 @@ pub fn prune_bm25_index<R: Runtime>(
     let mut index = load_bm25_index(app_handle)?;
     let initial_count = index.doc_count as usize;
 
-    // Parse doc_ids as timestamps and remove old ones
+    // Parse external doc_ids (RFC3339 timestamps) and remove old ones
     let cutoff = chrono::Utc::now() - chrono::Duration::days(max_age_days);
     let mut to_remove: Vec<String> = Vec::new();
 
-    for doc_id in index.doc_lengths.keys() {
+    // Iterate over doc_id_map values (external string IDs = timestamps)
+    for doc_id in index.doc_id_map.values() {
         if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(doc_id) {
             if ts < cutoff {
                 to_remove.push(doc_id.clone());
@@ -457,7 +492,8 @@ pub fn prune_bm25_index<R: Runtime>(
 
     // If still over max_docs, remove oldest
     if index.doc_count as usize > max_docs {
-        let mut doc_ids: Vec<_> = index.doc_lengths.keys().cloned().collect();
+        // Collect external doc_ids and sort chronologically
+        let mut doc_ids: Vec<String> = index.doc_id_map.values().cloned().collect();
         doc_ids.sort(); // RFC3339 timestamps sort chronologically
 
         let to_trim = index.doc_count as usize - max_docs;
@@ -524,7 +560,7 @@ mod tests {
 
         index.remove_document("doc1");
         assert_eq!(index.doc_count, 1);
-        assert!(!index.doc_lengths.contains_key("doc1"));
+        assert!(!index.id_to_doc.contains_key("doc1"));
     }
 
     #[test]
