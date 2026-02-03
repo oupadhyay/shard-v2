@@ -289,15 +289,18 @@ pub async fn rebuild_topic_index<R: Runtime>(
     http_client: &reqwest::Client,
     api_key: &str,
 ) -> Result<usize, String> {
+    use futures::StreamExt;
+
     let topics_dir = get_topics_dir(app_handle)?;
     let mut new_index = TopicIndex {
         topics: std::collections::HashMap::new(),
     };
-    let mut count = 0;
 
     let entries = fs::read_dir(&topics_dir)
         .map_err(|e| format!("Failed to read topics dir: {}", e))?;
 
+    // Collect all topics to process
+    let mut topics_to_process: Vec<(String, String)> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
 
@@ -307,27 +310,48 @@ pub async fn rebuild_topic_index<R: Runtime>(
         }
 
         if let Some(topic) = path.file_stem().and_then(|s| s.to_str()) {
-            let content = fs::read_to_string(&path)
-                .map_err(|e| format!("Failed to read {}: {}", topic, e))?;
-
-            // Generate embedding
-            let embedding_text = format!(
-                "Topic: {}\nContent: {}",
-                topic,
-                content.chars().take(1000).collect::<String>()
-            );
-            let embedding =
-                crate::interactions::generate_embedding(http_client, &embedding_text, api_key)
-                    .await?;
-
-            new_index.topics.insert(topic.to_string(), embedding);
-            count += 1;
-            log::info!("[Index] Rebuilt embedding for topic: {}", topic);
+            if let Ok(content) = fs::read_to_string(&path) {
+                let embedding_text = format!(
+                    "Topic: {}\nContent: {}",
+                    topic,
+                    content.chars().take(1000).collect::<String>()
+                );
+                topics_to_process.push((topic.to_string(), embedding_text));
+            }
         }
     }
 
+    let count = topics_to_process.len();
+
+    // Process embeddings concurrently with limit of 4 to avoid rate limiting
+    let results: Vec<_> = futures::stream::iter(topics_to_process)
+        .map(|(topic, text)| {
+            let client = http_client.clone();
+            let key = api_key.to_string();
+            async move {
+                match crate::interactions::generate_embedding(&client, &text, &key).await {
+                    Ok(embedding) => {
+                        log::info!("[Index] Rebuilt embedding for topic: {}", topic);
+                        Some((topic, embedding))
+                    }
+                    Err(e) => {
+                        log::error!("[Index] Failed to generate embedding for {}: {}", topic, e);
+                        None
+                    }
+                }
+            }
+        })
+        .buffer_unordered(4) // Concurrency limit
+        .collect()
+        .await;
+
+    // Insert successful results into index
+    for result in results.into_iter().flatten() {
+        new_index.topics.insert(result.0, result.1);
+    }
+
     save_topic_index(app_handle, &new_index)?;
-    log::info!("[Index] Rebuilt index with {} topics", count);
+    log::info!("[Index] Rebuilt index with {} topics", new_index.topics.len());
     Ok(count)
 }
 
@@ -652,8 +676,8 @@ pub async fn rebuild_insight_index<R: Runtime>(
     Ok(count)
 }
 
-/// Load memories from disk
-pub fn load_memories<R: Runtime>(app_handle: &AppHandle<R>) -> Result<MemoryStore, String> {
+/// Load memories from disk (bypassing cache)
+pub fn load_memories_from_disk<R: Runtime>(app_handle: &AppHandle<R>) -> Result<MemoryStore, String> {
     let memories_dir = get_memories_dir(app_handle)?;
     let json_path = memories_dir.join(MEMORIES_FILENAME);
 
@@ -668,8 +692,35 @@ pub fn load_memories<R: Runtime>(app_handle: &AppHandle<R>) -> Result<MemoryStor
         .map_err(|e| format!("Failed to parse memories JSON: {}", e))
 }
 
-/// Save memories to disk (both JSON and human-readable MD)
+/// Load memories, using cache if available
+pub fn load_memories<R: Runtime>(app_handle: &AppHandle<R>) -> Result<MemoryStore, String> {
+    // Try to get from cache first
+    let state = app_handle.state::<crate::AppState>();
+    if let Ok(guard) = state.memory_store.read() {
+        if let Some(store) = &*guard {
+            return Ok(store.clone());
+        }
+    }
+
+    // Fallback to disk if cache empty (should happen only once at startup)
+    let store = load_memories_from_disk(app_handle)?;
+
+    // Update cache
+    if let Ok(mut guard) = state.memory_store.write() {
+        *guard = Some(store.clone());
+    }
+
+    Ok(store)
+}
+
+/// Save memories to disk and update cache
 pub fn save_memories<R: Runtime>(app_handle: &AppHandle<R>, store: &MemoryStore) -> Result<(), String> {
+    // Update cache first
+    let state = app_handle.state::<crate::AppState>();
+    if let Ok(mut guard) = state.memory_store.write() {
+        *guard = Some(store.clone());
+    }
+
     let memories_dir = get_memories_dir(app_handle)?;
 
     // Save JSON (source of truth)
@@ -700,6 +751,7 @@ pub fn add_memory<R: Runtime>(
     content: String,
     importance: u8,
 ) -> Result<Memory, String> {
+    // Load will check cache
     let mut store = load_memories(app_handle)?;
 
     let memory = Memory::new(category, content, importance);

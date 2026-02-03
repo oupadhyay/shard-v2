@@ -44,10 +44,11 @@ lazy_static = "1.4"
 dirs = "5"
 keyring = { version = "3", features = ["apple-native"] }
 ocr-rs = "2.0.2"
+futures = "0.3.31"
 
 [dev-dependencies]
 tempfile = "3"
-criterion = "0.5"
+criterion = { version = "0.5", features = ["async_tokio"] }
 dotenvy = "0.15"
 
 [[bench]]
@@ -61,3 +62,8 @@ harness = false
 [[bench]]
 name = "screen_context_bench"
 harness = false
+
+[[bench]]
+name = "optimizations_bench"
+harness = false
+

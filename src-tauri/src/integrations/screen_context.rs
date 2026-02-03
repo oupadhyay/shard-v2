@@ -103,25 +103,23 @@ pub fn capture_screen() -> Result<(String, String, image::RgbImage), String> {
     let width = image.width();
     let height = image.height();
 
-    // OPTIMIZATION: Only 2 copies instead of 3
-    // Copy 1: For resize/encode processing (will be consumed)
-    // Copy 2: For OCR return value (full resolution)
-    let rgba_data_for_ocr = image.rgba().to_vec();
-    let rgba_data_for_resize = rgba_data_for_ocr.clone();
+    // OPTIMIZATION: Use Arc to share image data without cloning ~33MB
+    // Only 1 actual copy of the data, shared via Arc
+    let rgba_data = std::sync::Arc::new(image.rgba().to_vec());
 
     log::info!("[ScreenContext] Captured {}x{} image", width, height);
 
     // Save FULL resolution debug image in BACKGROUND (only when env var is set)
     if std::env::var(SHARD_DEBUG_SCREENSHOTS_ENV).is_ok() {
         log::warn!("[ScreenContext] DEBUG: Writing full-resolution screenshot to disk");
-        let rgba_data_for_debug = rgba_data_for_ocr.clone();
+        let rgba_data_for_debug = std::sync::Arc::clone(&rgba_data);
         std::thread::spawn(move || {
             // Use app cache dir instead of world-readable /tmp
             if let Some(cache_dir) = dirs::cache_dir() {
                 let debug_dir = cache_dir.join("shard").join("debug");
                 let _ = std::fs::create_dir_all(&debug_dir);
                 let full_debug_path = debug_dir.join("shard_screen_debug_full.jpg");
-                if let Some(full_rgba) = image::RgbaImage::from_raw(width, height, rgba_data_for_debug) {
+                if let Some(full_rgba) = image::RgbaImage::from_raw(width, height, (*rgba_data_for_debug).clone()) {
                     let _ = image::DynamicImage::ImageRgba8(full_rgba)
                         .to_rgb8()
                         .save(full_debug_path);
@@ -130,8 +128,8 @@ pub fn capture_screen() -> Result<(String, String, image::RgbImage), String> {
         });
     }
 
-    // Create image buffer for resize processing
-    let rgba_image = image::RgbaImage::from_raw(width, height, rgba_data_for_resize)
+    // Create image buffer for resize processing (need to clone for ownership)
+    let rgba_image = image::RgbaImage::from_raw(width, height, (*rgba_data).clone())
         .ok_or("Failed to create image buffer")?;
 
     // Resize to max 1280px width for faster processing
@@ -178,8 +176,8 @@ pub fn capture_screen() -> Result<(String, String, image::RgbImage), String> {
 
     let base64_data = base64::engine::general_purpose::STANDARD.encode(&jpeg_data);
 
-    // Return FULL RESOLUTION image for OCR (using the original copy)
-    let full_res_rgb = image::RgbaImage::from_raw(width, height, rgba_data_for_ocr)
+    // Return FULL RESOLUTION image for OCR (using the Arc shared data)
+    let full_res_rgb = image::RgbaImage::from_raw(width, height, (*rgba_data).clone())
         .ok_or("Failed to recreate full res image")?;
     let full_res_rgb = image::DynamicImage::ImageRgba8(full_res_rgb).to_rgb8();
 

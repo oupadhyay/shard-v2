@@ -3,7 +3,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{
     self as tauri_gs, GlobalShortcutExt, Shortcut,
 };
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // Stream cancellation system
@@ -16,7 +16,7 @@ mod tools;
 mod prompts;
 mod agent;
 mod gemini_files;
-mod memories;
+pub mod memories;
 mod interactions;
 mod background;
 mod cache;
@@ -33,8 +33,9 @@ use integrations::screen_context;
 use agent::Agent;
 
 // --- State Management ---
-struct AppState {
-    agent: Arc<Agent>,
+pub struct AppState {
+    pub agent: Arc<Agent>,
+    pub memory_store: Arc<RwLock<Option<memories::MemoryStore>>>,
 }
 
 // --- Commands ---
@@ -334,7 +335,14 @@ pub fn run() {
             background::start_background_jobs(app.handle().clone());
 
             let agent = Arc::new(Agent::new(app.handle().clone()));
-            app.manage(AppState { agent });
+            // Initialize memory store cache
+            let memory_store = Arc::new(RwLock::new(None));
+            // Load memories immediately
+            if let Ok(store) = memories::load_memories_from_disk(&app.handle().clone()) {
+                *memory_store.write().unwrap() = Some(store);
+            }
+
+            app.manage(AppState { agent, memory_store });
 
             // Setup Panel (macOS)
             #[cfg(target_os = "macos")]

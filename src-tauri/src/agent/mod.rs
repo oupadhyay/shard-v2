@@ -1416,8 +1416,9 @@ impl Agent {
 
                     // Rebuild request for OpenRouter
                     let openrouter_url = "https://openrouter.ai/api/v1/chat/completions";
-                    // Use GPT-OSS-120b on OpenRouter as fallback
-                    let fallback_model = "openai/gpt-oss-120b:free".to_string();
+                    // Use configured fallback model or default
+                    let fallback_model = config.fallback_model.clone()
+                        .unwrap_or_else(|| "openai/gpt-oss-120b:free".to_string());
 
                     let fallback_body = ChatCompletionRequest {
                         model: fallback_model,

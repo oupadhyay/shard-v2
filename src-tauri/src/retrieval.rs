@@ -479,9 +479,13 @@ pub fn prune_bm25_index<R: Runtime>(
 
     // Iterate over doc_id_map values (external string IDs = timestamps)
     for doc_id in index.doc_id_map.values() {
-        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(doc_id) {
-            if ts < cutoff {
+        match chrono::DateTime::parse_from_rfc3339(doc_id) {
+            Ok(ts) if ts < cutoff => {
                 to_remove.push(doc_id.clone());
+            }
+            Ok(_) => {}
+            Err(e) => {
+                log::warn!("[BM25] Malformed doc_id (not RFC3339): {} - {}", doc_id, e);
             }
         }
     }

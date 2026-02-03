@@ -41,6 +41,9 @@ pub struct AppConfig {
     pub enable_compaction: Option<bool>,       // Default: true
     pub compaction_threshold: Option<f32>,     // Default: 0.5 (50%)
     pub compaction_preserve_turns: Option<u32>, // Default: 5
+    // Fallback model for quota errors
+    #[serde(default)]
+    pub fallback_model: Option<String>,        // Default: openai/gpt-oss-120b:free
 }
 
 impl Default for AppConfig {
@@ -70,6 +73,8 @@ impl Default for AppConfig {
             enable_compaction: Some(true),
             compaction_threshold: Some(0.5),
             compaction_preserve_turns: Some(5),
+            // Fallback model for quota errors
+            fallback_model: Some("openai/gpt-oss-120b:free".to_string()),
         }
     }
 }
