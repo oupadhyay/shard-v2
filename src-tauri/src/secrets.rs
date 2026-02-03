@@ -5,14 +5,21 @@
 /// - macOS: Keychain
 /// - Linux: Secret Service (GNOME Keyring, KWallet)
 /// - Windows: Credential Manager
+///
+/// All keys are stored in a single JSON entry to minimize password prompts.
 
 use keyring::Entry;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Service name for all Shard secrets in the OS keyring
 const SERVICE_NAME: &str = "dev.shard.app";
+/// Single entry name for all API keys (stored as JSON)
+const ENTRY_NAME: &str = "api_keys";
 
 /// Supported API key types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ApiKeyType {
     /// Generic OpenAI-compatible API key
     OpenAI,
@@ -29,8 +36,8 @@ pub enum ApiKeyType {
 }
 
 impl ApiKeyType {
-    /// Get the keyring entry name for this key type
-    fn entry_name(&self) -> &'static str {
+    /// Get the JSON key name for this key type
+    fn key_name(&self) -> &'static str {
         match self {
             ApiKeyType::OpenAI => "api_key",
             ApiKeyType::Gemini => "gemini_api_key",
@@ -42,104 +49,145 @@ impl ApiKeyType {
     }
 }
 
-/// Store a secret in the OS keyring
-///
-/// # Arguments
-/// * `key_type` - The type of API key to store
-/// * `value` - The secret value to store
-///
-/// # Returns
-/// * `Ok(())` if the secret was stored successfully
-/// * `Err(String)` if storage failed
-pub fn store_secret(key_type: ApiKeyType, value: &str) -> Result<(), String> {
-    if value.is_empty() {
-        // Don't store empty values, just delete any existing entry
-        return delete_secret(key_type);
+/// Internal storage structure for all API keys
+type ApiKeysStore = HashMap<String, String>;
+
+/// Load all API keys from keyring
+fn load_all_keys() -> Result<ApiKeysStore, String> {
+    let entry = Entry::new(SERVICE_NAME, ENTRY_NAME)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+
+    match entry.get_password() {
+        Ok(json) => {
+            serde_json::from_str(&json)
+                .map_err(|e| format!("Failed to parse keyring data: {}", e))
+        }
+        Err(keyring::Error::NoEntry) => Ok(HashMap::new()),
+        Err(e) => Err(format!("Failed to read keyring: {}", e)),
+    }
+}
+
+/// Old entry names from the pre-consolidation format
+const OLD_ENTRY_NAMES: &[(&str, ApiKeyType)] = &[
+    ("api_key", ApiKeyType::OpenAI),
+    ("gemini_api_key", ApiKeyType::Gemini),
+    ("openrouter_api_key", ApiKeyType::OpenRouter),
+    ("cerebras_api_key", ApiKeyType::Cerebras),
+    ("brave_api_key", ApiKeyType::Brave),
+    ("groq_api_key", ApiKeyType::Groq),
+];
+
+/// Migrate old separate keychain entries to new consolidated format.
+/// Call this on app startup to handle users upgrading from old versions.
+pub fn migrate_legacy_entries() {
+    let mut migrated_keys: ApiKeysStore = HashMap::new();
+    let mut entries_to_delete: Vec<Entry> = Vec::new();
+
+    // First pass: collect all keys from old entries (don't delete yet)
+    for (old_name, key_type) in OLD_ENTRY_NAMES {
+        if let Ok(entry) = Entry::new(SERVICE_NAME, old_name) {
+            if let Ok(password) = entry.get_password() {
+                if !password.is_empty() {
+                    log::info!("[Secrets] Found legacy entry: {}", old_name);
+                    migrated_keys.insert(key_type.key_name().to_string(), password);
+                    entries_to_delete.push(entry);
+                }
+            }
+        }
     }
 
-    log::info!("[Secrets] Creating entry for service='{}', account='{}'", SERVICE_NAME, key_type.entry_name());
+    if migrated_keys.is_empty() {
+        return; // No legacy entries to migrate
+    }
 
-    let entry = Entry::new(SERVICE_NAME, key_type.entry_name())
-        .map_err(|e| {
-            log::error!("[Secrets] Failed to create entry: {}", e);
-            format!("Failed to create keyring entry: {}", e)
-        })?;
+    // Merge with any existing consolidated keys
+    if let Ok(existing) = load_all_keys() {
+        for (k, v) in existing {
+            migrated_keys.entry(k).or_insert(v);
+        }
+    }
 
-    entry
-        .set_password(value)
-        .map_err(|e| {
-            log::error!("[Secrets] Failed to set password: {}", e);
-            format!("Failed to store secret in keyring: {}", e)
-        })?;
+    // Save the merged result - only proceed with deletion if this succeeds
+    match save_all_keys(&migrated_keys) {
+        Ok(()) => {
+            log::info!("[Secrets] Migration saved: {} keys consolidated", migrated_keys.len());
+            let count = entries_to_delete.len();
+            // Now safe to delete old entries
+            for entry in entries_to_delete {
+                if let Err(e) = entry.delete_credential() {
+                    if !matches!(e, keyring::Error::NoEntry) {
+                        log::warn!("[Secrets] Failed to delete legacy entry: {}", e);
+                    }
+                }
+            }
+            log::info!("[Secrets] Migration complete: deleted {} legacy entries", count);
+        }
+        Err(e) => {
+            log::error!("[Secrets] Migration failed, keeping legacy entries: {}", e);
+            // Don't delete old entries - they're still the only copies!
+        }
+    }
+}
 
-    log::info!("[Secrets] Successfully stored {:?}", key_type);
-    Ok(())
+/// Save all API keys to keyring
+fn save_all_keys(keys: &ApiKeysStore) -> Result<(), String> {
+    let entry = Entry::new(SERVICE_NAME, ENTRY_NAME)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+
+    if keys.is_empty() {
+        // Delete entry if no keys
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(format!("Failed to delete keyring entry: {}", e)),
+        }
+    } else {
+        let json = serde_json::to_string(keys)
+            .map_err(|e| format!("Failed to serialize keys: {}", e))?;
+        entry.set_password(&json)
+            .map_err(|e| format!("Failed to save keyring: {}", e))
+    }
+}
+
+/// Store a secret in the OS keyring
+pub fn store_secret(key_type: ApiKeyType, value: &str) -> Result<(), String> {
+    let mut keys = load_all_keys()?;
+
+    if value.is_empty() {
+        keys.remove(key_type.key_name());
+        log::info!("[Secrets] Removed {:?} from keyring", key_type);
+    } else {
+        keys.insert(key_type.key_name().to_string(), value.to_string());
+        log::info!("[Secrets] Stored {:?} (len={})", key_type, value.len());
+    }
+
+    save_all_keys(&keys)
 }
 
 /// Retrieve a secret from the OS keyring
-///
-/// # Arguments
-/// * `key_type` - The type of API key to retrieve
-///
-/// # Returns
-/// * `Ok(Some(String))` if the secret was found
-/// * `Ok(None)` if no secret exists for this key type
-/// * `Err(String)` if retrieval failed
 pub fn get_secret(key_type: ApiKeyType) -> Result<Option<String>, String> {
-    log::debug!("[Secrets] Getting {:?} from keyring", key_type);
+    let keys = load_all_keys()?;
+    let result = keys.get(key_type.key_name()).cloned();
 
-    let entry = Entry::new(SERVICE_NAME, key_type.entry_name())
-        .map_err(|e| {
-            log::error!("[Secrets] Failed to create entry for get: {}", e);
-            format!("Failed to create keyring entry: {}", e)
-        })?;
-
-    match entry.get_password() {
-        Ok(password) => {
-            log::info!("[Secrets] Found {:?} (len={})", key_type, password.len());
-            Ok(Some(password))
-        }
-        Err(keyring::Error::NoEntry) => {
-            log::debug!("[Secrets] No entry for {:?}", key_type);
-            Ok(None)
-        }
-        Err(e) => {
-            log::error!("[Secrets] Failed to get {:?}: {}", key_type, e);
-            Err(format!("Failed to retrieve secret from keyring: {}", e))
-        }
+    if let Some(ref v) = result {
+        log::debug!("[Secrets] Found {:?} (len={})", key_type, v.len());
     }
+
+    Ok(result)
 }
 
 /// Delete a secret from the OS keyring
-///
-/// # Arguments
-/// * `key_type` - The type of API key to delete
-///
-/// # Returns
-/// * `Ok(())` if the secret was deleted or didn't exist
-/// * `Err(String)` if deletion failed
 pub fn delete_secret(key_type: ApiKeyType) -> Result<(), String> {
-    let entry = Entry::new(SERVICE_NAME, key_type.entry_name())
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
-
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()), // Already deleted, that's fine
-        Err(e) => Err(format!("Failed to delete secret from keyring: {}", e)),
-    }
+    store_secret(key_type, "")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Note: These tests interact with the real OS keyring
-    // They use a unique test service name to avoid conflicts
-
     #[test]
-    fn test_api_key_type_entry_names() {
-        assert_eq!(ApiKeyType::OpenAI.entry_name(), "api_key");
-        assert_eq!(ApiKeyType::Gemini.entry_name(), "gemini_api_key");
-        assert_eq!(ApiKeyType::OpenRouter.entry_name(), "openrouter_api_key");
+    fn test_api_key_type_key_names() {
+        assert_eq!(ApiKeyType::OpenAI.key_name(), "api_key");
+        assert_eq!(ApiKeyType::Gemini.key_name(), "gemini_api_key");
+        assert_eq!(ApiKeyType::OpenRouter.key_name(), "openrouter_api_key");
     }
 }

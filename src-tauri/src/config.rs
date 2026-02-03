@@ -85,6 +85,9 @@ pub fn get_config_path<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf,
 pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, String> {
     use crate::secrets::{self, ApiKeyType};
 
+    // Migrate old separate keychain entries to consolidated format (one-time)
+    secrets::migrate_legacy_entries();
+
     let config_path = get_config_path(app_handle)?;
     let mut loaded = if !config_path.exists() {
         AppConfig::default()
