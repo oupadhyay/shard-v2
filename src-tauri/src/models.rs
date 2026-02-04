@@ -89,6 +89,14 @@ pub fn get_chat_models() -> Vec<ModelInfo> {
             supports_tools: true,
             supports_vision: false, // Text-only model
         },
+        ModelInfo {
+            id: "stepfun/step-3.5-flash:free".to_string(),
+            display_name: "Stepfun 3.5 Flash".to_string(),
+            provider: Provider::OpenRouter,
+            category: Category::Chat,
+            supports_tools: true,
+            supports_vision: false, // Text-only model
+        },
         // Gemma 3 27B removed from chat to avoid hitting free tier rate limit
         // (used internally for vision processing in vision_llm.rs)
         ModelInfo {
