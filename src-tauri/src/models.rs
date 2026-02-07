@@ -82,6 +82,14 @@ pub fn get_chat_models() -> Vec<ModelInfo> {
         },
         // OpenRouter
         ModelInfo {
+            id: "openrouter/free".to_string(),
+            display_name: "Auto (free)".to_string(),
+            provider: Provider::OpenRouter,
+            category: Category::Chat,
+            supports_tools: true,
+            supports_vision: true, // Router filters for vision support if images are sent
+        },
+        ModelInfo {
             id: "openai/gpt-oss-120b:free".to_string(),
             display_name: "GPT-OSS 120B".to_string(),
             provider: Provider::OpenRouter,
@@ -203,6 +211,14 @@ pub fn get_background_models() -> Vec<ModelInfo> {
             supports_vision: false, // Text-only
         },
         // OpenRouter
+        ModelInfo {
+            id: "openrouter/free".to_string(),
+            display_name: "Auto (free)".to_string(),
+            provider: Provider::OpenRouter,
+            category: Category::Background,
+            supports_tools: true,
+            supports_vision: true,
+        },
         ModelInfo {
             id: "google/gemma-3-27b-it:free (OpenRouter)".to_string(),
             display_name: "Gemma 3-27B (OpenRouter)".to_string(),

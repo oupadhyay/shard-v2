@@ -1545,7 +1545,7 @@ modelInput.addEventListener("change", updateToolAvailability);
 const getProvider = (model: string): string | null => {
   if (model.includes("(Groq)")) return "groq";
   if (model.includes("(Cerebras)")) return "cerebras";
-  if (model.includes("(OpenRouter)")) return "openrouter";
+  if (model.includes("(OpenRouter)") || model.includes("/")) return "openrouter";
   return null;
 };
 
