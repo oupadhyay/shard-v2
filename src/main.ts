@@ -1542,16 +1542,14 @@ const updateToolAvailability = () => {
 modelInput.addEventListener("change", updateToolAvailability);
 
 // Provider conflict detection
-const getProvider = (model: string): string | null => {
-  if (model.includes("(Groq)")) return "groq";
-  if (model.includes("(Cerebras)")) return "cerebras";
-  if (model.includes("(OpenRouter)")) return "openrouter";
-  return null;
+const getProvider = (selectEl: HTMLSelectElement): string | null => {
+  const selectedOption = selectEl.options[selectEl.selectedIndex];
+  return selectedOption?.dataset.provider || null;
 };
 
 const checkProviderConflict = () => {
-  const chatProvider = getProvider(modelInput.value);
-  const bgProvider = getProvider(backgroundModelInput.value);
+  const chatProvider = getProvider(modelInput);
+  const bgProvider = getProvider(backgroundModelInput);
 
   if (chatProvider && bgProvider && chatProvider === bgProvider) {
     providerConflictWarning.style.display = "block";
@@ -1617,6 +1615,7 @@ function populateModelDropdown(
       const option = document.createElement("option");
       option.value = model.id;
       option.textContent = model.display_name;
+      option.dataset.provider = model.provider;
       optgroup.appendChild(option);
     }
 
