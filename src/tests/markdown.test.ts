@@ -1,11 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   detectUnrenderedLatex,
   preprocessMarkdown,
   clearKatexErrors,
   getKatexErrors,
   hasKatexErrors,
-  md
 } from '../ui/markdown';
 
 describe('Markdown Utilities', () => {
@@ -113,18 +112,9 @@ describe('Markdown Utilities', () => {
       expect(getKatexErrors()).toEqual([]);
     });
 
-    it('should track errors via errorCallback', () => {
-      // Simulate KaTeX errorCallback invocation (as would happen during md.render)
-      // In a real browser environment, md.render with invalid LaTeX would trigger this
-      const mockErrorCallback = (msg: string, err: Error) => {
-        // This is what the markdown-it-katex plugin does on errors
-        const errorMsg = `${msg}: ${err.message}`;
-        // Direct push to simulate what the plugin does
-        getKatexErrors().length; // Dummy call to verify getKatexErrors works
-      };
-      
-      // Since jsdom may not fully execute KaTeX parsing, we verify the mechanism
-      // by checking that the error tracking functions work correctly
+    it('should have error tracking functions available', () => {
+      // KaTeX error callback integration is tested manually in dev environment
+      // since jsdom doesn't fully execute KaTeX parsing. This verifies the API exists.
       expect(typeof getKatexErrors).toBe('function');
       expect(typeof hasKatexErrors).toBe('function');
       expect(typeof clearKatexErrors).toBe('function');
