@@ -21,11 +21,22 @@ fn sample_docs(n: usize) -> Vec<(String, String)> {
 fn bench_tokenize(c: &mut Criterion) {
     let text = "This is a sample document with some code like fn main() { println!(\"hello\"); } \
                 Identifiers: snake_case, CamelCase, kebab-case; numbers 12345; unicode café 🚀.";
-    c.bench_function("tokenize/small", |b| b.iter(|| tokenize(black_box(text))));
+
+    let mut group = c.benchmark_group("tokenize");
+
+    group.bench_function("small_mixed", |b| b.iter(|| tokenize(black_box(text))));
+
+    let stopwords_text = "the is a and of in to with for on as at by an be this which or from had has have";
+    group.bench_function("stopwords_heavy", |b| b.iter(|| tokenize(black_box(stopwords_text))));
+
+    let stemming_text = " Foxes are jumping and running while the dogs are barking and sleeping.";
+    group.bench_function("stemming_heavy", |b| b.iter(|| tokenize(black_box(stemming_text))));
+
+    let code_text = "fn my_function_name() { let camelCaseVar = 10; let snake_case_var = 20; }";
+    group.bench_function("code_tokens", |b| b.iter(|| tokenize(black_box(code_text))));
 
     // Larger input to see scaling - use custom config for longer measurement
     let large = text.repeat(1024);
-    let mut group = c.benchmark_group("tokenize");
     group.measurement_time(std::time::Duration::from_secs(10));
     group.bench_function("large_~100KB", |b| {
         b.iter(|| tokenize(black_box(&large)))

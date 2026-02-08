@@ -7,11 +7,28 @@
  * - Hybrid search combining both modalities
  */
 
+use lazy_static::lazy_static;
+use rust_stemmers::{Algorithm, Stemmer};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
+use unicode_segmentation::UnicodeSegmentation;
+
+lazy_static! {
+    /// English stopwords for retrieval
+    static ref STOPWORDS: HashSet<String> = {
+        stop_words::get(stop_words::Language::English)
+            .into_iter()
+            .collect()
+    };
+}
+
+thread_local! {
+    /// English stemmer (not Sync, so we use thread_local)
+    static STEMMER: Stemmer = Stemmer::create(Algorithm::English);
+}
 
 
 // ============================================================================
@@ -87,19 +104,22 @@ const TEMPORAL_TAU_DAYS: f32 = 15.0;
 // Tokenization
 // ============================================================================
 
-/// Simple tokenizer: lowercase, split on whitespace and punctuation
+/// Enhanced tokenizer: uses unicode segmentation, removes stopwords, and applies stemming.
 ///
-/// TODO: Future improvements to consider:
-/// - Use `unicode-segmentation` crate for proper word boundaries
-/// - Add stopword removal (common words like "the", "is", "a")
-/// - Handle code tokens specially (preserve `snake_case`, `camelCase`)
-/// - Consider stemming with `rust-stemmers` crate
-/// - Benchmark performance impact before adding complexity
+/// Improvements:
+/// - Uses `unicode-segmentation` for proper word boundaries (preserving `snake_case`)
+/// - Removes common English stopwords
+/// - Applies Porter stemming using `rust-stemmers`
+/// - Preserves `camelCase` and `snake_case` code tokens
 pub fn tokenize(text: &str) -> Vec<String> {
-    text.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| !s.is_empty() && s.len() > 1) // Skip single chars
-        .map(|s| s.to_string())
+    text.unicode_words()
+        .filter(|word| word.len() > 1) // Skip single characters early
+        .map(|word| word.to_lowercase())
+        .filter(|word| !STOPWORDS.contains(word))
+        .map(|word| {
+            STEMMER.with(|stemmer| stemmer.stem(&word).to_string())
+        })
+        .filter(|word| !word.is_empty())
         .collect()
 }
 
@@ -524,13 +544,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tokenize() {
+    fn test_tokenize_basic() {
         let tokens = tokenize("Hello, World! This is a TEST.");
         assert!(tokens.contains(&"hello".to_string()));
         assert!(tokens.contains(&"world".to_string()));
         assert!(tokens.contains(&"test".to_string()));
-        // Single chars filtered out
+        // Stopwords like "this", "is", "a" should be removed
+        assert!(!tokens.contains(&"this".to_string()));
+        assert!(!tokens.contains(&"is".to_string()));
         assert!(!tokens.contains(&"a".to_string()));
+    }
+
+    #[test]
+    fn test_tokenize_stemming() {
+        let tokens = tokenize("The quick brown foxes are jumping over the lazy dogs.");
+        // foxes -> fox, jumping -> jump, dogs -> dog
+        assert!(tokens.contains(&"fox".to_string()));
+        assert!(tokens.contains(&"jump".to_string()));
+        assert!(tokens.contains(&"dog".to_string()));
+        // lazy -> lazi (Porter stemmer result)
+        assert!(tokens.contains(&"lazi".to_string()));
+    }
+
+    #[test]
+    fn test_tokenize_unicode() {
+        let tokens = tokenize("Café 🚀 and some 漢字");
+        assert!(tokens.contains(&"café".to_string()));
+        // Note: unicode_words() filters out symbols like 🚀
+        assert!(tokens.contains(&"漢字".to_string()));
+    }
+
+    #[test]
+    fn test_tokenize_code_preservation() {
+        let tokens = tokenize("let my_variable_name = camelCaseToken;");
+        assert!(tokens.contains(&"my_variable_name".to_string()));
+        assert!(tokens.contains(&"camelcasetoken".to_string()));
     }
 
     #[test]
