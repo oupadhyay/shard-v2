@@ -538,61 +538,47 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
             // Try new combined format first
             match parse_extraction_response(&response) {
                 Ok(extraction) => {
-                    let gemini_api_key = config.gemini_api_key.as_ref();
-
                     // Process topics
                     for update in extraction.topics {
-                        if let Some(api_key) = gemini_api_key {
-                            match crate::memories::update_topic_summary(
-                                app_handle,
-                                &http_client,
-                                api_key,
-                                &update.topic,
-                                &update.summary,
-                            )
-                            .await
-                            {
-                                Ok(_) => {
-                                    log::info!("[Summary] Updated topic: {}", update.topic);
-                                    topics_updated.push(update.topic);
-                                }
-                                Err(e) => {
-                                    log::warn!(
-                                        "[Summary] Failed to update topic {}: {}",
-                                        update.topic,
-                                        e
-                                    );
-                                }
+                        match crate::memories::update_topic_summary(
+                            app_handle,
+                            &update.topic,
+                            &update.summary,
+                        ) {
+                            Ok(_) => {
+                                log::info!("[Summary] Updated topic: {}", update.topic);
+                                topics_updated.push(update.topic);
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "[Summary] Failed to update topic {}: {}",
+                                    update.topic,
+                                    e
+                                );
                             }
                         }
                     }
 
                     // Process insights
                     for insight in extraction.insights {
-                        if let Some(api_key) = gemini_api_key {
-                            match crate::memories::update_insight(
-                                app_handle,
-                                &http_client,
-                                api_key,
-                                &insight.title,
-                                &insight.content,
-                            )
-                            .await
-                            {
-                                Ok(_) => {
-                                    log::info!(
-                                        "[Summary] Created/Updated insight: {}",
-                                        insight.title
-                                    );
-                                    insights_created.push(insight.title);
-                                }
-                                Err(e) => {
-                                    log::warn!(
-                                        "[Summary] Failed to create insight {}: {}",
-                                        insight.title,
-                                        e
-                                    );
-                                }
+                        match crate::memories::update_insight(
+                            app_handle,
+                            &insight.title,
+                            &insight.content,
+                        ) {
+                            Ok(_) => {
+                                log::info!(
+                                    "[Summary] Created/Updated insight: {}",
+                                    insight.title
+                                );
+                                insights_created.push(insight.title);
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "[Summary] Failed to create insight {}: {}",
+                                    insight.title,
+                                    e
+                                );
                             }
                         }
                     }
@@ -632,20 +618,13 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
                         e
                     );
                     if let Ok(updates) = parse_topic_updates(&response) {
-                        let gemini_api_key = config.gemini_api_key.as_ref();
                         for update in updates {
-                            if let Some(api_key) = gemini_api_key {
-                                if let Ok(_) = crate::memories::update_topic_summary(
-                                    app_handle,
-                                    &http_client,
-                                    api_key,
-                                    &update.topic,
-                                    &update.summary,
-                                )
-                                .await
-                                {
-                                    topics_updated.push(update.topic);
-                                }
+                            if let Ok(_) = crate::memories::update_topic_summary(
+                                app_handle,
+                                &update.topic,
+                                &update.summary,
+                            ) {
+                                topics_updated.push(update.topic);
                             }
                         }
                     }

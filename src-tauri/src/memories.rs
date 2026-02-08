@@ -4,21 +4,23 @@
  * Provides storage and retrieval of user preferences, project context,
  * and interaction summaries across chat sessions.
  */
-
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
-use serde::{Deserialize, Serialize};
+use crate::vector_store::VectorStore;
 
 // ============================================================================
 // Data Structures
 // ============================================================================
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct TopicIndex {
-    pub topics: HashMap<String, Vec<f32>>, // topic_name -> embedding
+    /// Topic names (file stems without .md extension)
+    /// Embeddings are now stored in ChunkIndex, not here
+    pub topics: std::collections::HashSet<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -28,19 +30,59 @@ pub struct InsightIndex {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InsightMeta {
-    pub embedding: Vec<f32>,
-    pub reference_count: u32,  // Track access frequency
-    pub update_count: u32,     // Track how many times information was added (for up-leveling)
+    /// Embeddings are now stored in ChunkIndex, not here
+    pub reference_count: u32, // Track access frequency
+    pub update_count: u32, // Track how many times information was added (for up-leveling)
     pub created_at: DateTime<Utc>,
+}
+
+// ============================================================================
+// Chunk Structures (for granular markdown-aware retrieval)
+// ============================================================================
+
+/// Source type for a chunk (topic or insight)
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceType {
+    Topic,
+    Insight,
+}
+
+/// A chunk of content from a topic or insight file
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Chunk {
+    /// Unique ID: "{source_type}::{source_name}::{index}"
+    pub id: String,
+    /// Whether this came from a topic or insight
+    pub source_type: SourceType,
+    /// Name of the source file (without .md extension)
+    pub source_name: String,
+    /// Section heading (if chunk starts with one)
+    pub heading: Option<String>,
+    /// The chunk text content
+    pub text: String,
+    /// 1-indexed start line in source file
+    pub start_line: u32,
+    /// 1-indexed end line in source file
+    pub end_line: u32,
+    /// 768-dim embedding vector
+    pub embedding: Vec<f32>,
+}
+
+/// Index of all chunks across topics and insights
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ChunkIndex {
+    pub chunks: Vec<Chunk>,
+    pub last_rebuilt: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryCategory {
-    Preference,    // User preferences (units, languages, coding style)
-    Project,       // Project-specific context
-    Interaction,   // Summarized past interactions
-    Fact,          // General facts about the user
+    Preference,  // User preferences (units, languages, coding style)
+    Project,     // Project-specific context
+    Interaction, // Summarized past interactions
+    Fact,        // General facts about the user
 }
 
 impl std::fmt::Display for MemoryCategory {
@@ -76,7 +118,7 @@ impl Memory {
 
     /// Estimate token count for this memory (rough: ~4 chars per token)
     pub fn estimated_tokens(&self) -> usize {
-        (self.content.len() + 20) / 4  // +20 for category/formatting
+        (self.content.len() + 20) / 4 // +20 for category/formatting
     }
 }
 
@@ -131,14 +173,16 @@ impl MemoryStore {
         }
 
         // Sort by importance (ascending) so we remove lowest first
-        self.memories.sort_by(|a, b| a.importance.cmp(&b.importance));
+        self.memories
+            .sort_by(|a, b| a.importance.cmp(&b.importance));
 
         while self.total_tokens() > max_tokens && !self.memories.is_empty() {
             self.memories.remove(0);
         }
 
         // Re-sort by created_at for consistent ordering
-        self.memories.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        self.memories
+            .sort_by(|a, b| a.created_at.cmp(&b.created_at));
     }
 
     /// Format memories as markdown for injection into system prompt
@@ -197,6 +241,13 @@ pub fn get_memories_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf
     Ok(memories_dir)
 }
 
+/// Get a connection to the vector store
+pub fn get_vector_store<R: Runtime>(app_handle: &AppHandle<R>) -> Result<VectorStore, String> {
+    let memories_dir = get_memories_dir(app_handle)?;
+    let db_path = memories_dir.join("memories.sqlite");
+    VectorStore::open(&db_path).map_err(|e| format!("Failed to open vector store: {}", e))
+}
+
 /// Get the path to the topics directory
 pub fn get_topics_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
     let memories_dir = get_memories_dir(app_handle)?;
@@ -218,20 +269,21 @@ fn get_topic_index_path<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf
 fn load_topic_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<TopicIndex, String> {
     let path = get_topic_index_path(app_handle)?;
     if !path.exists() {
-        return Ok(TopicIndex { topics: HashMap::new() });
+        return Ok(TopicIndex::default());
     }
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read topic index: {}", e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse topic index: {}", e))
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read topic index: {}", e))?;
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse topic index: {}", e))
 }
 
-fn save_topic_index<R: Runtime>(app_handle: &AppHandle<R>, index: &TopicIndex) -> Result<(), String> {
+fn save_topic_index<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    index: &TopicIndex,
+) -> Result<(), String> {
     let path = get_topic_index_path(app_handle)?;
     let content = serde_json::to_string_pretty(index)
         .map_err(|e| format!("Failed to serialize topic index: {}", e))?;
-    fs::write(&path, content)
-        .map_err(|e| format!("Failed to write topic index: {}", e))
+    fs::write(&path, content).map_err(|e| format!("Failed to write topic index: {}", e))
 }
 
 /// Read a focused topic summary
@@ -241,41 +293,43 @@ pub fn read_topic_summary<R: Runtime>(
 ) -> Result<String, String> {
     let topics_dir = get_topics_dir(app_handle)?;
     // Sanitize filename
-    let filename = format!("{}.md", topic.trim().replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "_"));
+    let filename = format!(
+        "{}.md",
+        topic
+            .trim()
+            .replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "_")
+    );
     let path = topics_dir.join(filename);
 
     if !path.exists() {
         return Err(format!("Topic summary not found: {}", topic));
     }
 
-    fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read topic summary: {}", e))
+    fs::read_to_string(&path).map_err(|e| format!("Failed to read topic summary: {}", e))
 }
 
-/// Update a focused topic summary (Async, generates embedding)
-pub async fn update_topic_summary<R: Runtime>(
+/// Update a focused topic summary
+/// Note: Embeddings are now in ChunkIndex, call rebuild_chunk_index after updates
+pub fn update_topic_summary<R: Runtime>(
     app_handle: &AppHandle<R>,
-    http_client: &reqwest::Client,
-    api_key: &str,
     topic: &str,
     content: &str,
 ) -> Result<(), String> {
     let topics_dir = get_topics_dir(app_handle)?;
     // Sanitize filename
-    let filename = format!("{}.md", topic.trim().replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "_"));
+    let filename = format!(
+        "{}.md",
+        topic
+            .trim()
+            .replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "_")
+    );
     let path = topics_dir.join(filename);
 
-    fs::write(&path, format!("# {}\n\n{}", topic, content))
-        .map_err(|e| format!("Failed to write topic summary: {}", e))?;
+    fs::write(&path, content).map_err(|e| format!("Failed to write topic: {}", e))?;
 
-    // Generate embedding for the topic content (or just topic name + start of content)
-    // We'll use the first 1000 chars of content to represent the topic semantically
-    let embedding_text = format!("Topic: {}\nContent: {}", topic, content.chars().take(1000).collect::<String>());
-    let embedding = crate::interactions::generate_embedding(http_client, &embedding_text, api_key).await?;
-
-    // Update index
+    // Update index (just track topic names, embeddings are in ChunkIndex)
     let mut index = load_topic_index(app_handle)?;
-    index.topics.insert(topic.to_string(), embedding);
+    index.topics.insert(topic.to_string());
     save_topic_index(app_handle, &index)?;
 
     log::info!("Topic summary updated: {}", topic);
@@ -283,24 +337,14 @@ pub async fn update_topic_summary<R: Runtime>(
 }
 
 /// Rebuild the topic index from all existing .md files in topics directory
-/// Call this after renaming/deleting topic files manually
-pub async fn rebuild_topic_index<R: Runtime>(
-    app_handle: &AppHandle<R>,
-    http_client: &reqwest::Client,
-    api_key: &str,
-) -> Result<usize, String> {
-    use futures::StreamExt;
-
+/// Note: Embeddings are now in ChunkIndex, this just tracks topic file names
+pub fn rebuild_topic_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<usize, String> {
     let topics_dir = get_topics_dir(app_handle)?;
-    let mut new_index = TopicIndex {
-        topics: std::collections::HashMap::new(),
-    };
+    let mut new_index = TopicIndex::default();
 
-    let entries = fs::read_dir(&topics_dir)
-        .map_err(|e| format!("Failed to read topics dir: {}", e))?;
+    let entries =
+        fs::read_dir(&topics_dir).map_err(|e| format!("Failed to read topics dir: {}", e))?;
 
-    // Collect all topics to process
-    let mut topics_to_process: Vec<(String, String)> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
 
@@ -310,88 +354,34 @@ pub async fn rebuild_topic_index<R: Runtime>(
         }
 
         if let Some(topic) = path.file_stem().and_then(|s| s.to_str()) {
-            if let Ok(content) = fs::read_to_string(&path) {
-                let embedding_text = format!(
-                    "Topic: {}\nContent: {}",
-                    topic,
-                    content.chars().take(1000).collect::<String>()
-                );
-                topics_to_process.push((topic.to_string(), embedding_text));
-            }
+            new_index.topics.insert(topic.to_string());
         }
     }
 
-    let count = topics_to_process.len();
-
-    // Process embeddings concurrently with limit of 4 to avoid rate limiting
-    let results: Vec<_> = futures::stream::iter(topics_to_process)
-        .map(|(topic, text)| {
-            let client = http_client.clone();
-            let key = api_key.to_string();
-            async move {
-                match crate::interactions::generate_embedding(&client, &text, &key).await {
-                    Ok(embedding) => {
-                        log::info!("[Index] Rebuilt embedding for topic: {}", topic);
-                        Some((topic, embedding))
-                    }
-                    Err(e) => {
-                        log::error!("[Index] Failed to generate embedding for {}: {}", topic, e);
-                        None
-                    }
-                }
-            }
-        })
-        .buffer_unordered(4) // Concurrency limit
-        .collect()
-        .await;
-
-    // Insert successful results into index
-    for result in results.into_iter().flatten() {
-        new_index.topics.insert(result.0, result.1);
-    }
-
+    let count = new_index.topics.len();
     save_topic_index(app_handle, &new_index)?;
-    log::info!("[Index] Rebuilt index with {} topics", new_index.topics.len());
+    log::info!("[Index] Rebuilt topic index with {} topics", count);
     Ok(count)
 }
 
 /// Find relevant topic summaries based on query embedding (RAG)
-/// Note: Superseded by find_relevant_context() which handles both topics and insights
+/// DEPRECATED: Use find_relevant_chunks() instead - embeddings now in ChunkIndex
 #[allow(dead_code)]
+#[deprecated(note = "Embeddings are now in ChunkIndex, use find_relevant_chunks instead")]
 pub fn find_relevant_topics<R: Runtime>(
     app_handle: &AppHandle<R>,
-    query_embedding: &[f32],
+    _query_embedding: &[f32],
 ) -> Result<Option<(String, String)>, String> {
-    let index = load_topic_index(app_handle)?;
-    let mut best_score = -1.0;
-    let mut best_topic = None;
-
-    for (topic, embedding) in index.topics {
-        let score = crate::interactions::cosine_similarity(query_embedding, &embedding);
-        if score > best_score {
-            best_score = score;
-            best_topic = Some(topic);
-        }
-    }
-
-    // Threshold? User said "first most semantically similar".
-    // But if score is very low, maybe we shouldn't return anything?
-    // Let's set a low threshold like 0.4 to avoid complete noise.
-    if best_score > 0.4 {
-        if let Some(topic) = best_topic {
-            if let Ok(content) = read_topic_summary(app_handle, &topic) {
-                return Ok(Some((topic, content)));
-            }
-        }
-    }
-
+    // This function is deprecated - TopicIndex no longer stores embeddings
+    // Return None to signal callers should use chunk-based search
+    log::warn!("find_relevant_topics is deprecated, use find_relevant_chunks instead");
+    let _ = app_handle; // Suppress unused warning
     Ok(None)
 }
 
 // ============================================================================
 // Insights (Tier 2.5) - Granular atomic facts for specific queries
 // ============================================================================
-
 
 /// Get the path to the insights directory
 pub fn get_insights_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -416,30 +406,30 @@ pub fn load_insight_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Insig
     if !path.exists() {
         return Ok(InsightIndex::default());
     }
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read insight index: {}", e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse insight index: {}", e))
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read insight index: {}", e))?;
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse insight index: {}", e))
 }
 
-pub fn save_insight_index<R: Runtime>(app_handle: &AppHandle<R>, index: &InsightIndex) -> Result<(), String> {
+pub fn save_insight_index<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    index: &InsightIndex,
+) -> Result<(), String> {
     let path = get_insight_index_path(app_handle)?;
     let content = serde_json::to_string_pretty(index)
         .map_err(|e| format!("Failed to serialize insight index: {}", e))?;
-    fs::write(&path, content)
-        .map_err(|e| format!("Failed to write insight index: {}", e))
+    fs::write(&path, content).map_err(|e| format!("Failed to write insight index: {}", e))
 }
 
 /// Sanitize a title to a valid filename
 fn sanitize_filename(title: &str) -> String {
-    title.trim().replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "_")
+    title
+        .trim()
+        .replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "_")
 }
 
 /// Read an insight file
-pub fn read_insight<R: Runtime>(
-    app_handle: &AppHandle<R>,
-    title: &str,
-) -> Result<String, String> {
+pub fn read_insight<R: Runtime>(app_handle: &AppHandle<R>, title: &str) -> Result<String, String> {
     let insights_dir = get_insights_dir(app_handle)?;
     let filename = format!("{}.md", sanitize_filename(title));
     let path = insights_dir.join(filename);
@@ -448,15 +438,13 @@ pub fn read_insight<R: Runtime>(
         return Err(format!("Insight not found: {}", title));
     }
 
-    fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read insight: {}", e))
+    fs::read_to_string(&path).map_err(|e| format!("Failed to read insight: {}", e))
 }
 
-/// Create or update an insight (Async, generates embedding)
-pub async fn update_insight<R: Runtime>(
+/// Create or update an insight
+/// Note: Embeddings are now in ChunkIndex, call rebuild_chunk_index after updates
+pub fn update_insight<R: Runtime>(
     app_handle: &AppHandle<R>,
-    http_client: &reqwest::Client,
-    api_key: &str,
     title: &str,
     content: &str,
 ) -> Result<(), String> {
@@ -466,25 +454,24 @@ pub async fn update_insight<R: Runtime>(
 
     // Write markdown with heading format
     let formatted_content = format!("# {}\n\n{}", title, content);
-    fs::write(&path, formatted_content)
-        .map_err(|e| format!("Failed to write insight: {}", e))?;
+    fs::write(&path, formatted_content).map_err(|e| format!("Failed to write insight: {}", e))?;
 
-    // Generate embedding
-    let embedding_text = format!("Insight: {}\nContent: {}", title, content.chars().take(1000).collect::<String>());
-    let embedding = crate::interactions::generate_embedding(http_client, &embedding_text, api_key).await?;
-
-    // Update index (preserve counts if exists)
+    // Update index (preserve counts if exists) - embeddings are in ChunkIndex
     let mut index = load_insight_index(app_handle)?;
-    let (reference_count, update_count) = index.insights.get(title)
+    let (reference_count, update_count) = index
+        .insights
+        .get(title)
         .map(|m| (m.reference_count, m.update_count + 1))
         .unwrap_or((0, 1)); // Start at 1 for new insights
 
-    index.insights.insert(title.to_string(), InsightMeta {
-        embedding,
-        reference_count,
-        update_count,
-        created_at: Utc::now(),
-    });
+    index.insights.insert(
+        title.to_string(),
+        InsightMeta {
+            reference_count,
+            update_count,
+            created_at: Utc::now(),
+        },
+    );
     save_insight_index(app_handle, &index)?;
 
     log::info!("Insight updated: {}", title);
@@ -492,17 +479,13 @@ pub async fn update_insight<R: Runtime>(
 }
 
 /// Delete an insight file and remove from index
-pub fn delete_insight<R: Runtime>(
-    app_handle: &AppHandle<R>,
-    title: &str,
-) -> Result<bool, String> {
+pub fn delete_insight<R: Runtime>(app_handle: &AppHandle<R>, title: &str) -> Result<bool, String> {
     let insights_dir = get_insights_dir(app_handle)?;
     let filename = format!("{}.md", sanitize_filename(title));
     let path = insights_dir.join(&filename);
 
     let file_deleted = if path.exists() {
-        fs::remove_file(&path)
-            .map_err(|e| format!("Failed to delete insight file: {}", e))?;
+        fs::remove_file(&path).map_err(|e| format!("Failed to delete insight file: {}", e))?;
         true
     } else {
         false
@@ -541,7 +524,9 @@ pub fn get_promotion_candidates<R: Runtime>(
     threshold: u32,
 ) -> Result<Vec<String>, String> {
     let index = load_insight_index(app_handle)?;
-    let candidates = index.insights.iter()
+    let candidates = index
+        .insights
+        .iter()
         .filter(|(_, meta)| meta.update_count >= threshold)
         .map(|(title, _)| title.clone())
         .collect();
@@ -549,93 +534,57 @@ pub fn get_promotion_candidates<R: Runtime>(
 }
 
 /// Find relevant insights based on query embedding (RAG)
-/// Returns highest-scoring insight if above threshold
+/// DEPRECATED: Use find_relevant_chunks() instead - embeddings now in ChunkIndex
+#[allow(dead_code)]
+#[deprecated(note = "Embeddings are now in ChunkIndex, use find_relevant_chunks instead")]
 pub fn find_relevant_insights<R: Runtime>(
     app_handle: &AppHandle<R>,
-    query_embedding: &[f32],
+    _query_embedding: &[f32],
 ) -> Result<Option<(String, String, f32)>, String> {
-    let index = load_insight_index(app_handle)?;
-    let mut best_score = -1.0f32;
-    let mut best_title = None;
-
-    for (title, meta) in index.insights.iter() {
-        let score = crate::interactions::cosine_similarity(query_embedding, &meta.embedding);
-        if score > best_score {
-            best_score = score;
-            best_title = Some(title.clone());
-        }
-    }
-
-    // Same threshold as topics (0.4)
-    if best_score > 0.4 {
-        if let Some(title) = best_title {
-            if let Ok(content) = read_insight(app_handle, &title) {
-                return Ok(Some((title, content, best_score)));
-            }
-        }
-    }
-
+    // This function is deprecated - InsightIndex no longer stores embeddings
+    log::warn!("find_relevant_insights is deprecated, use find_relevant_chunks instead");
+    let _ = app_handle; // Suppress unused warning
     Ok(None)
 }
 
 /// Find best match between topics and insights, preferring insights on tie
 /// Returns (name, content, is_insight)
+///
+/// Phase 1 backward compatibility: tries chunk-based search first, falls back
+/// to whole-document search if chunk index is empty or missing.
 pub fn find_relevant_context<R: Runtime>(
     app_handle: &AppHandle<R>,
+    query_text: &str,
     query_embedding: &[f32],
 ) -> Result<Option<(String, String, bool)>, String> {
-    let insight_result = find_relevant_insights(app_handle, query_embedding)?;
-
-    // Get topic score for comparison (need to duplicate some logic)
-    let topic_index = load_topic_index(app_handle)?;
-    let mut topic_score = -1.0f32;
-    let mut best_topic = None;
-    for (topic, embedding) in topic_index.topics.iter() {
-        let score = crate::interactions::cosine_similarity(query_embedding, embedding);
-        if score > topic_score {
-            topic_score = score;
-            best_topic = Some(topic.clone());
+    // Use hybrid search (Vector + FTS)
+    if let Ok(chunks) = find_relevant_chunks(app_handle, query_text, query_embedding, 1) {
+        if let Some(chunk) = chunks.first() {
+            let is_insight = chunk.source_type == SourceType::Insight;
+            log::debug!(
+                "[Context] Chunk hit: {}::{} (lines {}-{})",
+                chunk.source_name,
+                chunk.heading.as_deref().unwrap_or("no-heading"),
+                chunk.start_line,
+                chunk.end_line
+            );
+            return Ok(Some((
+                chunk.source_name.clone(),
+                chunk.text.clone(),
+                is_insight,
+            )));
         }
     }
 
-    match insight_result {
-        Some((title, content, insight_score)) => {
-            // Prefer insight if score >= topic score (insight wins ties)
-            if insight_score >= topic_score {
-                // Increment reference count for this insight
-                let _ = increment_insight_reference(app_handle, &title);
-                Ok(Some((title, content, true)))
-            } else if topic_score > 0.4 {
-                if let Some(topic) = best_topic {
-                    if let Ok(content) = read_topic_summary(app_handle, &topic) {
-                        return Ok(Some((topic, content, false)));
-                    }
-                }
-                Ok(None)
-            } else {
-                Ok(None)
-            }
-        }
-        None => {
-            // No insight match, try topics
-            if topic_score > 0.4 {
-                if let Some(topic) = best_topic {
-                    if let Ok(content) = read_topic_summary(app_handle, &topic) {
-                        return Ok(Some((topic, content, false)));
-                    }
-                }
-            }
-            Ok(None)
-        }
-    }
+    // No chunk matches - return None
+    // Phase 2-3: Removed fallback to whole-document search
+    // Caller should rebuild chunk index if getting no results
+    Ok(None)
 }
 
-/// Rebuild the insight index by regenerating embeddings for all insight files
-pub async fn rebuild_insight_index<R: Runtime>(
-    app_handle: &AppHandle<R>,
-    http_client: &reqwest::Client,
-    api_key: &str,
-) -> Result<usize, String> {
+/// Rebuild the insight index from all existing .md files
+/// Note: Embeddings are now in ChunkIndex, this just tracks metadata
+pub fn rebuild_insight_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<usize, String> {
     let insights_dir = get_insights_dir(app_handle)?;
     if !insights_dir.exists() {
         return Ok(0);
@@ -649,35 +598,31 @@ pub async fn rebuild_insight_index<R: Runtime>(
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("md") {
                 if let Some(title) = path.file_stem().and_then(|s| s.to_str()) {
-                    if let Ok(content) = fs::read_to_string(&path) {
-                        let embedding_text = format!("Insight: {}\nContent: {}", title, content.chars().take(1000).collect::<String>());
-                        match crate::interactions::generate_embedding(http_client, &embedding_text, api_key).await {
-                            Ok(embedding) => {
-                                index.insights.insert(title.to_string(), InsightMeta {
-                                    embedding,
-                                    reference_count: 0,
-                                    update_count: 1, // Assume 1 update for existing files
-                                    created_at: Utc::now(),
-                                });
-                                count += 1;
-                                log::info!("Indexed insight: {}", title);
-                            }
-                            Err(e) => {
-                                log::error!("Failed to generate embedding for insight {}: {}", title, e);
-                            }
-                        }
-                    }
+                    // Just track metadata, embeddings are in ChunkIndex
+                    index.insights.insert(
+                        title.to_string(),
+                        InsightMeta {
+                            reference_count: 0,
+                            update_count: 1, // Assume 1 update for existing files
+                            created_at: Utc::now(),
+                        },
+                    );
+                    count += 1;
+                    log::info!("[Index] Indexed insight metadata: {}", title);
                 }
             }
         }
     }
 
     save_insight_index(app_handle, &index)?;
+    log::info!("[Index] Rebuilt insight index with {} insights", count);
     Ok(count)
 }
 
 /// Load memories from disk (bypassing cache)
-pub fn load_memories_from_disk<R: Runtime>(app_handle: &AppHandle<R>) -> Result<MemoryStore, String> {
+pub fn load_memories_from_disk<R: Runtime>(
+    app_handle: &AppHandle<R>,
+) -> Result<MemoryStore, String> {
     let memories_dir = get_memories_dir(app_handle)?;
     let json_path = memories_dir.join(MEMORIES_FILENAME);
 
@@ -688,8 +633,7 @@ pub fn load_memories_from_disk<R: Runtime>(app_handle: &AppHandle<R>) -> Result<
     let content = fs::read_to_string(&json_path)
         .map_err(|e| format!("Failed to read memories file: {}", e))?;
 
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse memories JSON: {}", e))
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse memories JSON: {}", e))
 }
 
 /// Load memories, using cache if available
@@ -714,7 +658,10 @@ pub fn load_memories<R: Runtime>(app_handle: &AppHandle<R>) -> Result<MemoryStor
 }
 
 /// Save memories to disk and update cache
-pub fn save_memories<R: Runtime>(app_handle: &AppHandle<R>, store: &MemoryStore) -> Result<(), String> {
+pub fn save_memories<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    store: &MemoryStore,
+) -> Result<(), String> {
     // Update cache first
     let state = app_handle.state::<crate::AppState>();
     if let Ok(mut guard) = state.memory_store.write() {
@@ -738,8 +685,7 @@ pub fn save_memories<R: Runtime>(app_handle: &AppHandle<R>, store: &MemoryStore)
         store.format_for_prompt()
     );
 
-    fs::write(&md_path, md_content)
-        .map_err(|e| format!("Failed to write memories MD: {}", e))?;
+    fs::write(&md_path, md_content).map_err(|e| format!("Failed to write memories MD: {}", e))?;
 
     Ok(())
 }
@@ -762,7 +708,11 @@ pub fn add_memory<R: Runtime>(
 
     save_memories(app_handle, &store)?;
 
-    log::info!("Memory saved: {} (importance: {})", memory.content, memory.importance);
+    log::info!(
+        "Memory saved: {} (importance: {})",
+        memory.content,
+        memory.importance
+    );
 
     Ok(memory)
 }
@@ -838,12 +788,10 @@ pub fn append_to_daily_log<R: Runtime>(
 
     if needs_header {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        writeln!(file, "# {}\n", today)
-            .map_err(|e| format!("Failed to write header: {}", e))?;
+        writeln!(file, "# {}\n", today).map_err(|e| format!("Failed to write header: {}", e))?;
     }
 
-    write!(file, "{}", content)
-        .map_err(|e| format!("Failed to append to daily log: {}", e))?;
+    write!(file, "{}", content).map_err(|e| format!("Failed to append to daily log: {}", e))?;
 
     log::info!("[Memory] Appended to daily log: {}", log_path.display());
     Ok(())
@@ -851,7 +799,9 @@ pub fn append_to_daily_log<R: Runtime>(
 
 /// Read all daily log files and return their contents
 /// Returns Vec of (date, content) pairs, oldest first
-pub fn read_all_daily_logs<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Vec<(String, String)>, String> {
+pub fn read_all_daily_logs<R: Runtime>(
+    app_handle: &AppHandle<R>,
+) -> Result<Vec<(String, String)>, String> {
     let log_dir = get_memory_log_dir(app_handle)?;
 
     if !log_dir.exists() {
@@ -860,8 +810,8 @@ pub fn read_all_daily_logs<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Vec<
 
     let mut logs: Vec<(String, String)> = Vec::new();
 
-    let entries = fs::read_dir(&log_dir)
-        .map_err(|e| format!("Failed to read memory log dir: {}", e))?;
+    let entries =
+        fs::read_dir(&log_dir).map_err(|e| format!("Failed to read memory log dir: {}", e))?;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -900,11 +850,404 @@ pub fn archive_daily_log<R: Runtime>(app_handle: &AppHandle<R>, date: &str) -> R
     let dst = archived_dir.join(format!("{}.md", date));
 
     if src.exists() {
-        fs::rename(&src, &dst)
-            .map_err(|e| format!("Failed to archive daily log: {}", e))?;
+        fs::rename(&src, &dst).map_err(|e| format!("Failed to archive daily log: {}", e))?;
         log::info!("[Memory] Archived daily log: {} -> archived/", date);
     }
 
     Ok(())
 }
 
+// ============================================================================
+// Chunking Pipeline (markdown-aware splitting for granular retrieval)
+// ============================================================================
+
+/// Rough token estimation (~4 chars per token)
+fn estimate_tokens(text: &str) -> usize {
+    text.len() / 4
+}
+
+/// Intermediate chunk before embedding
+#[derive(Debug, Clone)]
+pub struct RawChunk {
+    pub heading: Option<String>,
+    pub text: String,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+/// Split markdown content into chunks at header boundaries
+///
+/// Strategy:
+/// 1. Split at markdown headings (^#{1,6}\s)
+/// 2. If a section exceeds max_tokens, force-split at sentence boundaries
+/// 3. Add overlap_tokens from previous chunk for context continuity
+/// 4. Merge chunks < min_tokens with the next chunk
+pub fn chunk_markdown(
+    content: &str,
+    max_tokens: usize,
+    overlap_tokens: usize,
+    min_tokens: usize,
+) -> Vec<RawChunk> {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return vec![];
+    }
+
+    let mut chunks: Vec<RawChunk> = Vec::new();
+    let mut current_text = String::new();
+    let mut current_heading: Option<String> = None;
+    let mut start_line: u32 = 1;
+    let heading_regex = regex::Regex::new(r"^#{1,6}\s+(.+)$").unwrap();
+
+    for (idx, line) in lines.iter().enumerate() {
+        let line_num = (idx + 1) as u32;
+
+        // Check if this line is a heading
+        if let Some(caps) = heading_regex.captures(line) {
+            // Flush current chunk if we have content
+            if !current_text.trim().is_empty() {
+                chunks.push(RawChunk {
+                    heading: current_heading.clone(),
+                    text: current_text.trim().to_string(),
+                    start_line,
+                    end_line: line_num - 1,
+                });
+                current_text = String::new();
+            }
+
+            // Start new chunk with this heading
+            current_heading = Some(caps[1].to_string());
+            start_line = line_num;
+            current_text.push_str(line);
+            current_text.push('\n');
+        } else {
+            current_text.push_str(line);
+            current_text.push('\n');
+
+            // Force split if we exceed max_tokens
+            if estimate_tokens(&current_text) > max_tokens {
+                chunks.push(RawChunk {
+                    heading: current_heading.clone(),
+                    text: current_text.trim().to_string(),
+                    start_line,
+                    end_line: line_num,
+                });
+                current_text = String::new();
+                current_heading = None; // Mid-section split has no heading
+                start_line = line_num + 1;
+            }
+        }
+    }
+
+    // Flush remaining content
+    if !current_text.trim().is_empty() {
+        chunks.push(RawChunk {
+            heading: current_heading,
+            text: current_text.trim().to_string(),
+            start_line,
+            end_line: lines.len() as u32,
+        });
+    }
+
+    // Merge small chunks with next chunk
+    let mut merged: Vec<RawChunk> = Vec::new();
+    let mut pending: Option<RawChunk> = None;
+
+    for chunk in chunks {
+        if let Some(mut p) = pending.take() {
+            if estimate_tokens(&p.text) < min_tokens {
+                // Merge with current chunk
+                p.text.push_str("\n\n");
+                p.text.push_str(&chunk.text);
+                p.end_line = chunk.end_line;
+                // Keep original heading
+                pending = Some(p);
+            } else {
+                merged.push(p);
+                pending = Some(chunk);
+            }
+        } else {
+            pending = Some(chunk);
+        }
+    }
+    if let Some(p) = pending {
+        merged.push(p);
+    }
+
+    // Add overlap from previous chunk
+    let mut final_chunks: Vec<RawChunk> = Vec::new();
+    for (idx, chunk) in merged.iter().enumerate() {
+        let mut text_with_overlap = String::new();
+
+        if idx > 0 && overlap_tokens > 0 {
+            // Get tail of previous chunk for overlap
+            let prev_text = &merged[idx - 1].text;
+            let overlap_chars = overlap_tokens * 4; // Convert back to chars
+            if prev_text.len() > overlap_chars {
+                let overlap = &prev_text[prev_text.len() - overlap_chars..];
+                text_with_overlap.push_str("...");
+                text_with_overlap.push_str(overlap.trim_start());
+                text_with_overlap.push_str("\n\n");
+            }
+        }
+
+        text_with_overlap.push_str(&chunk.text);
+
+        final_chunks.push(RawChunk {
+            heading: chunk.heading.clone(),
+            text: text_with_overlap,
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+        });
+    }
+
+    final_chunks
+}
+
+// /// Get the path to the chunk index file
+// fn get_chunk_index_path<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
+//     let memories_dir = get_memories_dir(app_handle)?;
+//     Ok(memories_dir.join("chunk_index.json"))
+// }
+
+// /// Load the chunk index from disk
+// pub fn load_chunk_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<ChunkIndex, String> {
+//     let path = get_chunk_index_path(app_handle)?;
+//     if !path.exists() {
+//         return Ok(ChunkIndex::default());
+//     }
+//     let content =
+//         fs::read_to_string(&path).map_err(|e| format!("Failed to read chunk index: {}", e))?;
+//     serde_json::from_str(&content).map_err(|e| format!("Failed to parse chunk index: {}", e))
+// }
+
+// /// Save the chunk index to disk
+// fn save_chunk_index<R: Runtime>(
+//     app_handle: &AppHandle<R>,
+//     index: &ChunkIndex,
+// ) -> Result<(), String> {
+//     let path = get_chunk_index_path(app_handle)?;
+//     let content = serde_json::to_string_pretty(index)
+//         .map_err(|e| format!("Failed to serialize chunk index: {}", e))?;
+//     fs::write(&path, content).map_err(|e| format!("Failed to write chunk index: {}", e))
+// }
+
+/// Rebuild the chunk index from all topic and insight files
+/// Uses VectorStore with embedding cache for efficient updates
+pub async fn rebuild_chunk_index<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    http_client: &reqwest::Client,
+    api_key: &str,
+) -> Result<usize, String> {
+    use futures::StreamExt;
+    use std::collections::HashSet;
+
+    let vector_store = get_vector_store(app_handle)?;
+
+    // Track existing sources to identify deletions
+    let existing_sources = vector_store
+        .get_unique_sources()
+        .map_err(|e| format!("Failed to get sources: {}", e))?;
+    let known_sources: HashSet<(SourceType, String)> = HashSet::from_iter(existing_sources.into_iter());
+    let mut processed_sources: HashSet<(SourceType, String)> = HashSet::new();
+
+    let mut files_to_process: Vec<(SourceType, String, String)> = Vec::new();
+
+    // 1. Scan Topics
+    let topics_dir = get_topics_dir(app_handle)?;
+    if topics_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&topics_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                    if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            files_to_process.push((SourceType::Topic, name.to_string(), content));
+                            processed_sources.insert((SourceType::Topic, name.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Scan Insights
+    let insights_dir = get_insights_dir(app_handle)?;
+    if insights_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&insights_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                    if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            files_to_process.push((SourceType::Insight, name.to_string(), content));
+                            processed_sources.insert((SourceType::Insight, name.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    log::info!("[Chunk] Processing {} files", files_to_process.len());
+
+    let mut embedded_count = 0;
+
+    // 3. Process each file (concurrent embedding generation)
+    // We create a stream of futures that process chunks
+
+    let mut tasks = Vec::new();
+
+    for (source_type, source_name, content) in files_to_process {
+        // Clear old chunks for this file safely
+        // (We do this sequentially to avoid race on delete)
+        if let Err(e) = vector_store.delete_by_source(source_type.clone(), &source_name) {
+            log::warn!("[Chunk] Failed to clear old chunks for {}::{}: {}",
+                if source_type == SourceType::Topic { "topic" } else { "insight" },
+                source_name, e);
+        }
+
+        let raw_chunks = chunk_markdown(&content, 400, 80, 50);
+
+        for (idx, raw) in raw_chunks.into_iter().enumerate() {
+            // Clone for closure
+            let s_type = source_type.clone();
+            let s_name = source_name.clone();
+
+            tasks.push((s_type, s_name, idx, raw));
+        }
+    }
+
+    // Step A: Check cache and prepare embedding tasks
+    let mut chunks_to_embed = Vec::new();
+    let mut ready_chunks = Vec::new();
+
+    for (s_type, s_name, idx, raw) in tasks {
+        let content_hash = VectorStore::content_hash(&raw.text);
+
+        // Try cache
+        let cached = match vector_store.get_cached_embedding(&content_hash) {
+            Ok(emb) => emb,
+            Err(e) => {
+                log::warn!("[Chunk] Cache check failed: {}", e);
+                None
+            }
+        };
+
+        if let Some(embedding) = cached {
+             let type_str = if s_type == SourceType::Topic { "topic" } else { "insight" };
+             ready_chunks.push(Chunk {
+                id: format!("{}::{}::{}", type_str, s_name, idx),
+                source_type: s_type,
+                source_name: s_name,
+                heading: raw.heading,
+                text: raw.text,
+                start_line: raw.start_line,
+                end_line: raw.end_line,
+                embedding,
+            });
+        } else {
+            chunks_to_embed.push((s_type, s_name, idx, raw));
+        }
+    }
+
+    log::info!("[Chunk] Found {} chunks cached, {} to embed", ready_chunks.len(), chunks_to_embed.len());
+
+    // Step B: Generate embeddings in parallel
+    let generated_chunks: Vec<Option<Chunk>> = futures::stream::iter(chunks_to_embed.into_iter())
+        .map(|(s_type, s_name, idx, raw)| {
+            let client = http_client.clone();
+            let key = api_key.to_string();
+            async move {
+                let embedding_text = format!(
+                    "{}: {}\n{}",
+                    if s_type == SourceType::Topic { "Topic" } else { "Insight" },
+                    s_name,
+                    &raw.text.chars().take(1000).collect::<String>()
+                );
+
+                match crate::interactions::generate_embedding(&client, &embedding_text, &key).await {
+                    Ok(embedding) => {
+                        let type_str = if s_type == SourceType::Topic { "topic" } else { "insight" };
+                        Some(Chunk {
+                            id: format!("{}::{}::{}", type_str, s_name, idx),
+                            source_type: s_type,
+                            source_name: s_name,
+                            heading: raw.heading,
+                            text: raw.text,
+                            start_line: raw.start_line,
+                            end_line: raw.end_line,
+                            embedding,
+                        })
+                    }
+                    Err(e) => {
+                        log::error!("[Chunk] Failed to embed {}::{}: {}", s_name, idx, e);
+                        None
+                    }
+                }
+            }
+        })
+        .buffer_unordered(4) // 4 concurrent requests
+        .collect()
+        .await;
+
+    // Step C: Save everything to DB
+    for chunk in ready_chunks {
+        if let Err(e) = vector_store.upsert_chunk(&chunk) {
+            log::error!("[Chunk] Failed to save cached chunk {}: {}", chunk.id, e);
+        } else {
+            embedded_count += 1;
+        }
+    }
+
+    for chunk_opt in generated_chunks {
+        if let Some(chunk) = chunk_opt {
+             if let Err(e) = vector_store.upsert_chunk(&chunk) {
+                log::error!("[Chunk] Failed to save generated chunk {}: {}", chunk.id, e);
+            } else {
+                embedded_count += 1;
+            }
+        }
+    }
+
+    // 4. Cleanup deleted files
+    for (s_type, s_name) in known_sources {
+        if !processed_sources.contains(&(s_type.clone(), s_name.clone())) {
+             if let Err(e) = vector_store.delete_by_source(s_type.clone(), &s_name) {
+                 log::warn!("[Chunk] Failed to cleanup deleted source {}: {}", s_name, e);
+             } else {
+                 log::info!("[Chunk] Removed deleted source: {}", s_name);
+             }
+        }
+    }
+
+    // Update metadata
+    if let Err(e) = vector_store.set_last_rebuilt(Utc::now()) {
+        log::warn!("[Chunk] Failed to set last_rebuilt: {}", e);
+    }
+
+    log::info!("[Chunk] Index rebuilt locally: {} chunks active", embedded_count);
+
+    Ok(embedded_count)
+}
+
+/// Find relevant chunks by embedding similarity and keyword match (Hybrid)
+/// Uses VectorStore Hybrid search (sqlite-vec + FTS5)
+pub fn find_relevant_chunks<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    query_text: &str,
+    query_embedding: &[f32],
+    limit: usize,
+) -> Result<Vec<Chunk>, String> {
+    // Open vector store
+    let vector_store = get_vector_store(app_handle)?;
+
+    // Perform Hybrid search
+    // Note: Vector part uses 0.35 threshold to filter low-quality semantic matches
+    // while keeping FTS5 keyword matches for recall.
+    let results = vector_store
+        .hybrid_search(query_text, query_embedding, limit, 0.35)
+        .map_err(|e| format!("Hybrid search failed: {}", e))?;
+
+    Ok(results)
+}
