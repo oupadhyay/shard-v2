@@ -45,11 +45,16 @@ dirs = "5"
 keyring = { version = "3", features = ["apple-native"] }
 ocr-rs = "2.0.2"
 futures = "0.3.31"
+rusqlite = { version = "0.31", features = ["bundled"] }
+sqlite-vec = "0.1"
+bytemuck = "1.16"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
 criterion = { version = "0.5", features = ["async_tokio"] }
 dotenvy = "0.15"
+rand = "0.8"
 
 [[bench]]
 name = "retrieval_bench"
@@ -65,5 +70,9 @@ harness = false
 
 [[bench]]
 name = "optimizations_bench"
+harness = false
+
+[[bench]]
+name = "vector_search_bench"
 harness = false
 
