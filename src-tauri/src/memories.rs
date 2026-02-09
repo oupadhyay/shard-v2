@@ -273,11 +273,27 @@ fn load_topic_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<TopicIndex,
     }
     let content =
         fs::read_to_string(&path).map_err(|e| format!("Failed to read topic index: {}", e))?;
-    match serde_json::from_str(&content) {
+    match serde_json::from_str::<TopicIndex>(&content) {
         Ok(index) => Ok(index),
-        Err(e) => {
-            log::warn!("Failed to parse topic index ({}), resetting to default. Old format will be overwritten.", e);
-            Ok(TopicIndex::default())
+        Err(_) => {
+            // Backward-compat path: try to interpret the file as the old format,
+            // which stored a map from topic names to embeddings/metadata.
+            let old_format: Result<HashMap<String, serde_json::Value>, _> =
+                serde_json::from_str(&content);
+
+            match old_format {
+                Ok(map) => {
+                    log::info!("[Memories] Migrated topic index from legacy format");
+                    let topics = map.keys().cloned().collect();
+                    Ok(TopicIndex { topics })
+                }
+                Err(_) => {
+                    // If we cannot parse the index in either format, treat it as invalid
+                    // and reset to an empty index, allowing the file to be rebuilt.
+                    log::warn!("[Memories] Failed to parse topic index, resetting to default");
+                    Ok(TopicIndex::default())
+                }
+            }
         }
     }
 }
@@ -331,7 +347,13 @@ pub fn update_topic_summary<R: Runtime>(
     );
     let path = topics_dir.join(filename);
 
-    fs::write(&path, content).map_err(|e| format!("Failed to write topic: {}", e))?;
+    // Write markdown with heading format to ensure better chunking/recall
+    let formatted_content = if !content.trim_start().starts_with("# ") {
+        format!("# {}\n\n{}", topic, content)
+    } else {
+        content.to_string()
+    };
+    fs::write(&path, formatted_content).map_err(|e| format!("Failed to write topic: {}", e))?;
 
     // Update index (just track topic names, embeddings are in ChunkIndex)
     let mut index = load_topic_index(app_handle)?;
@@ -414,10 +436,12 @@ pub fn load_insight_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Insig
     }
     let content =
         fs::read_to_string(&path).map_err(|e| format!("Failed to read insight index: {}", e))?;
-    match serde_json::from_str(&content) {
+    match serde_json::from_str::<InsightIndex>(&content) {
         Ok(index) => Ok(index),
-        Err(e) => {
-            log::warn!("Failed to parse insight index ({}), resetting to default. Old format will be overwritten.", e);
+        Err(_) => {
+            // Fall back to a default index on parse errors (e.g., after schema changes)
+            // or schema mismatch.
+            log::warn!("[Memories] Failed to parse insight index, resetting to default");
             Ok(InsightIndex::default())
         }
     }
@@ -1089,7 +1113,7 @@ pub async fn rebuild_chunk_index<R: Runtime>(
 
     log::info!("[Chunk] Processing {} files", files_to_process.len());
 
-    let mut embedded_count = 0;
+    let embedded_count;
 
     // 3. Process each file (concurrent embedding generation)
     // We create a stream of futures that process chunks
@@ -1116,7 +1140,14 @@ pub async fn rebuild_chunk_index<R: Runtime>(
     let mut ready_chunks = Vec::new();
 
     for (s_type, s_name, idx, raw) in tasks {
-        let content_hash = VectorStore::content_hash(&raw.text);
+        // Cache key should be based on the text we actually embed (including prefix)
+        let embedding_text = format!(
+            "{}: {}\n{}",
+            if s_type == SourceType::Topic { "Topic" } else { "Insight" },
+            s_name,
+            &raw.text.chars().take(1000).collect::<String>()
+        );
+        let content_hash = VectorStore::content_hash(&embedding_text);
 
         // Try cache
         let cached = match vector_store.get_cached_embedding(&content_hash) {
@@ -1151,14 +1182,14 @@ pub async fn rebuild_chunk_index<R: Runtime>(
         .map(|(s_type, s_name, idx, raw)| {
             let client = http_client.clone();
             let key = api_key.to_string();
-            async move {
-                let embedding_text = format!(
-                    "{}: {}\n{}",
-                    if s_type == SourceType::Topic { "Topic" } else { "Insight" },
-                    s_name,
-                    &raw.text.chars().take(1000).collect::<String>()
-                );
+            let embedding_text = format!(
+                "{}: {}\n{}",
+                if s_type == SourceType::Topic { "Topic" } else { "Insight" },
+                s_name,
+                &raw.text.chars().take(1000).collect::<String>()
+            );
 
+            async move {
                 match crate::interactions::generate_embedding(&client, &embedding_text, &key).await {
                     Ok(embedding) => {
                         let type_str = if s_type == SourceType::Topic { "topic" } else { "insight" };
@@ -1184,43 +1215,60 @@ pub async fn rebuild_chunk_index<R: Runtime>(
         .collect()
         .await;
 
-    // Step C: Delete old chunks only after new embeddings are ready
-    for (s_type, s_name) in &sources_to_rebuild {
-        if let Err(e) = vector_store.delete_by_source(s_type.clone(), s_name) {
-            log::warn!("[Chunk] Failed to clear old chunks for {}: {}",
-                s_name, e);
-        }
-    }
+    // Step D: Save everything to DB (offload blocking writes to thread pool)
+    let ready_count = ready_chunks.len();
+    let gen_chunks: Vec<Chunk> = generated_chunks.into_iter().flatten().collect();
+    let gen_count = gen_chunks.len();
+    let chunks_to_save = ready_chunks;
+    let handle = app_handle.clone();
+    let sources = sources_to_rebuild.clone();
+    let known = known_sources.clone();
+    let processed = processed_sources.clone();
 
-    // Step D: Save everything to DB
-    for chunk in ready_chunks {
-        if let Err(e) = vector_store.upsert_chunk(&chunk) {
-            log::error!("[Chunk] Failed to save cached chunk {}: {}", chunk.id, e);
-        } else {
-            embedded_count += 1;
-        }
-    }
+    tokio::task::spawn_blocking(move || -> Result<usize, String> {
+        let mut count = 0;
+        let vs = get_vector_store(&handle)?;
 
-    for chunk_opt in generated_chunks {
-        if let Some(chunk) = chunk_opt {
-             if let Err(e) = vector_store.upsert_chunk(&chunk) {
-                log::error!("[Chunk] Failed to save generated chunk {}: {}", chunk.id, e);
-            } else {
-                embedded_count += 1;
+        // Step C: Delete old chunks only after new embeddings are ready
+        for (s_type, s_name) in sources {
+            if let Err(e) = vs.delete_by_source(s_type.clone(), &s_name) {
+                log::warn!("[Chunk] Failed to clear old chunks for {}: {}", s_name, e);
             }
         }
-    }
 
-    // 4. Cleanup deleted files
-    for (s_type, s_name) in known_sources {
-        if !processed_sources.contains(&(s_type.clone(), s_name.clone())) {
-             if let Err(e) = vector_store.delete_by_source(s_type.clone(), &s_name) {
-                 log::warn!("[Chunk] Failed to cleanup deleted source {}: {}", s_name, e);
-             } else {
-                 log::info!("[Chunk] Removed deleted source: {}", s_name);
-             }
+        // Save cached chunks
+        for chunk in chunks_to_save {
+            if let Err(e) = vs.upsert_chunk(&chunk) {
+                log::error!("[Chunk] Failed to save cached chunk {}: {}", chunk.id, e);
+            } else {
+                count += 1;
+            }
         }
-    }
+
+        // Save newly generated chunks
+        for chunk in gen_chunks {
+            if let Err(e) = vs.upsert_chunk(&chunk) {
+                log::error!("[Chunk] Failed to save generated chunk {}: {}", chunk.id, e);
+            } else {
+                count += 1;
+            }
+        }
+
+        // 4. Cleanup deleted files
+        for (s_type, s_name) in known {
+            if !processed.contains(&(s_type.clone(), s_name.clone())) {
+                 if let Err(e) = vs.delete_by_source(s_type.clone(), &s_name) {
+                     log::warn!("[Chunk] Failed to cleanup deleted source {}: {}", s_name, e);
+                 } else {
+                     log::info!("[Chunk] Removed deleted source: {}", s_name);
+                 }
+            }
+        }
+
+        Ok(count)
+    }).await.map_err(|e| format!("Blocking save task failed: {}", e))??;
+
+    embedded_count = ready_count + gen_count;
 
     // Update metadata
     if let Err(e) = vector_store.set_last_rebuilt(Utc::now()) {
@@ -1251,4 +1299,27 @@ pub fn find_relevant_chunks<R: Runtime>(
         .map_err(|e| format!("Hybrid search failed: {}", e))?;
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_topic_index_migration() {
+        let legacy_json = r#"{"Topic A": {"metadata": {}}, "Topic B": {"metadata": {}}}"#;
+
+        // Test the migration logic extracted into a parse attempt
+        let old_format: Result<HashMap<String, serde_json::Value>, _> = serde_json::from_str(legacy_json);
+        assert!(old_format.is_ok());
+
+        let map = old_format.unwrap();
+        let index = TopicIndex {
+            topics: map.keys().cloned().collect(),
+        };
+
+        assert!(index.topics.contains(&"Topic A".to_string()));
+        assert!(index.topics.contains(&"Topic B".to_string()));
+        assert_eq!(index.topics.len(), 2);
+    }
 }

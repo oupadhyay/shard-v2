@@ -276,9 +276,24 @@ impl VectorStore {
             let embedding_bytes: Vec<u8> = row.get(7)?;
             let similarity: f32 = row.get(8)?;
 
+            let source_type = match source_type_str.as_str() {
+                "topic" => SourceType::Topic,
+                "insight" => SourceType::Insight,
+                other => {
+                    return Err(rusqlite::Error::FromSqlConversionFailure(
+                        1,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("invalid source_type value: {}", other),
+                        )),
+                    ));
+                }
+            };
+
             Ok((Chunk {
                 id: row.get(0)?,
-                source_type: if source_type_str == "topic" { SourceType::Topic } else { SourceType::Insight },
+                source_type,
                 source_name: row.get(2)?,
                 heading: row.get(3)?,
                 text: row.get(4)?,
@@ -309,7 +324,7 @@ impl VectorStore {
             JOIN chunks c ON c.id = chunks_fts.chunk_id
             JOIN chunk_embeddings e ON c.id = e.chunk_id
             WHERE chunks_fts MATCH ?1
-            ORDER BY rank
+            ORDER BY bm25(chunks_fts)
             LIMIT ?2
             "#
         )?;
@@ -319,9 +334,15 @@ impl VectorStore {
              let source_type_str: String = row.get(1)?;
              let embedding_bytes: Vec<u8> = row.get(7)?;
 
+             let source_type = match source_type_str.as_str() {
+                "topic" => SourceType::Topic,
+                "insight" => SourceType::Insight,
+                _ => SourceType::Insight, // Fallback for FTS results if type unknown
+             };
+
              Ok(Chunk {
                 id: row.get(0)?,
-                source_type: if source_type_str == "topic" { SourceType::Topic } else { SourceType::Insight },
+                source_type,
                 source_name: row.get(2)?,
                 heading: row.get(3)?,
                 text: row.get(4)?,
@@ -375,9 +396,15 @@ impl VectorStore {
             let source_type_str: String = row.get(1)?;
             let embedding_bytes: Vec<u8> = row.get(7)?;
 
+            let source_type = match source_type_str.as_str() {
+                "topic" => SourceType::Topic,
+                "insight" => SourceType::Insight,
+                _ => SourceType::Insight,
+            };
+
             Ok(Chunk {
                 id: row.get(0)?,
-                source_type: if source_type_str == "topic" { SourceType::Topic } else { SourceType::Insight },
+                source_type,
                 source_name: row.get(2)?,
                 heading: row.get(3)?,
                 text: row.get(4)?,
@@ -456,20 +483,41 @@ impl VectorStore {
 
 /// Convert f32 vector to bytes for SQLite storage
 fn f32_vec_to_bytes(v: &[f32]) -> Vec<u8> {
-    bytemuck::cast_slice(v).to_vec()
+    // Store embeddings in a fixed little-endian representation for portability.
+    let mut bytes = Vec::with_capacity(v.len() * std::mem::size_of::<f32>());
+    for &value in v {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
 }
 
 /// Convert bytes from SQLite to f32 vector
 fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, VectorStoreError> {
     if bytes.len() % std::mem::size_of::<f32>() != 0 {
         return Err(VectorStoreError::Migration(
-            format!("Invalid embedding blob size: {} bytes (not a multiple of 4)", bytes.len()),
+            format!(
+                "Invalid embedding blob size: {} bytes (not a multiple of 4)",
+                bytes.len()
+            ),
+        ));
+    }
+
+    let num_f32 = bytes.len() / std::mem::size_of::<f32>();
+    if num_f32 != EMBEDDING_DIM {
+        return Err(VectorStoreError::Migration(
+            format!(
+                "Invalid embedding length: expected {} floats, got {}",
+                EMBEDDING_DIM, num_f32
+            ),
         ));
     }
 
     Ok(bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+        .chunks_exact(std::mem::size_of::<f32>())
+        .map(|b| {
+            let arr: [u8; 4] = b.try_into().unwrap();
+            f32::from_le_bytes(arr)
+        })
         .collect())
 }
 
@@ -717,7 +765,7 @@ mod tests {
 
     #[test]
     fn test_bytes_to_f32_vec_valid_roundtrip() {
-        let original = vec![1.0f32, 2.0, 3.0];
+        let original = vec![1.0f32; EMBEDDING_DIM];
         let bytes = f32_vec_to_bytes(&original);
         let restored = bytes_to_f32_vec(&bytes).unwrap();
         assert_eq!(original, restored);
