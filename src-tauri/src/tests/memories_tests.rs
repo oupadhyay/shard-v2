@@ -228,6 +228,39 @@ fn test_chunk_markdown_no_headers() {
 }
 
 // ============================================================================
+// UTF-8 Safety & Heading Merge Tests
+// ============================================================================
+
+#[test]
+fn test_chunk_markdown_overlap_utf8_safety() {
+    let content = "# Section One\n\nThis is a long section with café résumé naïve characters and 日本語テスト Japanese text. We need enough content here to exceed the overlap character threshold which is overlap_tokens times four characters. Adding more filler text to make sure this section is definitely long enough for the overlap to trigger properly.\n\n## Section Two\n\nSecond section content.\n";
+
+    let chunks = chunk_markdown(content, 10000, 20, 0);
+    assert_eq!(chunks.len(), 2);
+    assert!(chunks[1].text.starts_with("..."), "Overlap should be applied with multi-byte content");
+}
+
+#[test]
+fn test_chunk_markdown_merge_preserves_specific_heading() {
+    let content = "# Intro\n\ntiny\n\n## Detailed Topic\n\nThis section has much more detailed content that should be well above the minimum token threshold for merging.\n";
+
+    let chunks = chunk_markdown(content, 10000, 0, 200);
+    assert_eq!(chunks.len(), 1, "Both small chunks should merge");
+    let heading = chunks[0].heading.as_deref().unwrap();
+    assert!(heading.contains("Intro"), "Merged heading should contain first heading");
+    assert!(heading.contains("Detailed Topic"), "Merged heading should contain second heading");
+}
+
+#[test]
+fn test_chunk_markdown_merge_adopts_heading_when_pending_has_none() {
+    let content = "Some intro text without a heading.\n\n## Named Section\n\nContent for named section.\n";
+
+    let chunks = chunk_markdown(content, 10000, 0, 200);
+    assert_eq!(chunks.len(), 1, "Should merge into one chunk");
+    assert_eq!(chunks[0].heading, Some("Named Section".to_string()));
+}
+
+// ============================================================================
 // Phase 2-3 Structural Tests
 // ============================================================================
 
@@ -284,4 +317,22 @@ fn test_insight_index_metadata_only_serialization() {
     let deserialized: InsightIndex = serde_json::from_str(&serialized).expect("Failed to deserialize InsightIndex");
     assert!(deserialized.insights.contains_key("Fact_1"));
     assert_eq!(deserialized.insights.get("Fact_1").unwrap().reference_count, 1);
+}
+
+// ============================================================================
+// Backward Compatibility Tests
+// ============================================================================
+
+#[test]
+fn test_topic_index_old_format_deserializes_to_default() {
+    let old_format = r#"{"topics":{"rust_optimization":[0.1,0.2,0.3],"tauri_architecture":[0.4,0.5,0.6]}}"#;
+    let result: Result<TopicIndex, _> = serde_json::from_str(old_format);
+    assert!(result.is_err(), "Old embedding-based format should not parse as new TopicIndex");
+}
+
+#[test]
+fn test_insight_index_old_format_with_embedding_field() {
+    let old_format = r#"{"insights":{"fact_1":{"embedding":[0.1,0.2],"reference_count":3,"update_count":1,"created_at":"2025-01-01T00:00:00Z"}}}"#;
+    let result: Result<InsightIndex, _> = serde_json::from_str(old_format);
+    assert!(result.is_ok(), "InsightMeta with extra 'embedding' field should still parse (serde default ignores unknown fields) OR fail gracefully");
 }

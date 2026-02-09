@@ -68,10 +68,21 @@ impl VectorStore {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Load sqlite-vec extension via auto_extension mechanism
-        // This registers it for all new connections
-        unsafe {
-            let _ = rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(sqlite_vec::sqlite3_vec_init as *const ())));
+        use std::sync::OnceLock;
+        static VEC_INIT_STATUS: OnceLock<i32> = OnceLock::new();
+
+        let init_rc = *VEC_INIT_STATUS.get_or_init(|| {
+            unsafe {
+                rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                    sqlite_vec::sqlite3_vec_init as *const (),
+                )))
+            }
+        });
+
+        if init_rc != 0 {
+            return Err(VectorStoreError::SqliteVec(
+                format!("sqlite3_auto_extension failed with code {}", init_rc),
+            ));
         }
 
         let conn = Connection::open(db_path)?;
@@ -112,7 +123,10 @@ impl VectorStore {
             |row| row.get(0),
         ).optional()?;
 
-        Ok(result.map(|bytes| bytes_to_f32_vec(&bytes)))
+        match result {
+            Some(bytes) => Ok(Some(bytes_to_f32_vec(&bytes)?)),
+            None => Ok(None),
+        }
     }
 
     /// Cache an embedding for future reuse
@@ -136,6 +150,12 @@ impl VectorStore {
             SourceType::Insight => "insight",
         };
         let content_hash = Self::content_hash(&chunk.text);
+
+        if chunk.embedding.len() != EMBEDDING_DIM {
+            return Err(VectorStoreError::Migration(
+                format!("Invalid embedding dimension: expected {}, got {}", EMBEDDING_DIM, chunk.embedding.len()),
+            ));
+        }
 
         // Begin transaction
         let tx = self.conn.unchecked_transaction()?;
@@ -264,7 +284,7 @@ impl VectorStore {
                 text: row.get(4)?,
                 start_line: row.get(5)?,
                 end_line: row.get(6)?,
-                embedding: bytes_to_f32_vec(&embedding_bytes),
+                embedding: bytes_to_f32_vec(&embedding_bytes).map_err(|e| rusqlite::Error::InvalidColumnType(7, e.to_string(), rusqlite::types::Type::Blob))?,
             }, similarity))
         })?;
 
@@ -307,7 +327,7 @@ impl VectorStore {
                 text: row.get(4)?,
                 start_line: row.get(5)?,
                 end_line: row.get(6)?,
-                embedding: bytes_to_f32_vec(&embedding_bytes),
+                embedding: bytes_to_f32_vec(&embedding_bytes).map_err(|e| rusqlite::Error::InvalidColumnType(7, e.to_string(), rusqlite::types::Type::Blob))?,
              })
         })?;
 
@@ -363,7 +383,7 @@ impl VectorStore {
                 text: row.get(4)?,
                 start_line: row.get(5)?,
                 end_line: row.get(6)?,
-                embedding: bytes_to_f32_vec(&embedding_bytes),
+                embedding: bytes_to_f32_vec(&embedding_bytes).map_err(|e| rusqlite::Error::InvalidColumnType(7, e.to_string(), rusqlite::types::Type::Blob))?,
             })
         })?;
 
@@ -440,16 +460,17 @@ fn f32_vec_to_bytes(v: &[f32]) -> Vec<u8> {
 }
 
 /// Convert bytes from SQLite to f32 vector
-fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
-    // Check alignment and size
+fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, VectorStoreError> {
     if bytes.len() % std::mem::size_of::<f32>() != 0 {
-        return Vec::new();
+        return Err(VectorStoreError::Migration(
+            format!("Invalid embedding blob size: {} bytes (not a multiple of 4)", bytes.len()),
+        ));
     }
 
-    bytes
+    Ok(bytes
         .chunks_exact(4)
         .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
-        .collect()
+        .collect())
 }
 
 // ============================================================================
@@ -685,5 +706,46 @@ mod tests {
         let ids: Vec<String> = results.iter().map(|c| c.id.clone()).collect();
         assert!(ids.contains(&"c1".to_string()));
         assert!(ids.contains(&"c2".to_string()));
+    }
+
+    #[test]
+    fn test_bytes_to_f32_vec_invalid_length() {
+        let bad_bytes = vec![0u8; 5];
+        let result = bytes_to_f32_vec(&bad_bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bytes_to_f32_vec_valid_roundtrip() {
+        let original = vec![1.0f32, 2.0, 3.0];
+        let bytes = f32_vec_to_bytes(&original);
+        let restored = bytes_to_f32_vec(&bytes).unwrap();
+        assert_eq!(original, restored);
+    }
+
+    #[test]
+    fn test_upsert_chunk_rejects_wrong_dimension() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.sqlite");
+        let store = VectorStore::open(&db_path).unwrap();
+
+        let mut chunk = make_test_chunk("bad_dim", "content", SourceType::Topic);
+        chunk.embedding = vec![0.1f32; 100];
+
+        let result = store.upsert_chunk(&chunk);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_upsert_chunk_rejects_empty_embedding() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.sqlite");
+        let store = VectorStore::open(&db_path).unwrap();
+
+        let mut chunk = make_test_chunk("empty_emb", "content", SourceType::Topic);
+        chunk.embedding = vec![];
+
+        let result = store.upsert_chunk(&chunk);
+        assert!(result.is_err());
     }
 }

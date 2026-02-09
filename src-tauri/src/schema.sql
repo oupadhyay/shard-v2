@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 -- 768 dimensions for Gemini text-embedding-004
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings USING vec0(
     chunk_id TEXT PRIMARY KEY,
-    embedding float[768]
+    embedding float[768] distance_metric=cosine
 );
 
 -- Embedding cache to avoid re-embedding unchanged content

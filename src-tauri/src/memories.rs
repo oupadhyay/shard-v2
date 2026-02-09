@@ -273,7 +273,13 @@ fn load_topic_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<TopicIndex,
     }
     let content =
         fs::read_to_string(&path).map_err(|e| format!("Failed to read topic index: {}", e))?;
-    serde_json::from_str(&content).map_err(|e| format!("Failed to parse topic index: {}", e))
+    match serde_json::from_str(&content) {
+        Ok(index) => Ok(index),
+        Err(e) => {
+            log::warn!("Failed to parse topic index ({}), resetting to default. Old format will be overwritten.", e);
+            Ok(TopicIndex::default())
+        }
+    }
 }
 
 fn save_topic_index<R: Runtime>(
@@ -408,7 +414,13 @@ pub fn load_insight_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Insig
     }
     let content =
         fs::read_to_string(&path).map_err(|e| format!("Failed to read insight index: {}", e))?;
-    serde_json::from_str(&content).map_err(|e| format!("Failed to parse insight index: {}", e))
+    match serde_json::from_str(&content) {
+        Ok(index) => Ok(index),
+        Err(e) => {
+            log::warn!("Failed to parse insight index ({}), resetting to default. Old format will be overwritten.", e);
+            Ok(InsightIndex::default())
+        }
+    }
 }
 
 pub fn save_insight_index<R: Runtime>(
@@ -897,7 +909,9 @@ pub fn chunk_markdown(
     let mut current_text = String::new();
     let mut current_heading: Option<String> = None;
     let mut start_line: u32 = 1;
-    let heading_regex = regex::Regex::new(r"^#{1,6}\s+(.+)$").unwrap();
+    use std::sync::OnceLock;
+    static HEADING_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let heading_regex = HEADING_RE.get_or_init(|| regex::Regex::new(r"^#{1,6}\s+(.+)$").unwrap());
 
     for (idx, line) in lines.iter().enumerate() {
         let line_num = (idx + 1) as u32;
@@ -960,7 +974,13 @@ pub fn chunk_markdown(
                 p.text.push_str("\n\n");
                 p.text.push_str(&chunk.text);
                 p.end_line = chunk.end_line;
-                // Keep original heading
+                if p.heading.is_none() && chunk.heading.is_some() {
+                    p.heading = chunk.heading;
+                } else if let (Some(ref ph), Some(ref ch)) = (&p.heading, &chunk.heading) {
+                    if ph != ch {
+                        p.heading = Some(format!("{} > {}", ph, ch));
+                    }
+                }
                 pending = Some(p);
             } else {
                 merged.push(p);
@@ -982,9 +1002,15 @@ pub fn chunk_markdown(
         if idx > 0 && overlap_tokens > 0 {
             // Get tail of previous chunk for overlap
             let prev_text = &merged[idx - 1].text;
-            let overlap_chars = overlap_tokens * 4; // Convert back to chars
+            let overlap_chars = overlap_tokens * 4;
             if prev_text.len() > overlap_chars {
-                let overlap = &prev_text[prev_text.len() - overlap_chars..];
+                let safe_start = prev_text
+                    .char_indices()
+                    .rev()
+                    .nth(overlap_chars.min(prev_text.chars().count()).saturating_sub(1))
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                let overlap = &prev_text[safe_start..];
                 text_with_overlap.push_str("...");
                 text_with_overlap.push_str(overlap.trim_start());
                 text_with_overlap.push_str("\n\n");
@@ -1003,34 +1029,6 @@ pub fn chunk_markdown(
 
     final_chunks
 }
-
-// /// Get the path to the chunk index file
-// fn get_chunk_index_path<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
-//     let memories_dir = get_memories_dir(app_handle)?;
-//     Ok(memories_dir.join("chunk_index.json"))
-// }
-
-// /// Load the chunk index from disk
-// pub fn load_chunk_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<ChunkIndex, String> {
-//     let path = get_chunk_index_path(app_handle)?;
-//     if !path.exists() {
-//         return Ok(ChunkIndex::default());
-//     }
-//     let content =
-//         fs::read_to_string(&path).map_err(|e| format!("Failed to read chunk index: {}", e))?;
-//     serde_json::from_str(&content).map_err(|e| format!("Failed to parse chunk index: {}", e))
-// }
-
-// /// Save the chunk index to disk
-// fn save_chunk_index<R: Runtime>(
-//     app_handle: &AppHandle<R>,
-//     index: &ChunkIndex,
-// ) -> Result<(), String> {
-//     let path = get_chunk_index_path(app_handle)?;
-//     let content = serde_json::to_string_pretty(index)
-//         .map_err(|e| format!("Failed to serialize chunk index: {}", e))?;
-//     fs::write(&path, content).map_err(|e| format!("Failed to write chunk index: {}", e))
-// }
 
 /// Rebuild the chunk index from all topic and insight files
 /// Uses VectorStore with embedding cache for efficient updates
@@ -1098,19 +1096,14 @@ pub async fn rebuild_chunk_index<R: Runtime>(
 
     let mut tasks = Vec::new();
 
+    let mut sources_to_rebuild: Vec<(SourceType, String)> = Vec::new();
+
     for (source_type, source_name, content) in files_to_process {
-        // Clear old chunks for this file safely
-        // (We do this sequentially to avoid race on delete)
-        if let Err(e) = vector_store.delete_by_source(source_type.clone(), &source_name) {
-            log::warn!("[Chunk] Failed to clear old chunks for {}::{}: {}",
-                if source_type == SourceType::Topic { "topic" } else { "insight" },
-                source_name, e);
-        }
+        sources_to_rebuild.push((source_type.clone(), source_name.clone()));
 
         let raw_chunks = chunk_markdown(&content, 400, 80, 50);
 
         for (idx, raw) in raw_chunks.into_iter().enumerate() {
-            // Clone for closure
             let s_type = source_type.clone();
             let s_name = source_name.clone();
 
@@ -1191,7 +1184,15 @@ pub async fn rebuild_chunk_index<R: Runtime>(
         .collect()
         .await;
 
-    // Step C: Save everything to DB
+    // Step C: Delete old chunks only after new embeddings are ready
+    for (s_type, s_name) in &sources_to_rebuild {
+        if let Err(e) = vector_store.delete_by_source(s_type.clone(), s_name) {
+            log::warn!("[Chunk] Failed to clear old chunks for {}: {}",
+                s_name, e);
+        }
+    }
+
+    // Step D: Save everything to DB
     for chunk in ready_chunks {
         if let Err(e) = vector_store.upsert_chunk(&chunk) {
             log::error!("[Chunk] Failed to save cached chunk {}: {}", chunk.id, e);

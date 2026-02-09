@@ -340,6 +340,19 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                         // Update last run time on success
                         last_run_info.summary_last_run = Some(now.clone());
                         save_last_run_info(&app_handle, &last_run_info);
+
+                        if !result.topics_updated.is_empty() || !result.insights_created.is_empty() {
+                            log::info!("[Background] Topics/insights changed, rebuilding chunk index...");
+                            if let Ok(config) = crate::config::load_config(&app_handle) {
+                                if let Some(api_key) = config.gemini_api_key {
+                                    let http_client = reqwest::Client::new();
+                                    match crate::memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await {
+                                        Ok(count) => log::info!("[Background] Chunk index rebuilt with {} chunks", count),
+                                        Err(e) => log::warn!("[Background] Failed to rebuild chunk index: {}", e),
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         log::error!("[Background] Summary job failed: {}", e);

@@ -48,7 +48,6 @@ futures = "0.3.31"
 rusqlite = { version = "0.31", features = ["bundled"] }
 sqlite-vec = "0.1"
 bytemuck = "1.16"
-zerocopy = { version = "0.7", features = ["derive"] }
 sha2 = "0.10"
 
 [dev-dependencies]
