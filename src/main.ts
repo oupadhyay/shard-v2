@@ -821,7 +821,9 @@ listen<string>("agent-retry", (event) => {
     const retryingDiv = document.createElement("div");
     retryingDiv.id = "loading-indicator";
     retryingDiv.className = "message assistant";
-    retryingDiv.innerHTML = `<span class="loading-dots">Retrying (${payload.attempt}/${payload.max})...</span>`;
+    const escapedAttempt = md.utils.escapeHtml(String(payload.attempt));
+    const escapedMax = md.utils.escapeHtml(String(payload.max));
+    retryingDiv.innerHTML = `<span class="loading-dots">Retrying (${escapedAttempt}/${escapedMax})...</span>`;
     chatArea.appendChild(retryingDiv);
     chatArea.scrollTop = chatArea.scrollHeight;
   } catch (e) {
@@ -1289,9 +1291,10 @@ function showSuggestions(suggestions: string[]) {
   // Generate short display names (max 30 chars) with full prompt in title
   suggestionsContainer.innerHTML = suggestions.map((s, i) => {
     const displayName = s.length > 30 ? s.substring(0, 27) + "..." : s;
-    // Escape HTML for title attribute
-    const escapedTitle = s.replace(/"/g, "&quot;").replace(/</g, "&lt;");
-    return `<button class="suggestion-pill" data-index="${i}" title="${escapedTitle}">${displayName}</button>`;
+    // Escape HTML for both display and title attribute
+    const escapedDisplayName = md.utils.escapeHtml(displayName);
+    const escapedTitle = md.utils.escapeHtml(s);
+    return `<button class="suggestion-pill" data-index="${i}" title="${escapedTitle}">${escapedDisplayName}</button>`;
   }).join("");
 
   // Add click handlers
