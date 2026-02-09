@@ -131,6 +131,13 @@ impl VectorStore {
 
     /// Cache an embedding for future reuse
     pub fn cache_embedding(&self, content_hash: &str, embedding: &[f32]) -> Result<(), VectorStoreError> {
+        // Validate dimension before caching to prevent cache poisoning
+        if embedding.len() != EMBEDDING_DIM {
+            return Err(VectorStoreError::Migration(
+                format!("Cannot cache embedding with wrong dimension: expected {}, got {}", EMBEDDING_DIM, embedding.len()),
+            ));
+        }
+
         let embedding_bytes = f32_vec_to_bytes(embedding);
         let now = Utc::now().to_rfc3339();
 

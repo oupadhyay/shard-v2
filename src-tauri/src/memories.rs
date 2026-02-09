@@ -30,9 +30,12 @@ pub struct InsightIndex {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InsightMeta {
-    /// Embeddings are now stored in ChunkIndex, not here
-    pub reference_count: u32, // Track access frequency
-    pub update_count: u32, // Track how many times information was added (for up-leveling)
+    /// Track how many times this insight has been retrieved for RAG context.
+    /// Used as a proxy for "importance by utility".
+    pub reference_count: u32,
+    /// Track how many times this insight has been reinforced with new information.
+    /// Trigger: update_count >= 3 makes it a candidate for promotion to a Topic.
+    pub update_count: u32,
     pub created_at: DateTime<Utc>,
 }
 
@@ -615,6 +618,14 @@ pub fn find_relevant_context<R: Runtime>(
                 chunk.start_line,
                 chunk.end_line
             );
+
+            // Increment reference count for insights (for up-leveling tracking)
+            if is_insight {
+                if let Err(e) = increment_insight_reference(app_handle, &chunk.source_name) {
+                    log::warn!("[Context] Failed to increment insight reference: {}", e);
+                }
+            }
+
             return Ok(Some((
                 chunk.source_name.clone(),
                 chunk.text.clone(),
@@ -1126,19 +1137,21 @@ pub async fn rebuild_chunk_index<R: Runtime>(
 
     log::info!("[Chunk] Processing {} files", files_to_process.len());
 
-    let embedded_count;
-
     // 3. Process each file (concurrent embedding generation)
     // We create a stream of futures that process chunks
 
     let mut tasks = Vec::new();
 
+    // Track sources and how many chunks we expect per source
     let mut sources_to_rebuild: Vec<(SourceType, String)> = Vec::new();
+    let mut expected_chunks_per_source: std::collections::HashMap<(SourceType, String), usize> = std::collections::HashMap::new();
 
     for (source_type, source_name, content) in files_to_process {
         sources_to_rebuild.push((source_type.clone(), source_name.clone()));
 
         let raw_chunks = chunk_markdown(&content, 400, 80, 50);
+        let chunk_count = raw_chunks.len();
+        expected_chunks_per_source.insert((source_type.clone(), source_name.clone()), chunk_count);
 
         for (idx, raw) in raw_chunks.into_iter().enumerate() {
             let s_type = source_type.clone();
@@ -1228,22 +1241,43 @@ pub async fn rebuild_chunk_index<R: Runtime>(
         .await;
 
     // Step D: Save everything to DB (offload blocking writes to thread pool)
-    let ready_count = ready_chunks.len();
     let gen_chunks: Vec<Chunk> = generated_chunks.into_iter().flatten().collect();
-    let gen_count = gen_chunks.len();
     let chunks_to_save = ready_chunks;
     let handle = app_handle.clone();
     let sources = sources_to_rebuild.clone();
     let known = known_sources.clone();
     let processed = processed_sources.clone();
+    let expected_per_source = expected_chunks_per_source.clone();
 
-    tokio::task::spawn_blocking(move || -> Result<usize, String> {
+    // Count actual chunks we have per source (cached + generated)
+    let mut actual_chunks_per_source: std::collections::HashMap<(SourceType, String), usize> = std::collections::HashMap::new();
+    for chunk in &chunks_to_save {
+        *actual_chunks_per_source.entry((chunk.source_type.clone(), chunk.source_name.clone())).or_insert(0) += 1;
+    }
+    for chunk in &gen_chunks {
+        *actual_chunks_per_source.entry((chunk.source_type.clone(), chunk.source_name.clone())).or_insert(0) += 1;
+    }
+
+    let saved_count = tokio::task::spawn_blocking(move || -> Result<usize, String> {
         let mut count = 0;
         let vs = get_vector_store(&handle)?;
 
-        // Step C: Delete old chunks only after new embeddings are ready
-        for (s_type, s_name) in sources {
-            if let Err(e) = vs.delete_by_source(s_type.clone(), &s_name) {
+        // Step C: Delete old chunks only for sources where ALL chunks are ready
+        // Skip delete if any embedding failed for the source (to avoid data loss)
+        for (s_type, s_name) in &sources {
+            let key = (s_type.clone(), s_name.clone());
+            let expected = expected_per_source.get(&key).copied().unwrap_or(0);
+            let actual = actual_chunks_per_source.get(&key).copied().unwrap_or(0);
+
+            if actual < expected {
+                log::warn!(
+                    "[Chunk] Skipping delete for {} - only {}/{} chunks ready (embedding failures)",
+                    s_name, actual, expected
+                );
+                continue;
+            }
+
+            if let Err(e) = vs.delete_by_source(s_type.clone(), s_name) {
                 log::warn!("[Chunk] Failed to clear old chunks for {}: {}", s_name, e);
             }
         }
@@ -1280,8 +1314,6 @@ pub async fn rebuild_chunk_index<R: Runtime>(
         Ok(count)
     }).await.map_err(|e| format!("Blocking save task failed: {}", e))??;
 
-    embedded_count = ready_count + gen_count;
-
     // Update metadata (re-open vector store since we're after .await)
     {
         let vector_store = get_vector_store(app_handle)?;
@@ -1290,9 +1322,9 @@ pub async fn rebuild_chunk_index<R: Runtime>(
         }
     }
 
-    log::info!("[Chunk] Index rebuilt locally: {} chunks active", embedded_count);
+    log::info!("[Chunk] Index rebuilt locally: {} chunks active", saved_count);
 
-    Ok(embedded_count)
+    Ok(saved_count)
 }
 
 /// Find relevant chunks by embedding similarity and keyword match (Hybrid)

@@ -876,7 +876,10 @@ impl Agent {
                 let topic = args["topic"].as_str().unwrap_or_default();
                 let content = args["content"].as_str().unwrap_or_default();
                 match crate::memories::update_topic_summary(app_handle, topic, content) {
-                    Ok(_) => format!("Topic summary updated: {}", topic),
+                    Ok(_) => format!(
+                        "Topic summary updated: {}. Note: Run `refresh_memories` to rebuild the search index for this change to appear in retrieval.",
+                        topic
+                    ),
                     Err(e) => format!("Failed to update topic summary: {}", e),
                 }
             }

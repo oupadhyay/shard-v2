@@ -651,9 +651,6 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
         }
     };
 
-    // TODO: Up-leveling phase - check insights with reference_count >= INSIGHT_UPLEVEL_THRESHOLD
-    // and merge/promote them to topics
-
     // Archive processed daily logs (move to archived/ folder)
     if !logs_to_archive.is_empty() && !insights_created.is_empty() {
         for date in &logs_to_archive {
