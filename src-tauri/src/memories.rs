@@ -276,14 +276,25 @@ fn load_topic_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<TopicIndex,
     match serde_json::from_str::<TopicIndex>(&content) {
         Ok(index) => Ok(index),
         Err(_) => {
-            // Backward-compat path: try to interpret the file as the old format,
-            // which stored a map from topic names to embeddings/metadata.
+            // Backward-compat path: try to interpret the file as the old format.
+            // Old format could be either:
+            //   1. { "topics": { "topic_a": [...], "topic_b": [...] } } (wrapped)
+            //   2. { "topic_a": [...], "topic_b": [...] } (flat map)
             let old_format: Result<HashMap<String, serde_json::Value>, _> =
                 serde_json::from_str(&content);
 
             match old_format {
                 Ok(map) => {
-                    log::info!("[Memories] Migrated topic index from legacy format");
+                    // Check if this is the wrapped format { "topics": { ... } }
+                    if map.len() == 1 && map.contains_key("topics") {
+                        if let Some(serde_json::Value::Object(inner)) = map.get("topics") {
+                            log::info!("[Memories] Migrated topic index from wrapped legacy format");
+                            let topics = inner.keys().cloned().collect();
+                            return Ok(TopicIndex { topics });
+                        }
+                    }
+                    // Otherwise, treat top-level keys as topic names (flat format)
+                    log::info!("[Memories] Migrated topic index from flat legacy format");
                     let topics = map.keys().cloned().collect();
                     Ok(TopicIndex { topics })
                 }
@@ -586,8 +597,8 @@ pub fn find_relevant_insights<R: Runtime>(
 /// Find best match between topics and insights, preferring insights on tie
 /// Returns (name, content, is_insight)
 ///
-/// Phase 1 backward compatibility: tries chunk-based search first, falls back
-/// to whole-document search if chunk index is empty or missing.
+/// Uses hybrid search (Vector + FTS). Returns None if no chunks match.
+/// Callers should ensure the chunk index is built; no fallback to whole-document search.
 pub fn find_relevant_context<R: Runtime>(
     app_handle: &AppHandle<R>,
     query_text: &str,
@@ -613,7 +624,6 @@ pub fn find_relevant_context<R: Runtime>(
     }
 
     // No chunk matches - return None
-    // Phase 2-3: Removed fallback to whole-document search
     // Caller should rebuild chunk index if getting no results
     Ok(None)
 }
@@ -915,7 +925,7 @@ pub struct RawChunk {
 ///
 /// Strategy:
 /// 1. Split at markdown headings (^#{1,6}\s)
-/// 2. If a section exceeds max_tokens, force-split at sentence boundaries
+/// 2. If a section exceeds max_tokens, force-split at line boundaries (not sentences)
 /// 3. Add overlap_tokens from previous chunk for context continuity
 /// 4. Merge chunks < min_tokens with the next chunk
 pub fn chunk_markdown(
@@ -1064,13 +1074,16 @@ pub async fn rebuild_chunk_index<R: Runtime>(
     use futures::StreamExt;
     use std::collections::HashSet;
 
-    let vector_store = get_vector_store(app_handle)?;
-
-    // Track existing sources to identify deletions
-    let existing_sources = vector_store
-        .get_unique_sources()
-        .map_err(|e| format!("Failed to get sources: {}", e))?;
-    let known_sources: HashSet<(SourceType, String)> = HashSet::from_iter(existing_sources.into_iter());
+    // Get existing sources BEFORE any .await to avoid !Send issues with rusqlite::Connection.
+    // VectorStore owns a Connection which is !Send, so we must not hold it across .await.
+    let known_sources: HashSet<(SourceType, String)> = {
+        let vector_store = get_vector_store(app_handle)?;
+        let existing_sources = vector_store
+            .get_unique_sources()
+            .map_err(|e| format!("Failed to get sources: {}", e))?;
+        HashSet::from_iter(existing_sources.into_iter())
+    };
+    // Note: vector_store is dropped here before any .await
     let mut processed_sources: HashSet<(SourceType, String)> = HashSet::new();
 
     let mut files_to_process: Vec<(SourceType, String, String)> = Vec::new();
@@ -1136,44 +1149,43 @@ pub async fn rebuild_chunk_index<R: Runtime>(
     }
 
     // Step A: Check cache and prepare embedding tasks
+    // Re-open vector store for cache lookups (dropped before .await)
     let mut chunks_to_embed = Vec::new();
     let mut ready_chunks = Vec::new();
 
-    for (s_type, s_name, idx, raw) in tasks {
-        // Cache key should be based on the text we actually embed (including prefix)
-        let embedding_text = format!(
-            "{}: {}\n{}",
-            if s_type == SourceType::Topic { "Topic" } else { "Insight" },
-            s_name,
-            &raw.text.chars().take(1000).collect::<String>()
-        );
-        let content_hash = VectorStore::content_hash(&embedding_text);
+    {
+        let vector_store = get_vector_store(app_handle)?;
+        for (s_type, s_name, idx, raw) in tasks {
+            // Cache key: use sha256(chunk.text) to match what upsert_chunk stores
+            // This ensures cache consistency between rebuild and upsert
+            let content_hash = VectorStore::content_hash(&raw.text);
 
-        // Try cache
-        let cached = match vector_store.get_cached_embedding(&content_hash) {
-            Ok(emb) => emb,
-            Err(e) => {
-                log::warn!("[Chunk] Cache check failed: {}", e);
-                None
+            // Try cache
+            let cached = match vector_store.get_cached_embedding(&content_hash) {
+                Ok(emb) => emb,
+                Err(e) => {
+                    log::warn!("[Chunk] Cache check failed: {}", e);
+                    None
+                }
+            };
+
+            if let Some(embedding) = cached {
+                 let type_str = if s_type == SourceType::Topic { "topic" } else { "insight" };
+                 ready_chunks.push(Chunk {
+                    id: format!("{}::{}::{}", type_str, s_name, idx),
+                    source_type: s_type,
+                    source_name: s_name,
+                    heading: raw.heading,
+                    text: raw.text,
+                    start_line: raw.start_line,
+                    end_line: raw.end_line,
+                    embedding,
+                });
+            } else {
+                chunks_to_embed.push((s_type, s_name, idx, raw));
             }
-        };
-
-        if let Some(embedding) = cached {
-             let type_str = if s_type == SourceType::Topic { "topic" } else { "insight" };
-             ready_chunks.push(Chunk {
-                id: format!("{}::{}::{}", type_str, s_name, idx),
-                source_type: s_type,
-                source_name: s_name,
-                heading: raw.heading,
-                text: raw.text,
-                start_line: raw.start_line,
-                end_line: raw.end_line,
-                embedding,
-            });
-        } else {
-            chunks_to_embed.push((s_type, s_name, idx, raw));
         }
-    }
+    } // vector_store dropped here before .await
 
     log::info!("[Chunk] Found {} chunks cached, {} to embed", ready_chunks.len(), chunks_to_embed.len());
 
@@ -1270,9 +1282,12 @@ pub async fn rebuild_chunk_index<R: Runtime>(
 
     embedded_count = ready_count + gen_count;
 
-    // Update metadata
-    if let Err(e) = vector_store.set_last_rebuilt(Utc::now()) {
-        log::warn!("[Chunk] Failed to set last_rebuilt: {}", e);
+    // Update metadata (re-open vector store since we're after .await)
+    {
+        let vector_store = get_vector_store(app_handle)?;
+        if let Err(e) = vector_store.set_last_rebuilt(Utc::now()) {
+            log::warn!("[Chunk] Failed to set last_rebuilt: {}", e);
+        }
     }
 
     log::info!("[Chunk] Index rebuilt locally: {} chunks active", embedded_count);

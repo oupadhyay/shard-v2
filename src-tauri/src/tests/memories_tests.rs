@@ -334,5 +334,5 @@ fn test_topic_index_old_format_deserializes_to_default() {
 fn test_insight_index_old_format_with_embedding_field() {
     let old_format = r#"{"insights":{"fact_1":{"embedding":[0.1,0.2],"reference_count":3,"update_count":1,"created_at":"2025-01-01T00:00:00Z"}}}"#;
     let result: Result<InsightIndex, _> = serde_json::from_str(old_format);
-    assert!(result.is_ok(), "InsightMeta with extra 'embedding' field should still parse (serde default ignores unknown fields) OR fail gracefully");
+    assert!(result.is_ok(), "InsightMeta with extra 'embedding' field should still parse (serde ignores unknown fields by default)");
 }

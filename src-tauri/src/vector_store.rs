@@ -219,24 +219,13 @@ impl VectorStore {
             SourceType::Insight => "insight",
         };
 
-        // Get chunk IDs to delete from vec0 table
-        let chunk_ids: Vec<String> = {
-            let mut stmt = self.conn.prepare(
-                "SELECT id FROM chunks WHERE source_type = ? AND source_name = ?"
-            )?;
-            let rows = stmt.query_map(params![source_type_str, source_name], |row| row.get(0))?;
-            rows.filter_map(|r| r.ok()).collect()
-        };
-
         let tx = self.conn.unchecked_transaction()?;
 
-        // Delete from vec0 table
-        for chunk_id in &chunk_ids {
-            tx.execute(
-                "DELETE FROM chunk_embeddings WHERE chunk_id = ?",
-                [chunk_id],
-            )?;
-        }
+        // Delete from vec0 table using subquery (efficient single-statement delete)
+        tx.execute(
+            "DELETE FROM chunk_embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE source_type = ? AND source_name = ?)",
+            params![source_type_str, source_name],
+        )?;
 
         // Delete from chunks table
         let deleted = tx.execute(
@@ -252,6 +241,13 @@ impl VectorStore {
     ///
     /// Returns top-k chunks ordered by cosine similarity (descending)
     pub fn knn_search(&self, query_embedding: &[f32], k: usize, min_score: f32) -> Result<Vec<Chunk>, VectorStoreError> {
+        // Validate embedding dimension before passing to SQLite
+        if query_embedding.len() != EMBEDDING_DIM {
+            return Err(VectorStoreError::Migration(
+                format!("Query embedding dimension mismatch: expected {}, got {}", EMBEDDING_DIM, query_embedding.len()),
+            ));
+        }
+
         let query_bytes = f32_vec_to_bytes(query_embedding);
 
         // sqlite-vec optimized KNN query: use 'MATCH' operator
@@ -303,11 +299,14 @@ impl VectorStore {
             }, similarity))
         })?;
 
-        let results: Vec<Chunk> = rows
-            .filter_map(|r| r.ok())
-            .filter(|(_, score)| *score >= min_score)
-            .map(|(chunk, _)| chunk)
-            .collect();
+        // Collect with error propagation instead of silently dropping errors
+        let mut results: Vec<Chunk> = Vec::new();
+        for row_result in rows {
+            let (chunk, score) = row_result?;
+            if score >= min_score {
+                results.push(chunk);
+            }
+        }
 
         Ok(results)
     }
@@ -352,7 +351,8 @@ impl VectorStore {
              })
         })?;
 
-        Ok(chunks.filter_map(|r| r.ok()).collect())
+        // Collect with error propagation instead of silently dropping errors
+        chunks.collect::<Result<Vec<_>, _>>().map_err(VectorStoreError::from)
     }
 
     /// Hybrid Search (Vector + Keyword)
@@ -414,7 +414,8 @@ impl VectorStore {
             })
         })?;
 
-        Ok(chunks.filter_map(|r| r.ok()).collect())
+        // Collect with error propagation instead of silently dropping errors
+        chunks.collect::<Result<Vec<_>, _>>().map_err(VectorStoreError::from)
     }
 
     /// Get all unique sources (type, name) in the store
@@ -430,7 +431,8 @@ impl VectorStore {
             Ok((source_type, name))
         })?;
 
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        // Collect with error propagation instead of silently dropping errors
+        rows.collect::<Result<Vec<_>, _>>().map_err(VectorStoreError::from)
     }
 
     /// Clear all data (for testing)
