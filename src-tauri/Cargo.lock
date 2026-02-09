@@ -5531,6 +5531,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-stemmers"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e46a2036019fdb888131db7a4c847a1063a7493f971ed94ea82c67eada63ca54"
+dependencies = [
+ "serde",
+ "serde_derive",
+]
+
+[[package]]
 name = "rust_decimal"
 version = "1.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6099,10 +6109,12 @@ dependencies = [
  "quick-xml 0.37.5",
  "regex",
  "reqwest 0.12.24",
+ "rust-stemmers",
  "scraper",
  "screenshots",
  "serde",
  "serde_json",
+ "stop-words",
  "tauri",
  "tauri-build",
  "tauri-nspanel",
@@ -6113,6 +6125,7 @@ dependencies = [
  "time 0.3.44",
  "tokio 1.48.0",
  "toml 0.8.2",
+ "unicode-segmentation",
  "urlencoding",
  "uuid 1.18.1",
  "wikipedia",
@@ -6271,6 +6284,15 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "stop-words"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c6a86be9f7fa4559b7339669e72026eb437f5e9c5a85c207fe1033079033a17"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "string"

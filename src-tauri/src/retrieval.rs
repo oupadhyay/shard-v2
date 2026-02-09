@@ -19,7 +19,7 @@ use unicode_segmentation::UnicodeSegmentation;
 lazy_static! {
     /// English stopwords for retrieval
     static ref STOPWORDS: HashSet<String> = {
-        stop_words::get(stop_words::Language::English)
+        stop_words::get(stop_words::LANGUAGE::English)
             .into_iter()
             .collect()
     };
@@ -107,13 +107,13 @@ const TEMPORAL_TAU_DAYS: f32 = 15.0;
 /// Enhanced tokenizer: uses unicode segmentation, removes stopwords, and applies stemming.
 ///
 /// Improvements:
-/// - Uses `unicode-segmentation` for proper word boundaries (preserving `snake_case`)
+/// - Uses `unicode-segmentation` for proper word boundaries (treats `snake_case` as single token)
 /// - Removes common English stopwords
 /// - Applies Porter stemming using `rust-stemmers`
-/// - Preserves `camelCase` and `snake_case` code tokens
+/// - Treats `camelCase` and `snake_case` as single tokens (lowercased during normalization)
 pub fn tokenize(text: &str) -> Vec<String> {
     text.unicode_words()
-        .filter(|word| word.len() > 1) // Skip single characters early
+        .filter(|word| word.chars().count() > 1) // Skip single-char tokens (handles multi-byte chars correctly)
         .map(|word| word.to_lowercase())
         .filter(|word| !STOPWORDS.contains(word))
         .map(|word| {
