@@ -34,7 +34,7 @@ export function createThinkingElement(content: string, isComplete: boolean = tru
 /**
  * Get or create the web search container for grouping web searches
  */
-export function getOrCreateWebSearchContainer(chatArea: HTMLElement): HTMLElement {
+export function getOrCreateWebSearchContainer(chatArea: HTMLElement | DocumentFragment): HTMLElement {
   // If we already have an active container, return it
   if (currentWebSearchContainer && chatArea.contains(currentWebSearchContainer)) {
     return currentWebSearchContainer;
@@ -182,7 +182,7 @@ function copyToClipboard(text: string, button: HTMLElement) {
  * Add a message to the chat area
  */
 export function addMessage(
-  chatArea: HTMLElement,
+  chatArea: HTMLElement | DocumentFragment,
   role: "user" | "assistant",
   content: string,
   images?: ImageAttachment[]
@@ -259,6 +259,8 @@ export function addMessage(
   msgDiv.appendChild(copyBtn);
 
   chatArea.appendChild(msgDiv);
-  chatArea.scrollTop = chatArea.scrollHeight;
+  if (chatArea instanceof HTMLElement) {
+    chatArea.scrollTop = chatArea.scrollHeight;
+  }
 }
 

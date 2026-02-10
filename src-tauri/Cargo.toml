@@ -67,3 +67,6 @@ harness = false
 name = "optimizations_bench"
 harness = false
 
+[[bench]]
+name = "history_loading_bench"
+harness = false
