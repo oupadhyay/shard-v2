@@ -774,10 +774,6 @@ pub fn add_memory<R: Runtime>(
     Ok(memory)
 }
 
-// TODO: Feature Request - Background cleanup job that runs daily to:
-// 1. Remove stale/low-importance memories
-// 2. Summarize old interaction memories
-// 3. Consolidate duplicate preferences
 /// Delete a memory by ID
 #[allow(dead_code)]
 pub fn delete_memory<R: Runtime>(app_handle: &AppHandle<R>, id: &str) -> Result<bool, String> {
