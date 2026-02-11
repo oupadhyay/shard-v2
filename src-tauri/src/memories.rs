@@ -19,7 +19,6 @@ use crate::vector_store::VectorStore;
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct TopicIndex {
     /// Topic names (file stems without .md extension)
-    /// Embeddings are now stored in ChunkIndex, not here
     pub topics: std::collections::HashSet<String>,
 }
 
@@ -345,7 +344,6 @@ pub fn read_topic_summary<R: Runtime>(
 }
 
 /// Update a focused topic summary
-/// Note: Embeddings are now in ChunkIndex, call rebuild_chunk_index after updates
 pub fn update_topic_summary<R: Runtime>(
     app_handle: &AppHandle<R>,
     topic: &str,
@@ -369,7 +367,7 @@ pub fn update_topic_summary<R: Runtime>(
     };
     fs::write(&path, formatted_content).map_err(|e| format!("Failed to write topic: {}", e))?;
 
-    // Update index (just track topic names, embeddings are in ChunkIndex)
+    // Update index (just track topic names)
     let mut index = load_topic_index(app_handle)?;
     index.topics.insert(topic.to_string());
     save_topic_index(app_handle, &index)?;
@@ -379,7 +377,6 @@ pub fn update_topic_summary<R: Runtime>(
 }
 
 /// Rebuild the topic index from all existing .md files in topics directory
-/// Note: Embeddings are now in ChunkIndex, this just tracks topic file names
 pub fn rebuild_topic_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<usize, String> {
     let topics_dir = get_topics_dir(app_handle)?;
     let mut new_index = TopicIndex::default();
@@ -404,21 +401,6 @@ pub fn rebuild_topic_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<usiz
     save_topic_index(app_handle, &new_index)?;
     log::info!("[Index] Rebuilt topic index with {} topics", count);
     Ok(count)
-}
-
-/// Find relevant topic summaries based on query embedding (RAG)
-/// DEPRECATED: Use find_relevant_chunks() instead - embeddings now in ChunkIndex
-#[allow(dead_code)]
-#[deprecated(note = "Embeddings are now in ChunkIndex, use find_relevant_chunks instead")]
-pub fn find_relevant_topics<R: Runtime>(
-    app_handle: &AppHandle<R>,
-    _query_embedding: &[f32],
-) -> Result<Option<(String, String)>, String> {
-    // This function is deprecated - TopicIndex no longer stores embeddings
-    // Return None to signal callers should use chunk-based search
-    log::warn!("find_relevant_topics is deprecated, use find_relevant_chunks instead");
-    let _ = app_handle; // Suppress unused warning
-    Ok(None)
 }
 
 // ============================================================================
@@ -492,7 +474,6 @@ pub fn read_insight<R: Runtime>(app_handle: &AppHandle<R>, title: &str) -> Resul
 }
 
 /// Create or update an insight
-/// Note: Embeddings are now in ChunkIndex, call rebuild_chunk_index after updates
 pub fn update_insight<R: Runtime>(
     app_handle: &AppHandle<R>,
     title: &str,
@@ -506,7 +487,7 @@ pub fn update_insight<R: Runtime>(
     let formatted_content = format!("# {}\n\n{}", title, content);
     fs::write(&path, formatted_content).map_err(|e| format!("Failed to write insight: {}", e))?;
 
-    // Update index (preserve counts if exists) - embeddings are in ChunkIndex
+    // Update index (preserve counts if exists)
     let mut index = load_insight_index(app_handle)?;
     let (reference_count, update_count) = index
         .insights
@@ -583,23 +564,8 @@ pub fn get_promotion_candidates<R: Runtime>(
     Ok(candidates)
 }
 
-/// Find relevant insights based on query embedding (RAG)
-/// DEPRECATED: Use find_relevant_chunks() instead - embeddings now in ChunkIndex
-#[allow(dead_code)]
-#[deprecated(note = "Embeddings are now in ChunkIndex, use find_relevant_chunks instead")]
-pub fn find_relevant_insights<R: Runtime>(
-    app_handle: &AppHandle<R>,
-    _query_embedding: &[f32],
-) -> Result<Option<(String, String, f32)>, String> {
-    // This function is deprecated - InsightIndex no longer stores embeddings
-    log::warn!("find_relevant_insights is deprecated, use find_relevant_chunks instead");
-    let _ = app_handle; // Suppress unused warning
-    Ok(None)
-}
-
 /// Find best match between topics and insights, preferring insights on tie
 /// Returns (name, content, is_insight)
-///
 /// Uses hybrid search (Vector + FTS). Returns None if no chunks match.
 /// Callers should ensure the chunk index is built; no fallback to whole-document search.
 pub fn find_relevant_context<R: Runtime>(
@@ -640,7 +606,6 @@ pub fn find_relevant_context<R: Runtime>(
 }
 
 /// Rebuild the insight index from all existing .md files
-/// Note: Embeddings are now in ChunkIndex, this just tracks metadata
 pub fn rebuild_insight_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<usize, String> {
     let insights_dir = get_insights_dir(app_handle)?;
     if !insights_dir.exists() {
@@ -655,7 +620,7 @@ pub fn rebuild_insight_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<us
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("md") {
                 if let Some(title) = path.file_stem().and_then(|s| s.to_str()) {
-                    // Just track metadata, embeddings are in ChunkIndex
+                    // Just track metadata
                     index.insights.insert(
                         title.to_string(),
                         InsightMeta {
@@ -823,7 +788,6 @@ pub fn get_today_log_path<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathB
 }
 
 /// Append content to today's daily memory log
-///
 /// Used by pre-compaction flush to save extracted facts before summarization.
 /// Creates the file with a header if it doesn't exist.
 pub fn append_to_daily_log<R: Runtime>(
@@ -933,7 +897,6 @@ pub struct RawChunk {
 }
 
 /// Split markdown content into chunks at header boundaries
-///
 /// Strategy:
 /// 1. Split at markdown headings (^#{1,6}\s)
 /// 2. If a section exceeds max_tokens, force-split at line boundaries (not sentences)
