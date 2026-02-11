@@ -1,0 +1,22 @@
+<<<<<<< SEARCH
+    // Verify we have the required API key
+    if background_model.contains("(Cerebras)") {
+        config
+            .cerebras_api_key
+            .as_ref()
+            .ok_or("No Cerebras API key configured for background jobs")?;
+    } else if background_model.contains("(OpenRouter)") {
+        config
+            .openrouter_api_key
+            .as_ref()
+            .ok_or("No OpenRouter API key configured for background jobs")?;
+    } else {
+        config
+            .groq_api_key
+            .as_ref()
+            .ok_or("No Groq API key configured for background jobs")?;
+    };
+=======
+    // Verify we have the required API key
+    config.get_model_provider_config(background_model, "background jobs")?;
+>>>>>>> REPLACE

@@ -1,0 +1,63 @@
+<<<<<<< SEARCH
+    // Parse model to determine provider and model ID
+    let (url, api_key, model_id) = if model.contains("(Cerebras)") {
+        let key = config
+            .cerebras_api_key
+            .as_ref()
+            .ok_or("No Cerebras API key configured for background jobs")?;
+        let model_id = if model.contains("120b") {
+            "gpt-oss-120b"
+        } else {
+            "llama-3.3-70b"
+        };
+        ("https://api.cerebras.ai/v1/chat/completions", key, model_id)
+    } else if model.contains("(OpenRouter)") {
+        let key = config
+            .openrouter_api_key
+            .as_ref()
+            .ok_or("No OpenRouter API key configured for background jobs")?;
+        // Extract model ID from format like "google/gemma-3-27b-it:free (OpenRouter)"
+        let model_id = model
+            .split(" (OpenRouter)")
+            .next()
+            .unwrap_or("google/gemma-3-27b-it:free");
+        (
+            "https://openrouter.ai/api/v1/chat/completions",
+            key,
+            model_id.to_string().leak() as &str,
+        )
+    } else {
+        // Default to Groq
+        let key = config
+            .groq_api_key
+            .as_ref()
+            .ok_or("No Groq API key configured for background jobs")?;
+        let model_id = if model.contains("20b") {
+            "openai/gpt-oss-20b"
+        } else {
+            "openai/gpt-oss-120b"
+        };
+        (
+            "https://api.groq.com/openai/v1/chat/completions",
+            key,
+            model_id,
+        )
+    };
+
+    let payload = serde_json::json!({
+        "model": model_id,
+=======
+    let provider_config = config.get_model_provider_config(model, "background jobs")?;
+
+    let payload = serde_json::json!({
+        "model": provider_config.model_id,
+>>>>>>> REPLACE
+<<<<<<< SEARCH
+    let res = http_client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+=======
+    let res = http_client
+        .post(provider_config.url)
+        .header("Authorization", format!("Bearer {}", provider_config.api_key))
+>>>>>>> REPLACE

@@ -46,6 +46,88 @@ pub struct AppConfig {
     pub fallback_model: Option<String>,        // Default: openai/gpt-oss-120b:free
 }
 
+pub struct ModelProviderConfig {
+    pub base_url: String,
+    pub api_key: String,
+    pub model_id: String,
+    pub provider_name: String,
+    pub reasoning_effort: Option<String>,
+}
+
+impl ModelProviderConfig {
+    /// Get the full URL for chat completions
+    pub fn full_url(&self) -> String {
+        format!("{}chat/completions", self.base_url)
+    }
+}
+
+impl AppConfig {
+    /// Get provider mapping and API key for a model name
+    pub fn get_model_provider_config(&self, model: &str, context: &str) -> Result<ModelProviderConfig, String> {
+        if model.contains("(Cerebras)") {
+            let key = self.cerebras_api_key.as_ref()
+                .ok_or_else(|| format!("No Cerebras API key configured for {}", context))?;
+
+            // Background job models have specific IDs, otherwise clean the name
+            let model_id = if model.contains("120b") {
+                "gpt-oss-120b".to_string()
+            } else if model.contains("70b") {
+                "llama-3.3-70b".to_string()
+            } else {
+                model.replace(" (Cerebras)", "").trim().to_string()
+            };
+
+            Ok(ModelProviderConfig {
+                base_url: "https://api.cerebras.ai/v1/".to_string(),
+                api_key: key.clone(),
+                model_id,
+                provider_name: "Cerebras".to_string(),
+                reasoning_effort: Some("high".to_string()),
+            })
+        } else if model.contains("(Groq)") {
+            let key = self.groq_api_key.as_ref()
+                .ok_or_else(|| format!("No Groq API key configured for {}", context))?;
+
+            // Background job models have specific IDs, otherwise clean the name
+            let model_id = if model.contains("20b") {
+                "openai/gpt-oss-20b".to_string()
+            } else if model.contains("120b") {
+                "openai/gpt-oss-120b".to_string()
+            } else {
+                let base_model = model.replace(" (Groq)", "").trim().to_string();
+                format!("openai/{}", base_model)
+            };
+
+            Ok(ModelProviderConfig {
+                base_url: "https://api.groq.com/openai/v1/".to_string(),
+                api_key: key.clone(),
+                model_id,
+                provider_name: "Groq".to_string(),
+                reasoning_effort: Some("high".to_string()),
+            })
+        } else {
+            // Default to OpenRouter for explicitly marked models or as general fallback
+            let key = self.openrouter_api_key.as_ref()
+                .ok_or_else(|| format!("No OpenRouter API key configured for {}", context))?;
+
+            let model_id = model
+                .split(" (OpenRouter)")
+                .next()
+                .unwrap_or(model)
+                .trim()
+                .to_string();
+
+            Ok(ModelProviderConfig {
+                base_url: "https://openrouter.ai/api/v1/".to_string(),
+                api_key: key.clone(),
+                model_id: if model_id.is_empty() { "google/gemma-3-27b-it:free".to_string() } else { model_id },
+                provider_name: "OpenRouter".to_string(),
+                reasoning_effort: None,
+            })
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -223,4 +305,3 @@ pub fn save_config<R: Runtime>(app_handle: &AppHandle<R>, config: &AppConfig) ->
     let config_path = get_config_path(app_handle)?;
     save_config_internal(&config_path, config)
 }
-
