@@ -48,7 +48,6 @@ pub struct AppConfig {
 
 pub struct ModelProviderConfig {
     pub base_url: String,
-    pub api_key: String,
     pub model_id: String,
     pub provider_name: String,
     pub reasoning_effort: Option<String>,
@@ -62,13 +61,10 @@ impl ModelProviderConfig {
 }
 
 impl AppConfig {
-    /// Get provider mapping and API key for a model name
-    pub fn get_model_provider_config(&self, model: &str, context: &str) -> Result<ModelProviderConfig, String> {
-        if model.contains("(Cerebras)") {
-            let key = self.cerebras_api_key.as_ref()
-                .ok_or_else(|| format!("No Cerebras API key configured for {}", context))?;
-
-            // Background job models have specific IDs, otherwise clean the name
+    /// Get provider mapping and API key for a model name.
+    /// Returns (ProviderConfig, ApiKey)
+    pub fn get_model_provider_config(&self, model: &str, context: &str) -> Result<(ModelProviderConfig, String), String> {
+        let (provider_name, base_url, model_id, reasoning_effort) = if model.contains("(Cerebras)") {
             let model_id = if model.contains("120b") {
                 "gpt-oss-120b".to_string()
             } else if model.contains("70b") {
@@ -76,19 +72,8 @@ impl AppConfig {
             } else {
                 model.replace(" (Cerebras)", "").trim().to_string()
             };
-
-            Ok(ModelProviderConfig {
-                base_url: "https://api.cerebras.ai/v1/".to_string(),
-                api_key: key.clone(),
-                model_id,
-                provider_name: "Cerebras".to_string(),
-                reasoning_effort: Some("high".to_string()),
-            })
+            ("Cerebras", "https://api.cerebras.ai/v1/", model_id, Some("high".to_string()))
         } else if model.contains("(Groq)") {
-            let key = self.groq_api_key.as_ref()
-                .ok_or_else(|| format!("No Groq API key configured for {}", context))?;
-
-            // Background job models have specific IDs, otherwise clean the name
             let model_id = if model.contains("20b") {
                 "openai/gpt-oss-20b".to_string()
             } else if model.contains("120b") {
@@ -97,33 +82,32 @@ impl AppConfig {
                 let base_model = model.replace(" (Groq)", "").trim().to_string();
                 format!("openai/{}", base_model)
             };
-
-            Ok(ModelProviderConfig {
-                base_url: "https://api.groq.com/openai/v1/".to_string(),
-                api_key: key.clone(),
-                model_id,
-                provider_name: "Groq".to_string(),
-                reasoning_effort: Some("high".to_string()),
-            })
+            ("Groq", "https://api.groq.com/openai/v1/", model_id, Some("high".to_string()))
         } else {
-            // Default to OpenRouter for explicitly marked models or as general fallback
-            let key = self.openrouter_api_key.as_ref()
-                .ok_or_else(|| format!("No OpenRouter API key configured for {}", context))?;
-
             let model_id = model
                 .split(" (OpenRouter)")
                 .next()
                 .unwrap_or(model)
                 .trim()
                 .to_string();
+            let model_id = if model_id.is_empty() { "google/gemma-3-27b-it:free".to_string() } else { model_id };
+            ("OpenRouter", "https://openrouter.ai/api/v1/", model_id, None)
+        };
 
-            Ok(ModelProviderConfig {
-                base_url: "https://openrouter.ai/api/v1/".to_string(),
-                api_key: key.clone(),
-                model_id: if model_id.is_empty() { "google/gemma-3-27b-it:free".to_string() } else { model_id },
-                provider_name: "OpenRouter".to_string(),
-                reasoning_effort: None,
-            })
+        let key = match provider_name {
+            "Cerebras" => &self.cerebras_api_key,
+            "Groq" => &self.groq_api_key,
+            _ => &self.openrouter_api_key,
+        };
+
+        match key {
+            Some(k) => Ok((ModelProviderConfig {
+                base_url: base_url.to_string(),
+                model_id,
+                provider_name: provider_name.to_string(),
+                reasoning_effort,
+            }, k.clone())),
+            None => Err(format!("No {} API key configured for {}", provider_name, context)),
         }
     }
 }

@@ -1,0 +1,7 @@
+<<<<<<< SEARCH
+    // Verify we have the required API key
+    config.get_model_provider_config(background_model, "background jobs")?;
+=======
+    // Verify we have the required API key
+    let _ = config.get_model_provider_config(background_model, "background jobs")?;
+>>>>>>> REPLACE

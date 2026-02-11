@@ -164,7 +164,7 @@ pub async fn call_background_llm(
     model: &str,
     prompt: &str,
 ) -> Result<String, String> {
-    let provider_config = config.get_model_provider_config(model, "background jobs")?;
+    let (provider_config, api_key) = config.get_model_provider_config(model, "background jobs")?;
 
     let payload = serde_json::json!({
         "model": provider_config.model_id,
@@ -184,7 +184,7 @@ pub async fn call_background_llm(
 
     let res = http_client
         .post(provider_config.full_url())
-        .header("Authorization", format!("Bearer {}", provider_config.api_key))
+        .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()
@@ -370,7 +370,7 @@ async fn run_summary_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summar
         .unwrap_or(DEFAULT_BACKGROUND_MODEL);
 
     // Verify we have the required API key
-    config.get_model_provider_config(background_model, "background jobs")?;
+    let _ = config.get_model_provider_config(background_model, "background jobs")?;
 
     // Gather interactions from lookback period
     let (interactions, stats) = gather_recent_interactions(&interactions_dir, LOOKBACK_HOURS)?;

@@ -1267,12 +1267,12 @@ impl Agent {
         let enable_tools = config.enable_tools.unwrap_or(true);
 
         // Detect provider from model name and configure accordingly
-        let provider_config = config.get_model_provider_config(&selected_model, "main chat")?;
+        let (provider_config, api_key) = config.get_model_provider_config(&selected_model, "main chat")?;
         let is_cerebras = provider_config.provider_name == "Cerebras";
         let is_groq = provider_config.provider_name == "Groq";
 
         let (api_key, base_url, model, reasoning_effort, provider_name) = (
-            provider_config.api_key.clone(),
+            api_key,
             provider_config.base_url.clone(),
             provider_config.model_id.clone(),
             provider_config.reasoning_effort.clone(),
