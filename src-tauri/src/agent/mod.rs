@@ -170,7 +170,10 @@ impl Agent {
                 history.pop();
 
                 // Add the retry hint
-                let hint = RetryReason::MalformedLatex { errors: katex_errors }.get_hint();
+                let hint = RetryReason::MalformedLatex {
+                    errors: katex_errors,
+                }
+                .get_hint();
                 history.push(ChatMessage {
                     role: "user".to_string(),
                     content: Some(hint),
@@ -210,7 +213,8 @@ impl Agent {
     ) -> Result<(), String> {
         let mut history = self.history.lock().await;
 
-        let stream_id = crate::CURRENT_STREAM_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let stream_id =
+            crate::CURRENT_STREAM_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
 
         let selected_model = config
             .selected_model
@@ -230,20 +234,13 @@ impl Agent {
                 stream_id,
                 &selected_model,
                 api_key,
-                None, // No RAG context for retry
+                None,  // No RAG context for retry
                 false, // Not research mode
             )
             .await?
         } else {
-            self.process_openrouter_turn(
-                app_handle,
-                config,
-                &mut history,
-                stream_id,
-                None,
-                false,
-            )
-            .await?
+            self.process_openrouter_turn(app_handle, config, &mut history, stream_id, None, false)
+                .await?
         };
 
         // Persist the new response
@@ -338,12 +335,19 @@ impl Agent {
                         .await
                         {
                             Ok(contextual_response) => {
-                                log::info!("[Agent] Vision LLM contextual response: {} chars", contextual_response.len());
+                                log::info!(
+                                    "[Agent] Vision LLM contextual response: {} chars",
+                                    contextual_response.len()
+                                );
                                 image_descriptions.push(contextual_response);
                             }
                             Err(e) => {
-                                log::warn!("[Agent] Vision LLM contextual processing failed: {}", e);
-                                image_descriptions.push("[Image attached but could not be analyzed]".to_string());
+                                log::warn!(
+                                    "[Agent] Vision LLM contextual processing failed: {}",
+                                    e
+                                );
+                                image_descriptions
+                                    .push("[Image attached but could not be analyzed]".to_string());
                             }
                         }
                         None // No file URI for non-Gemini
@@ -365,7 +369,10 @@ impl Agent {
         // For non-Gemini providers, prepend contextual image analysis to the message
         let augmented_message = if !is_gemini && !image_descriptions.is_empty() {
             let analysis = image_descriptions.join("\n\n");
-            format!("[Visual Analysis]\n{}\n\n[User Message]\n{}", analysis, message)
+            format!(
+                "[Visual Analysis]\n{}\n\n[User Message]\n{}",
+                analysis, message
+            )
         } else {
             message.clone()
         };
@@ -421,10 +428,10 @@ impl Agent {
             None
         };
 
-        // RAG: Context from Topics or Insights (Tier 2 / 2.5)
+        // RAG: Context from Topics or Insights (Hybrid Vector/FTS)
         if let Some(emb) = &user_embedding {
             if let Ok(Some((name, content, is_insight))) =
-                crate::memories::find_relevant_context(app_handle, emb)
+                crate::memories::find_relevant_context(app_handle, &message, emb)
             {
                 let s = rag_context_str.get_or_insert_with(String::new);
                 if is_insight {
@@ -482,7 +489,9 @@ impl Agent {
                     "status": "starting",
                     "history_len": history.len()
                 });
-                app_handle.emit("agent-compaction", compaction_event.to_string()).ok();
+                app_handle
+                    .emit("agent-compaction", compaction_event.to_string())
+                    .ok();
 
                 // Pre-compaction flush: extract important facts before summarization
                 match crate::compaction::pre_compaction_flush(
@@ -531,7 +540,9 @@ impl Agent {
                             "preserved_turns": result.preserved_turns,
                             "tokens_saved": result.tokens_saved
                         });
-                        app_handle.emit("agent-compaction", complete_event.to_string()).ok();
+                        app_handle
+                            .emit("agent-compaction", complete_event.to_string())
+                            .ok();
                     }
                     Err(e) => {
                         log::error!("[Agent] Compaction failed: {}", e);
@@ -539,7 +550,11 @@ impl Agent {
                     }
                 }
             } else {
-                log::info!("[Agent] Compaction not needed: {} < {} tokens", current_tokens, threshold_tokens);
+                log::info!(
+                    "[Agent] Compaction not needed: {} < {} tokens",
+                    current_tokens,
+                    threshold_tokens
+                );
             }
         }
 
@@ -637,8 +652,16 @@ impl Agent {
             // Check if we need to retry (empty response with reasoning)
             if !continue_turn && retry_on_empty && retry_count < max_retries {
                 if let Some(last_msg) = history.last() {
-                    let has_reasoning = last_msg.reasoning.as_ref().map(|r| !r.is_empty()).unwrap_or(false);
-                    let has_content = last_msg.content.as_ref().map(|c| !c.trim().is_empty()).unwrap_or(false);
+                    let has_reasoning = last_msg
+                        .reasoning
+                        .as_ref()
+                        .map(|r| !r.is_empty())
+                        .unwrap_or(false);
+                    let has_content = last_msg
+                        .content
+                        .as_ref()
+                        .map(|c| !c.trim().is_empty())
+                        .unwrap_or(false);
                     let has_tools = last_msg.tool_calls.is_some();
 
                     // Retry if: has reasoning but no content and no tool calls
@@ -725,11 +748,16 @@ impl Agent {
     ) -> String {
         // Check cache first for cacheable tools
         if let Some(cached) = crate::cache::get_cached_result(app_handle, function_name, args) {
-            log::info!("[Tool] Cache HIT for {} - returning cached result", function_name);
+            log::info!(
+                "[Tool] Cache HIT for {} - returning cached result",
+                function_name
+            );
             return cached;
         }
 
-        let result = self.execute_tool_uncached(app_handle, function_name, args, config).await;
+        let result = self
+            .execute_tool_uncached(app_handle, function_name, args, config)
+            .await;
 
         // Cache the result if eligible
         crate::cache::cache_result(app_handle, function_name, args, &result);
@@ -847,21 +875,12 @@ impl Agent {
                 }
                 let topic = args["topic"].as_str().unwrap_or_default();
                 let content = args["content"].as_str().unwrap_or_default();
-                if let Some(api_key) = config.gemini_api_key.as_ref() {
-                    match crate::memories::update_topic_summary(
-                        app_handle,
-                        &self.http_client,
-                        api_key,
-                        topic,
-                        content,
-                    )
-                    .await
-                    {
-                        Ok(_) => format!("Topic summary updated: {}", topic),
-                        Err(e) => format!("Failed to update topic summary: {}", e),
-                    }
-                } else {
-                    "Failed: No Gemini API key available for embedding generation".to_string()
+                match crate::memories::update_topic_summary(app_handle, topic, content) {
+                    Ok(_) => format!(
+                        "Topic summary updated: {}. Note: Run `refresh_memories` to rebuild the search index for this change to appear in retrieval.",
+                        topic
+                    ),
+                    Err(e) => format!("Failed to update topic summary: {}", e),
                 }
             }
             "read_topic_summary" => {
@@ -885,10 +904,16 @@ impl Agent {
                             result.insights_created.len()
                         );
                         if !result.topics_updated.is_empty() {
-                            msg.push_str(&format!("\nTopics: {}", result.topics_updated.join(", ")));
+                            msg.push_str(&format!(
+                                "\nTopics: {}",
+                                result.topics_updated.join(", ")
+                            ));
                         }
                         if !result.insights_created.is_empty() {
-                            msg.push_str(&format!("\nInsights: {}", result.insights_created.join(", ")));
+                            msg.push_str(&format!(
+                                "\nInsights: {}",
+                                result.insights_created.join(", ")
+                            ));
                         }
                         msg
                     }
@@ -1016,8 +1041,9 @@ impl Agent {
             None
         };
 
-        let supports_thinking =
-            selected_model.contains("2.5") || selected_model.contains("gemini-3") || selected_model.contains("thinking");
+        let supports_thinking = selected_model.contains("2.5")
+            || selected_model.contains("gemini-3")
+            || selected_model.contains("thinking");
 
         let request_body = GenerateContentRequest {
             contents,
@@ -1046,7 +1072,9 @@ impl Agent {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            app_handle.emit("agent-error", format!("Gemini API Error: {}", error_text)).ok();
+            app_handle
+                .emit("agent-error", format!("Gemini API Error: {}", error_text))
+                .ok();
             return Err(format!("Gemini API Error: {}", error_text));
         }
 
@@ -1157,7 +1185,8 @@ impl Agent {
                             tool_type: "function".to_string(),
                             function: FunctionCall {
                                 name: fc.function_call.name.clone(),
-                                arguments: serde_json::to_string(&fc.function_call.args).unwrap_or_default(),
+                                arguments: serde_json::to_string(&fc.function_call.args)
+                                    .unwrap_or_default(),
                             },
                             thought_signature: fc.thought_signature.clone(),
                         })
@@ -1349,7 +1378,11 @@ impl Agent {
                     },
                     reasoning_effort,
                     reasoning: None,
-                    include_reasoning: if is_cerebras || is_groq { None } else { Some(true) },
+                    include_reasoning: if is_cerebras || is_groq {
+                        None
+                    } else {
+                        Some(true)
+                    },
                     stream: true,
                 };
 
@@ -1389,7 +1422,10 @@ impl Agent {
             .map_err(|e| format!("{} network error: {}", provider_name, e))?;
 
         if response.status() == 404 && enable_tools {
-            println!("[{}] Got 404 with tools, retrying without tools...", provider_name);
+            println!(
+                "[{}] Got 404 with tools, retrying without tools...",
+                provider_name
+            );
             response = make_request(None)
                 .await
                 .map_err(|e| format!("{} network error (retry): {}", provider_name, e))?;
@@ -1412,12 +1448,16 @@ impl Agent {
                         "title": "API Error: Moving to OpenRouter",
                         "details": format!("{} error: {}", provider_name, error_text)
                     });
-                    app_handle.emit("agent-fallback", fallback_event.to_string()).ok();
+                    app_handle
+                        .emit("agent-fallback", fallback_event.to_string())
+                        .ok();
 
                     // Rebuild request for OpenRouter
                     let openrouter_url = "https://openrouter.ai/api/v1/chat/completions";
                     // Use configured fallback model or default
-                    let fallback_model = config.fallback_model.clone()
+                    let fallback_model = config
+                        .fallback_model
+                        .clone()
                         .unwrap_or_else(|| "openai/gpt-oss-120b:free".to_string());
 
                     let fallback_body = ChatCompletionRequest {
@@ -1435,7 +1475,8 @@ impl Agent {
                         stream: true,
                     };
 
-                    response = self.http_client
+                    response = self
+                        .http_client
                         .post(openrouter_url)
                         .header("Authorization", format!("Bearer {}", openrouter_key))
                         .header("Content-Type", "application/json")
@@ -1448,18 +1489,33 @@ impl Agent {
                     // Check if fallback succeeded
                     if !response.status().is_success() {
                         let fallback_error = response.text().await.unwrap_or_default();
-                        app_handle.emit("agent-error", format!("OpenRouter fallback error: {}", fallback_error)).ok();
+                        app_handle
+                            .emit(
+                                "agent-error",
+                                format!("OpenRouter fallback error: {}", fallback_error),
+                            )
+                            .ok();
                         return Err(format!("OpenRouter fallback error: {}", fallback_error));
                     }
                     // Continue with fallback response
                 } else {
                     // No OpenRouter key available, show original error
-                    app_handle.emit("agent-error", format!("{} error: {}", provider_name, error_text)).ok();
+                    app_handle
+                        .emit(
+                            "agent-error",
+                            format!("{} error: {}", provider_name, error_text),
+                        )
+                        .ok();
                     return Err(format!("{} error: {}", provider_name, error_text));
                 }
             } else {
                 // Not a quota error or already on OpenRouter, show original error
-                app_handle.emit("agent-error", format!("{} error: {}", provider_name, error_text)).ok();
+                app_handle
+                    .emit(
+                        "agent-error",
+                        format!("{} error: {}", provider_name, error_text),
+                    )
+                    .ok();
                 return Err(format!("{} error: {}", provider_name, error_text));
             }
         }

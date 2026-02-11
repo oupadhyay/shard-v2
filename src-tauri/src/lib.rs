@@ -1,36 +1,35 @@
 use tauri::{AppHandle, Emitter, Manager};
 
-use tauri_plugin_global_shortcut::{
-    self as tauri_gs, GlobalShortcutExt, Shortcut,
-};
-use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
+use tauri_plugin_global_shortcut::{self as tauri_gs, GlobalShortcutExt, Shortcut};
 
 // Stream cancellation system
 static CURRENT_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 static CANCELLED_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 
-mod config;
-mod integrations;
-mod tools;
-mod prompts;
 mod agent;
-mod gemini_files;
-pub mod memories;
-mod interactions;
 mod background;
 mod cache;
-mod models;
-mod secrets;
 pub mod compaction;
+mod config;
+mod gemini_files;
+mod integrations;
+mod interactions;
+pub mod memories;
+mod models;
+mod prompts;
 pub mod retrieval;
+mod secrets;
+mod tools;
+pub mod vector_store;
 
 #[cfg(test)]
 mod tests;
 
-use integrations::vision_llm;
-use integrations::screen_context;
 use agent::Agent;
+use integrations::screen_context;
+use integrations::vision_llm;
 
 // --- State Management ---
 pub struct AppState {
@@ -98,15 +97,20 @@ async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String
     }
 
     // Read image
-    let image_data = std::fs::read(&temp_path)
-        .map_err(|e| format!("Failed to read capture file: {}", e))?;
+    let image_data =
+        std::fs::read(&temp_path).map_err(|e| format!("Failed to read capture file: {}", e))?;
 
     // Convert to base64
-    let image_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
+    let image_base64 =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
 
     // Clean up temp file
     if let Err(e) = std::fs::remove_file(&temp_path) {
-        log::warn!("Failed to remove temp OCR file {}: {}", temp_path.display(), e);
+        log::warn!(
+            "Failed to remove temp OCR file {}: {}",
+            temp_path.display(),
+            e
+        );
     }
 
     // Return image immediately without waiting for OCR
@@ -141,7 +145,8 @@ async fn ocr_image(
 
     // Use contextual Vision LLM for image understanding
     let http_client = reqwest::Client::new();
-    vision_llm::process_image_with_context(&http_client, &image_base64, &mime, &query, &config).await
+    vision_llm::process_image_with_context(&http_client, &image_base64, &mime, &query, &config)
+        .await
 }
 
 #[tauri::command]
@@ -153,11 +158,23 @@ async fn chat(
     images_mime_types: Option<Vec<String>>,
 ) -> Result<(), String> {
     let config = config::load_config(&app_handle)?;
-    state.agent.process_message(&app_handle, message, images_base64, images_mime_types, &config).await
+    state
+        .agent
+        .process_message(
+            &app_handle,
+            message,
+            images_base64,
+            images_mime_types,
+            &config,
+        )
+        .await
 }
 
 #[tauri::command]
-async fn clear_chat(app_handle: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn clear_chat(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
     let config = crate::config::load_config(&app_handle).map_err(|e| e.to_string())?;
     state.agent.clear_history(config.gemini_api_key).await;
     Ok(())
@@ -185,7 +202,9 @@ async fn has_backup(state: tauri::State<'_, AppState>) -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<crate::agent::ChatMessage>, String> {
+async fn get_chat_history(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<crate::agent::ChatMessage>, String> {
     Ok(state.agent.get_history().await)
 }
 
@@ -204,7 +223,10 @@ async fn retry_with_katex_hint(
     katex_errors: Vec<String>,
 ) -> Result<(), String> {
     let config = config::load_config(&app_handle)?;
-    state.agent.retry_with_katex_hint(&app_handle, katex_errors, &config).await
+    state
+        .agent
+        .retry_with_katex_hint(&app_handle, katex_errors, &config)
+        .await
 }
 
 #[tauri::command]
@@ -263,28 +285,30 @@ async fn force_summary(app_handle: AppHandle) -> Result<SummaryStats, String> {
 }
 
 #[tauri::command]
-async fn rebuild_topic_index(app_handle: AppHandle) -> Result<usize, String> {
-    let config = config::load_config(&app_handle)?;
-    let api_key = config
-        .gemini_api_key
-        .ok_or("No Gemini API key configured for embedding generation")?;
-    let http_client = reqwest::Client::new();
-    memories::rebuild_topic_index(&app_handle, &http_client, &api_key).await
+fn rebuild_topic_index(app_handle: AppHandle) -> Result<usize, String> {
+    // TopicIndex no longer stores embeddings, just file names
+    memories::rebuild_topic_index(&app_handle)
 }
 
 #[tauri::command]
-async fn rebuild_insight_index(app_handle: AppHandle) -> Result<usize, String> {
-    let config = config::load_config(&app_handle)?;
-    let api_key = config
-        .gemini_api_key
-        .ok_or("No Gemini API key configured for embedding generation")?;
-    let http_client = reqwest::Client::new();
-    memories::rebuild_insight_index(&app_handle, &http_client, &api_key).await
+fn rebuild_insight_index(app_handle: AppHandle) -> Result<usize, String> {
+    // InsightIndex no longer stores embeddings, just metadata
+    memories::rebuild_insight_index(&app_handle)
 }
 
 #[tauri::command]
 async fn rebuild_bm25_index(app_handle: AppHandle) -> Result<usize, String> {
     retrieval::rebuild_bm25_index(&app_handle)
+}
+
+#[tauri::command]
+async fn rebuild_chunk_index(app_handle: AppHandle) -> Result<usize, String> {
+    let config = config::load_config(&app_handle)?;
+    let api_key = config
+        .gemini_api_key
+        .ok_or("No Gemini API key configured for embedding generation")?;
+    let http_client = reqwest::Client::new();
+    memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await
 }
 
 /// Capture screen context and return suggestions
@@ -322,9 +346,10 @@ pub fn run() {
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
                 .filter(|metadata| {
-                    !metadata.target().starts_with("html5ever") && !metadata.target().starts_with("selectors")
+                    !metadata.target().starts_with("html5ever")
+                        && !metadata.target().starts_with("selectors")
                 })
-                .build()
+                .build(),
         )
         .plugin(tauri_nspanel::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -342,7 +367,47 @@ pub fn run() {
                 *memory_store.write().unwrap() = Some(store);
             }
 
-            app.manage(AppState { agent, memory_store });
+            app.manage(AppState {
+                agent,
+                memory_store,
+            });
+
+            // Auto-rebuild chunk index if missing (Phase 2-3: chunks are authoritative)
+            let app_handle_for_chunks = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // Check if chunk index exists in VectorStore
+                if let Ok(store) = memories::get_vector_store(&app_handle_for_chunks) {
+                    if let Ok(count) = store.chunk_count() {
+                        if count > 0 {
+                             log::info!("[Startup] Vector store found with {} chunks", count);
+                             return;
+                        }
+                    }
+                }
+
+                // Chunk index missing or empty - check if topics/insights exist
+                if let Ok(config) = config::load_config(&app_handle_for_chunks) {
+                    if let Some(api_key) = config.gemini_api_key {
+                        let http_client = reqwest::Client::new();
+                        log::info!("[Startup] Chunk index missing, triggering auto-rebuild...");
+                        match memories::rebuild_chunk_index(
+                            &app_handle_for_chunks,
+                            &http_client,
+                            &api_key,
+                        )
+                        .await
+                        {
+                            Ok(count) => log::info!(
+                                "[Startup] Auto-rebuilt chunk index with {} chunks",
+                                count
+                            ),
+                            Err(e) => {
+                                log::warn!("[Startup] Failed to auto-rebuild chunk index: {}", e)
+                            }
+                        }
+                    }
+                }
+            });
 
             // Setup Panel (macOS)
             #[cfg(target_os = "macos")]
@@ -359,65 +424,85 @@ pub fn run() {
                     let x = 20;
                     let y = screen_size.height as i32 - window_size.height as i32 - 20;
 
-                    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y })).ok();
+                    window
+                        .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+                        .ok();
                 }
 
                 let _panel = window.to_panel().unwrap();
             }
 
             // Register Global Shortcuts with handlers
-            let ctrl_space = Shortcut::new(Some(tauri_gs::Modifiers::CONTROL), tauri_gs::Code::Space);
+            let ctrl_space =
+                Shortcut::new(Some(tauri_gs::Modifiers::CONTROL), tauri_gs::Code::Space);
             let ctrl_k = Shortcut::new(Some(tauri_gs::Modifiers::CONTROL), tauri_gs::Code::KeyK);
 
             // Ctrl+Space: Toggle window visibility
             let window_for_space = app.get_webview_window("main").unwrap();
             let app_handle_for_space = app.handle().clone();
-            app.handle().global_shortcut().on_shortcut(ctrl_space, move |_app, _shortcut, event| {
-                if event.state == tauri_gs::ShortcutState::Pressed {
-                    if window_for_space.is_visible().unwrap_or(false) {
-                        // Trigger fade out in frontend
-                        window_for_space.emit("start-hide", ()).ok();
-                    } else {
-                        // Show window immediately
-                        window_for_space.show().ok();
-                        window_for_space.set_focus().ok();
-                        // Trigger fade in
-                        window_for_space.emit("start-show", ()).ok();
+            app.handle()
+                .global_shortcut()
+                .on_shortcut(ctrl_space, move |_app, _shortcut, event| {
+                    if event.state == tauri_gs::ShortcutState::Pressed {
+                        if window_for_space.is_visible().unwrap_or(false) {
+                            // Trigger fade out in frontend
+                            window_for_space.emit("start-hide", ()).ok();
+                        } else {
+                            // Show window immediately
+                            window_for_space.show().ok();
+                            window_for_space.set_focus().ok();
+                            // Trigger fade in
+                            window_for_space.emit("start-show", ()).ok();
 
-                        // Spawn async task to capture screen context (non-blocking)
-                        let app_handle_clone = app_handle_for_space.clone();
-                        tauri::async_runtime::spawn(async move {
-                            // Small delay to let the window fade in first
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            // Spawn async task to capture screen context (non-blocking)
+                            let app_handle_clone = app_handle_for_space.clone();
+                            tauri::async_runtime::spawn(async move {
+                                // Small delay to let the window fade in first
+                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-                            if let Ok(config) = config::load_config(&app_handle_clone) {
-                                if config.enable_screen_context.unwrap_or(false)
-                                   && !config.incognito_mode.unwrap_or(false) {
-                                    // Get Agent from state
-                                    let state = app_handle_clone.state::<AppState>();
-                                    match screen_context::capture_and_analyze(&state.agent, &config).await {
-                                        Ok(context) => {
-                                            log::info!("[ScreenContext] Captured {} suggestions", context.suggestions.len());
-                                            app_handle_clone.emit("screen-context-ready", &context).ok();
-                                        }
-                                        Err(e) => {
-                                            log::warn!("[ScreenContext] Capture failed: {}", e);
+                                if let Ok(config) = config::load_config(&app_handle_clone) {
+                                    if config.enable_screen_context.unwrap_or(false)
+                                        && !config.incognito_mode.unwrap_or(false)
+                                    {
+                                        // Get Agent from state
+                                        let state = app_handle_clone.state::<AppState>();
+                                        match screen_context::capture_and_analyze(
+                                            &state.agent,
+                                            &config,
+                                        )
+                                        .await
+                                        {
+                                            Ok(context) => {
+                                                log::info!(
+                                                    "[ScreenContext] Captured {} suggestions",
+                                                    context.suggestions.len()
+                                                );
+                                                app_handle_clone
+                                                    .emit("screen-context-ready", &context)
+                                                    .ok();
+                                            }
+                                            Err(e) => {
+                                                log::warn!("[ScreenContext] Capture failed: {}", e);
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        });
+                            });
+                        }
                     }
-                }
-            }).ok();
+                })
+                .ok();
 
             // Ctrl+K: Trigger OCR
             let window_for_k = app.get_webview_window("main").unwrap();
-            app.handle().global_shortcut().on_shortcut(ctrl_k, move |_app, _shortcut, _event| {
-                window_for_k.show().ok();
-                window_for_k.set_focus().ok();
-                window_for_k.emit("trigger-ocr", ()).ok();
-            }).ok();
+            app.handle()
+                .global_shortcut()
+                .on_shortcut(ctrl_k, move |_app, _shortcut, _event| {
+                    window_for_k.show().ok();
+                    window_for_k.set_focus().ok();
+                    window_for_k.emit("trigger-ocr", ()).ok();
+                })
+                .ok();
 
             Ok(())
         })
@@ -442,6 +527,7 @@ pub fn run() {
             rebuild_topic_index,
             rebuild_insight_index,
             rebuild_bm25_index,
+            rebuild_chunk_index,
             retry_with_katex_hint,
             capture_screen_context
         ])
