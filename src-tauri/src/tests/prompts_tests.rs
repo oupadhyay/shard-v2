@@ -1,29 +1,33 @@
 #[cfg(test)]
 mod tests {
-    use crate::prompts::{get_default_system_prompt, get_jailbreak_prompt, get_research_system_prompt};
-    use time::OffsetDateTime;
+    use crate::prompts::{get_default_system_prompt_with_date, get_jailbreak_prompt, get_research_system_prompt_with_date};
+    use time::Month;
+
+    fn fixed_date() -> time::Date {
+        time::Date::from_calendar_date(2026, Month::January, 15).unwrap()
+    }
 
     #[test]
     fn test_get_default_system_prompt_no_context() {
-        let now = OffsetDateTime::now_utc().date();
-        let prompt = get_default_system_prompt(None, None);
-        assert!(prompt.contains(&format!("SYSTEM: Today is {}", now)));
+        let date = fixed_date();
+        let prompt = get_default_system_prompt_with_date(None, None, date);
+        assert!(prompt.contains(&format!("SYSTEM: Today is {}", date)));
         assert!(prompt.contains("You are Shard, an AI assistant."));
-        // Should not contain unexpected context placeholders if handled correctly
-        // (the function uses unwrap_or("") so it just appends empty strings)
+        assert!(!prompt.contains("None"));
+        assert!(!prompt.contains("Some("));
     }
 
     #[test]
     fn test_get_default_system_prompt_with_memory() {
         let memory = "User prefers Rust for all coding tasks.";
-        let prompt = get_default_system_prompt(Some(memory), None);
+        let prompt = get_default_system_prompt_with_date(Some(memory), None, fixed_date());
         assert!(prompt.contains(memory));
     }
 
     #[test]
     fn test_get_default_system_prompt_with_rag() {
         let rag = "The current project is a Tauri application.";
-        let prompt = get_default_system_prompt(None, Some(rag));
+        let prompt = get_default_system_prompt_with_date(None, Some(rag), fixed_date());
         assert!(prompt.contains(rag));
     }
 
@@ -31,16 +35,16 @@ mod tests {
     fn test_get_default_system_prompt_with_both() {
         let memory = "User prefers Rust.";
         let rag = "Project is Shard.";
-        let prompt = get_default_system_prompt(Some(memory), Some(rag));
+        let prompt = get_default_system_prompt_with_date(Some(memory), Some(rag), fixed_date());
         assert!(prompt.contains(memory));
         assert!(prompt.contains(rag));
     }
 
     #[test]
     fn test_get_research_system_prompt() {
-        let now = OffsetDateTime::now_utc().date();
-        let prompt = get_research_system_prompt();
-        assert!(prompt.contains(&format!("SYSTEM: Today is {}", now)));
+        let date = fixed_date();
+        let prompt = get_research_system_prompt_with_date(date);
+        assert!(prompt.contains(&format!("SYSTEM: Today is {}", date)));
         assert!(prompt.contains("You are a Deep Research agent"));
     }
 
