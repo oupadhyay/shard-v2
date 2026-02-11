@@ -30,6 +30,7 @@ import {
   CHECK_ICON,
   SETTINGS_MODAL_HTML,
   initSettingsTabs,
+  resizeImage,
 } from "./ui";
 
 // DOM Elements
@@ -395,40 +396,6 @@ inputField.addEventListener("paste", async (e) => {
     }, 0);
   }
 });
-
-// Helper to resize image
-function resizeImage(base64: string, mimeType: string, maxWidth: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.src = `data:${mimeType};base64,${base64}`;
-    img.onload = () => {
-      let width = img.width;
-      let height = img.height;
-
-      if (width > maxWidth) {
-        height = Math.round((height * maxWidth) / width);
-        width = maxWidth;
-      }
-
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        reject(new Error("Could not get canvas context"));
-        return;
-      }
-      ctx.drawImage(img, 0, 0, width, height);
-
-      // Get base64 from canvas (always use jpeg for OCR to save space, or keep original mime?)
-      // Using jpeg with 0.8 quality is good for OCR and much smaller
-      const resizedDataUrl = canvas.toDataURL("image/jpeg", 0.8);
-      const resizedBase64 = resizedDataUrl.split(",")[1];
-      resolve(resizedBase64);
-    };
-    img.onerror = reject;
-  });
-}
 
 function showImagePreview(imageData: AttachedImage) {
   console.log("[showImagePreview] Called with mimeType:", imageData.mimeType);
@@ -1605,3 +1572,18 @@ saveSettingsBtn.addEventListener("click", async () => {
     alert(`Failed to save settings: ${e}`);
   }
 });
+
+// Development-only benchmark helper
+if ((import.meta as any).env.DEV) {
+  (window as any).runImageBench = async () => {
+    console.log("Loading benchmark module...");
+    try {
+      const { runBenchmark } = await import("./tests/image_bench");
+      const { resizeImage: currentResizeImage } = await import("./ui/image");
+      await runBenchmark(currentResizeImage);
+    } catch (err) {
+      console.error("Failed to run benchmark:", err);
+    }
+  };
+  console.log("Development mode: runImageBench() available in console");
+}
