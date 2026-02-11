@@ -184,7 +184,7 @@ pub async fn read_arxiv_paper(
     paper_id_or_url: &str,
 ) -> Result<ArxivPaperContent, String> {
     let id = extract_arxiv_id(paper_id_or_url)
-        .ok_or_else(|| format!("Could not extract ArXiv ID from: {}", paper_id_or_url))?;
+        .ok_or_else(|| "Could not extract ArXiv ID".to_string())?;
 
     let url = format!("https://ar5iv.labs.arxiv.org/html/{}", id);
     let sanitized_url = url.replace('\n', ' ').replace('\r', ' ');
@@ -384,16 +384,28 @@ fn parse_arxiv_html(html: &str, id: &str) -> (String, String, String) {
                 // Ideally we should track "current section" but for simplicity let's just skip the header.
                 continue;
             }
-            format!("\n## {}\n", text)
+            format!(
+                "\n## {}
+",
+                text
+            )
         } else if classes.contains(&"ltx_title_subsection") {
-            format!("\n### {}\n", text)
+            format!(
+                "\n### {}
+",
+                text
+            )
         } else {
             // Paragraph
             // Skip very short paragraphs that might be noise/captions/etc if they aren't titles
             if text.len() < 20 {
                 continue;
             }
-            format!("{}\n", text)
+            format!(
+                "{}
+",
+                text
+            )
         };
 
         char_count += formatted.len();
