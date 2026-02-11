@@ -60,7 +60,9 @@ pub async fn perform_weather_lookup(
         ("format", "json"),
     ];
 
-    log::info!("Performing Geocoding lookup for: {}", location);
+    // Sanitize input to prevent log injection
+    let sanitized_location = location.replace('\n', " ").replace('\r', " ");
+    log::info!("Performing Geocoding lookup for: {}", sanitized_location);
 
     let geo_resp = client
         .get(geo_url)
@@ -81,15 +83,27 @@ pub async fn perform_weather_lookup(
     let location_data = match geo_data.results.as_ref().and_then(|r| r.first()) {
         Some(data) => data,
         None => {
-            log::info!("No location found for '{}'", location);
+            log::info!("No location found for '{}'", sanitized_location);
             return Ok(None);
         }
     };
 
     let lat = location_data.latitude.ok_or("Missing latitude")?;
     let lon = location_data.longitude.ok_or("Missing longitude")?;
-    let name = location_data.name.clone().unwrap_or_default();
-    let country = location_data.country.clone().unwrap_or_default();
+
+    // Sanitize strings from remote API to prevent log injection
+    let name = location_data
+        .name
+        .clone()
+        .unwrap_or_default()
+        .replace('\n', " ")
+        .replace('\r', " ");
+    let country = location_data
+        .country
+        .clone()
+        .unwrap_or_default()
+        .replace('\n', " ")
+        .replace('\r', " ");
     let location_display = format!("{}, {}", name, country);
 
     // 2. Weather

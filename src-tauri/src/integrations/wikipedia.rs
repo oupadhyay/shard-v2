@@ -38,7 +38,8 @@ pub async fn perform_wikipedia_lookup(
         ("formatversion", "2"),
     ];
 
-    log::info!("Performing Wikipedia lookup for: {}", search_term);
+    let sanitized_term = search_term.replace('\n', ' ').replace('\r', ' ');
+    log::info!("Performing Wikipedia lookup for: {}", sanitized_term);
 
     match client
         .get(base_url)
@@ -63,7 +64,10 @@ pub async fn perform_wikipedia_lookup(
                         if let Some(query_data) = wiki_response.query {
                             if let Some(page) = query_data.pages.first() {
                                 if page.missing.is_some() {
-                                    log::info!("Wikipedia: Page '{}' does not exist.", search_term);
+                                    log::info!(
+                                        "Wikipedia: Page '{}' does not exist.",
+                                        sanitized_term
+                                    );
                                     return Ok(None);
                                 }
                                 if let Some(extract) = &page.extract {

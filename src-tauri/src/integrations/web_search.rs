@@ -34,7 +34,8 @@ pub async fn perform_web_search(
     query: &str,
     brave_api_key: Option<&str>,
 ) -> Result<Vec<SearchResult>, String> {
-    log::info!("Performing Web Search for: {}", query);
+    let sanitized_query = query.replace('\n', ' ').replace('\r', ' ');
+    log::info!("Performing Web Search for: {}", sanitized_query);
 
     // Try Brave Search first if API key is provided
     if let Some(api_key) = brave_api_key {

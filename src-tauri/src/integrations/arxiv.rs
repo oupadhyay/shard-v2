@@ -66,7 +66,8 @@ pub async fn perform_arxiv_lookup(
         ("max_results", &max_results.to_string()),
     ];
 
-    log::info!("Performing ArXiv lookup for: {}", query);
+    let sanitized_query = query.replace('\n', ' ').replace('\r', ' ');
+    log::info!("Performing ArXiv lookup for: {}", sanitized_query);
 
     let response = client
         .get(base_url)
@@ -186,7 +187,8 @@ pub async fn read_arxiv_paper(
         .ok_or_else(|| format!("Could not extract ArXiv ID from: {}", paper_id_or_url))?;
 
     let url = format!("https://ar5iv.labs.arxiv.org/html/{}", id);
-    log::info!("Fetching ArXiv paper from ar5iv: {}", url);
+    let sanitized_url = url.replace('\n', ' ').replace('\r', ' ');
+    log::info!("Fetching ArXiv paper from ar5iv: {}", sanitized_url);
 
     let response = client
         .get(&url)

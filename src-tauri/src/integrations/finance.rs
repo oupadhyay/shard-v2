@@ -3,7 +3,8 @@ use time::OffsetDateTime;
 use yahoo_finance_api as yfa;
 
 pub async fn perform_finance_lookup(ticker: &str) -> Result<String, String> {
-    log::info!("Performing Finance lookup for: {}", ticker);
+    let sanitized_ticker = ticker.replace('\n', ' ').replace('\r', ' ');
+    log::info!("Performing Finance lookup for: {}", sanitized_ticker);
 
     let provider = yfa::YahooConnector::new()
         .map_err(|e| format!("Failed to create Yahoo Connector: {}", e))?;
