@@ -1,6 +1,6 @@
+use log;
 use reqwest;
 use serde::{Deserialize, Serialize};
-use log;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct WikipediaQueryPage {
@@ -43,7 +43,10 @@ pub async fn perform_wikipedia_lookup(
     match client
         .get(base_url)
         .query(&params)
-        .header("User-Agent", "Shard/1.0 (https://github.com/shard-app/shard)")
+        .header(
+            "User-Agent",
+            "Shard/1.0 (https://github.com/shard-app/shard)",
+        )
         .send()
         .await
     {
@@ -90,7 +93,10 @@ pub async fn perform_wikipedia_lookup(
                     }
                 }
             } else {
-                Err(format!("Wikipedia API error: {} - {}", status, response_text))
+                Err(format!(
+                    "Wikipedia API error: {} - {}",
+                    status, response_text
+                ))
             }
         }
         Err(e) => Err(format!("Wikipedia network error: {}", e)),

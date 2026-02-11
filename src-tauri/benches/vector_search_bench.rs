@@ -1,8 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use shard_lib::vector_store::VectorStore;
-use shard_lib::memories::{Chunk, SourceType};
-use tempfile::tempdir;
 use rand::Rng;
+use shard_lib::memories::{Chunk, SourceType};
+use shard_lib::vector_store::VectorStore;
+use tempfile::tempdir;
 
 fn generate_random_embedding(dim: usize) -> Vec<f32> {
     let mut rng = rand::thread_rng();
@@ -50,9 +50,7 @@ fn benchmark_search(c: &mut Criterion) {
 
     // Benchmark SQLite KNN
     group.bench_function("sqlite_vec_knn_1000", |b| {
-        b.iter(|| {
-            store.knn_search(black_box(&query), 5, -100.0).unwrap()
-        })
+        b.iter(|| store.knn_search(black_box(&query), 5, -100.0).unwrap())
     });
 
     // Benchmark Naive Linear Scan (Simulating old memory usage)
@@ -61,13 +59,14 @@ fn benchmark_search(c: &mut Criterion) {
     // So this is a conservative lower bound for the old system.
     group.bench_function("linear_scan_1000", |b| {
         b.iter(|| {
-            let mut scored: Vec<(f32, &Chunk)> = chunks.iter()
+            let mut scored: Vec<(f32, &Chunk)> = chunks
+                .iter()
                 .map(|c| {
-                     // Cosine sim
-                     let dot: f32 = c.embedding.iter().zip(&query).map(|(a, b)| a * b).sum();
-                     let mag_a: f32 = c.embedding.iter().map(|a| a * a).sum::<f32>().sqrt();
-                     let mag_b: f32 = query.iter().map(|b| b * b).sum::<f32>().sqrt();
-                     (dot / (mag_a * mag_b), c)
+                    // Cosine sim
+                    let dot: f32 = c.embedding.iter().zip(&query).map(|(a, b)| a * b).sum();
+                    let mag_a: f32 = c.embedding.iter().map(|a| a * a).sum::<f32>().sqrt();
+                    let mag_b: f32 = query.iter().map(|b| b * b).sum::<f32>().sqrt();
+                    (dot / (mag_a * mag_b), c)
                 })
                 .collect();
             // Sort top 5 desc

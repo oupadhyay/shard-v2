@@ -1,7 +1,7 @@
-use reqwest;
-use serde::{Deserialize, Serialize};
 use log;
 use regex::Regex;
+use reqwest;
+use serde::{Deserialize, Serialize};
 
 // ArXiv Atom XML Structs (Ported from legacy)
 #[derive(Debug, Deserialize)]
@@ -92,13 +92,24 @@ pub async fn perform_arxiv_lookup(
 
     for child in feed.children {
         if let FeedChild::Entry(entry) = child {
-            let title = entry.title.unwrap_or_default().replace("\n", " ").trim().to_string();
-            let summary = entry.summary.unwrap_or_default().replace("\n", " ").trim().to_string();
+            let title = entry
+                .title
+                .unwrap_or_default()
+                .replace("\n", " ")
+                .trim()
+                .to_string();
+            let summary = entry
+                .summary
+                .unwrap_or_default()
+                .replace("\n", " ")
+                .trim()
+                .to_string();
             let authors = entry.authors.into_iter().filter_map(|a| a.name).collect();
             let id = entry.id.unwrap_or_default();
             let published_date = entry.published;
 
-            let pdf_url = entry.entry_links
+            let pdf_url = entry
+                .entry_links
                 .iter()
                 .find(|l| l.title.as_deref() == Some("pdf"))
                 .and_then(|l| l.href.clone())
@@ -154,9 +165,7 @@ pub fn extract_arxiv_id(input: &str) -> Option<String> {
 
     // Pattern: raw ID like "2401.12345" or "hep-th/9901001"
     // New format: YYMM.NNNNN
-    if input.chars().take(4).all(|c| c.is_ascii_digit())
-        && input.chars().nth(4) == Some('.')
-    {
+    if input.chars().take(4).all(|c| c.is_ascii_digit()) && input.chars().nth(4) == Some('.') {
         return Some(input.split('v').next().unwrap_or(input).to_string());
     }
 
@@ -187,7 +196,11 @@ pub async fn read_arxiv_paper(
         .map_err(|e| format!("ar5iv network error: {}", e))?;
 
     if !response.status().is_success() {
-        return Err(format!("ar5iv error: {} for paper {}", response.status(), id));
+        return Err(format!(
+            "ar5iv error: {} for paper {}",
+            response.status(),
+            id
+        ));
     }
 
     let html = response
@@ -209,9 +222,24 @@ pub async fn read_arxiv_paper(
 fn clean_text(element: scraper::ElementRef) -> String {
     // Tags that indicate MathML content (we skip all descendants of these)
     const SKIP_TAGS: &[&str] = &[
-        "math", "annotation", "annotation-xml", "semantics",
-        "mrow", "mi", "mo", "mn", "msub", "msup", "mfrac", "mstyle",
-        "mspace", "mtext", "mover", "munder", "munderover", "mtable",
+        "math",
+        "annotation",
+        "annotation-xml",
+        "semantics",
+        "mrow",
+        "mi",
+        "mo",
+        "mn",
+        "msub",
+        "msup",
+        "mfrac",
+        "mstyle",
+        "mspace",
+        "mtext",
+        "mover",
+        "munder",
+        "munderover",
+        "mtable",
     ];
 
     let mut texts: Vec<String> = Vec::new();
@@ -226,7 +254,7 @@ fn clean_text(element: scraper::ElementRef) -> String {
                 if let Some(el) = parent.value().as_element() {
                     let tag = el.name().to_lowercase();
                     if SKIP_TAGS.contains(&tag.as_str())
-                       || el.has_class("ltx_Math", scraper::CaseSensitivity::AsciiCaseInsensitive)
+                        || el.has_class("ltx_Math", scraper::CaseSensitivity::AsciiCaseInsensitive)
                     {
                         should_skip = true;
                         break;
@@ -245,7 +273,8 @@ fn clean_text(element: scraper::ElementRef) -> String {
     }
 
     // Join and normalize whitespace
-    let result = texts.join(" ")
+    let result = texts
+        .join(" ")
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
@@ -305,9 +334,8 @@ fn parse_arxiv_html(html: &str, id: &str) -> (String, String, String) {
     // We want: document title (already got it, but maybe useful for context),
     // section titles, subsection titles, and paragraphs.
     // We iterate in document order.
-    let content_selector = scraper::Selector::parse(
-        ".ltx_title_section, .ltx_title_subsection, .ltx_p"
-    ).unwrap();
+    let content_selector =
+        scraper::Selector::parse(".ltx_title_section, .ltx_title_subsection, .ltx_p").unwrap();
 
     let mut content_parts: Vec<String> = Vec::new();
     let mut char_count = 0;
@@ -331,7 +359,10 @@ fn parse_arxiv_html(html: &str, id: &str) -> (String, String, String) {
         let mut is_abstract = false;
         if let Some(parent) = element.parent() {
             if let Some(parent_el) = parent.value().as_element() {
-                if parent_el.has_class("ltx_abstract", scraper::CaseSensitivity::AsciiCaseInsensitive) {
+                if parent_el.has_class(
+                    "ltx_abstract",
+                    scraper::CaseSensitivity::AsciiCaseInsensitive,
+                ) {
                     is_abstract = true;
                 }
             }
@@ -342,7 +373,9 @@ fn parse_arxiv_html(html: &str, id: &str) -> (String, String, String) {
 
         let formatted = if classes.contains(&"ltx_title_section") {
             // Skip Reference/Bibliography sections
-            if text.to_lowercase().contains("reference") || text.to_lowercase().contains("bibliograph") {
+            if text.to_lowercase().contains("reference")
+                || text.to_lowercase().contains("bibliograph")
+            {
                 // We might want to stop here or just skip this section header
                 // For now, let's just skip the header, but subsequent paragraphs might still be included
                 // if we don't track state.
@@ -474,7 +507,9 @@ mod tests {
         assert!(!content.contains("<math>"));
         assert!(!content.contains("x+1")); // Math content should be stripped
         assert!(content.contains("## 2. Methods"));
-        assert!(content.contains("Another paragraph that is definitely longer than twenty characters."));
+        assert!(
+            content.contains("Another paragraph that is definitely longer than twenty characters.")
+        );
     }
 
     #[test]

@@ -92,7 +92,10 @@ Please analyze the image carefully and provide a helpful response that directly 
 
     // Try OpenRouter with Gemma 3 27B
     if let Some(openrouter_key) = &config.openrouter_api_key {
-        log::info!("[VisionLLM] Processing image with context using {}", CONTEXT_VISION_MODEL);
+        log::info!(
+            "[VisionLLM] Processing image with context using {}",
+            CONTEXT_VISION_MODEL
+        );
 
         let request = OpenAIVisionRequest {
             model: CONTEXT_VISION_MODEL.to_string(),
@@ -247,7 +250,10 @@ Please analyze the image carefully and provide a helpful response that directly 
         }
     }
 
-    Err("No Vision LLM API key configured or all attempts failed for contextual processing".to_string())
+    Err(
+        "No Vision LLM API key configured or all attempts failed for contextual processing"
+            .to_string(),
+    )
 }
 
 #[cfg(test)]

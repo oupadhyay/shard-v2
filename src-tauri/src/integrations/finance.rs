@@ -1,7 +1,6 @@
-use yahoo_finance_api as yfa;
-use time::OffsetDateTime;
 use log;
-
+use time::OffsetDateTime;
+use yahoo_finance_api as yfa;
 
 pub async fn perform_finance_lookup(ticker: &str) -> Result<String, String> {
     log::info!("Performing Finance lookup for: {}", ticker);
@@ -15,7 +14,9 @@ pub async fn perform_finance_lookup(ticker: &str) -> Result<String, String> {
         .await
         .map_err(|e| format!("Yahoo Finance API error: {}", e))?;
 
-    let quote = response.last_quote().map_err(|e| format!("No quote data found: {}", e))?;
+    let quote = response
+        .last_quote()
+        .map_err(|e| format!("No quote data found: {}", e))?;
 
     let price = quote.close;
     let time = OffsetDateTime::from_unix_timestamp(quote.timestamp as i64)

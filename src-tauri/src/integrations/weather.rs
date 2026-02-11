@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use reqwest;
 use log;
+use reqwest;
+use serde::{Deserialize, Serialize};
 
 // --- Open-Meteo Geocoding API Structures ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -53,7 +53,12 @@ pub async fn perform_weather_lookup(
 
     // 1. Geocoding
     let geo_url = "https://geocoding-api.open-meteo.com/v1/search";
-    let geo_params = [("name", location), ("count", "1"), ("language", "en"), ("format", "json")];
+    let geo_params = [
+        ("name", location),
+        ("count", "1"),
+        ("language", "en"),
+        ("format", "json"),
+    ];
 
     log::info!("Performing Geocoding lookup for: {}", location);
 
@@ -95,7 +100,12 @@ pub async fn perform_weather_lookup(
         ("current", "temperature_2m".to_string()),
     ];
 
-    log::info!("Performing Weather lookup for: {} ({}, {})", location_display, lat, lon);
+    log::info!(
+        "Performing Weather lookup for: {} ({}, {})",
+        location_display,
+        lat,
+        lon
+    );
 
     let weather_resp = client
         .get(weather_url)

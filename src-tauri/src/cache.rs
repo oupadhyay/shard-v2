@@ -33,14 +33,14 @@ pub struct ToolCache {
 pub fn get_ttl_for_tool(tool_name: &str) -> Option<i64> {
     match tool_name {
         // Long TTL (7 days) - relatively stable data
-        "web_search" => Some(7 * 24 * 60 * 60),       // 7 days
+        "web_search" => Some(7 * 24 * 60 * 60), // 7 days
         "search_wikipedia" => Some(7 * 24 * 60 * 60), // 7 days
-        "search_arxiv" => Some(7 * 24 * 60 * 60),     // 7 days
+        "search_arxiv" => Some(7 * 24 * 60 * 60), // 7 days
         "read_arxiv_paper" => Some(7 * 24 * 60 * 60), // 7 days
 
         // Short TTL (1 hour) - frequently changing data
-        "get_weather" => Some(60 * 60),      // 1 hour
-        "get_stock_price" => Some(60 * 60),  // 1 hour
+        "get_weather" => Some(60 * 60),     // 1 hour
+        "get_stock_price" => Some(60 * 60), // 1 hour
 
         // Not cached
         "save_memory" | "update_topic_summary" | "read_topic_summary" | "refresh_memories" => None,
@@ -81,12 +81,10 @@ fn get_cache_path<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, Stri
 /// Load the tool cache from disk
 pub fn load_cache<R: Runtime>(app_handle: &AppHandle<R>) -> ToolCache {
     match get_cache_path(app_handle) {
-        Ok(path) if path.exists() => {
-            fs::read_to_string(&path)
-                .ok()
-                .and_then(|content| serde_json::from_str(&content).ok())
-                .unwrap_or_default()
-        }
+        Ok(path) if path.exists() => fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+            .unwrap_or_default(),
         _ => ToolCache::default(),
     }
 }

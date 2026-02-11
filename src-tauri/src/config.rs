@@ -32,18 +32,18 @@ pub struct AppConfig {
     pub research_mode: Option<bool>,
     pub background_model: Option<String>,
     // Auto-retry configuration
-    pub max_auto_retries: Option<u32>,   // Default: 2
-    pub retry_on_empty: Option<bool>,    // Retry empty responses after reasoning
-    pub retry_on_katex: Option<bool>,    // Retry on frontend KaTeX parse errors
+    pub max_auto_retries: Option<u32>, // Default: 2
+    pub retry_on_empty: Option<bool>,  // Retry empty responses after reasoning
+    pub retry_on_katex: Option<bool>,  // Retry on frontend KaTeX parse errors
     // Screen context capture
     pub enable_screen_context: Option<bool>, // Default: false
     // Compaction configuration
-    pub enable_compaction: Option<bool>,       // Default: true
-    pub compaction_threshold: Option<f32>,     // Default: 0.5 (50%)
+    pub enable_compaction: Option<bool>,        // Default: true
+    pub compaction_threshold: Option<f32>,      // Default: 0.5 (50%)
     pub compaction_preserve_turns: Option<u32>, // Default: 5
     // Fallback model for quota errors
     #[serde(default)]
-    pub fallback_model: Option<String>,        // Default: openai/gpt-oss-120b:free
+    pub fallback_model: Option<String>, // Default: openai/gpt-oss-120b:free
 }
 
 #[derive(Debug, Clone)]
@@ -188,9 +188,16 @@ pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, S
                 // Only migrate if keyring doesn't already have this key
                 if secrets::get_secret(key_type).unwrap_or(None).is_none() {
                     if let Err(e) = secrets::store_secret(key_type, key) {
-                        log::warn!("[Config] Failed to migrate {:?} to keyring: {}", key_type, e);
+                        log::warn!(
+                            "[Config] Failed to migrate {:?} to keyring: {}",
+                            key_type,
+                            e
+                        );
                     } else {
-                        log::info!("[Config] Migrated {:?} from config.toml to keyring", key_type);
+                        log::info!(
+                            "[Config] Migrated {:?} from config.toml to keyring",
+                            key_type
+                        );
                     }
                 }
                 needs_resave = true;
@@ -252,7 +259,10 @@ fn save_config_internal(config_path: &PathBuf, config: &AppConfig) -> Result<(),
     fs::write(config_path, toml_string).map_err(|e| format!("Failed to write config file: {}", e))
 }
 
-pub fn save_config<R: Runtime>(app_handle: &AppHandle<R>, config: &AppConfig) -> Result<(), String> {
+pub fn save_config<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    config: &AppConfig,
+) -> Result<(), String> {
     use crate::secrets::{self, ApiKeyType};
 
     // Save API keys to keyring
@@ -272,12 +282,19 @@ pub fn save_config<R: Runtime>(app_handle: &AppHandle<R>, config: &AppConfig) ->
     for (key_value, key_type) in key_saves {
         match key_value {
             Some(value) if !value.is_empty() => {
-                log::info!("[Config] Storing {:?} to keyring (len={})", key_type, value.len());
+                log::info!(
+                    "[Config] Storing {:?} to keyring (len={})",
+                    key_type,
+                    value.len()
+                );
                 secrets::store_secret(key_type, value)?;
             }
             Some(_) => {
                 // Empty string = explicit delete
-                log::info!("[Config] Deleting {:?} from keyring (empty value)", key_type);
+                log::info!(
+                    "[Config] Deleting {:?} from keyring (empty value)",
+                    key_type
+                );
                 secrets::delete_secret(key_type)?;
             }
             None => {

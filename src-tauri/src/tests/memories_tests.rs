@@ -45,7 +45,10 @@ fn test_token_budget_pruning() {
     for i in 0..10 {
         store.add(Memory::new(
             MemoryCategory::Fact,
-            format!("This is a test memory number {} with some content to take up tokens", i),
+            format!(
+                "This is a test memory number {} with some content to take up tokens",
+                i
+            ),
             1,
         ));
     }
@@ -130,7 +133,10 @@ fn test_chunk_markdown_respects_token_limit() {
     // Use multiple lines since splitting happens line-by-line
     let mut lines = Vec::new();
     for i in 0..50 {
-        lines.push(format!("This is line number {} with enough content to contribute to token count.", i));
+        lines.push(format!(
+            "This is line number {} with enough content to contribute to token count.",
+            i
+        ));
     }
     let content = format!("# Long Section\n\n{}", lines.join("\n"));
 
@@ -138,7 +144,11 @@ fn test_chunk_markdown_respects_token_limit() {
     let chunks = chunk_markdown(&content, 100, 0, 0);
 
     // Should be split into multiple chunks
-    assert!(chunks.len() > 1, "Long section should be split into multiple chunks, got {} chunks", chunks.len());
+    assert!(
+        chunks.len() > 1,
+        "Long section should be split into multiple chunks, got {} chunks",
+        chunks.len()
+    );
 
     // First chunk should have the heading
     assert_eq!(chunks[0].heading, Some("Long Section".to_string()));
@@ -166,7 +176,11 @@ Second section content here.
     assert!(!chunks[0].text.starts_with("..."));
 
     // Second chunk should have overlap from first chunk
-    assert!(chunks[1].text.starts_with("..."), "Second chunk should start with overlap marker, got: {}", &chunks[1].text[..50.min(chunks[1].text.len())]);
+    assert!(
+        chunks[1].text.starts_with("..."),
+        "Second chunk should start with overlap marker, got: {}",
+        &chunks[1].text[..50.min(chunks[1].text.len())]
+    );
 }
 
 #[test]
@@ -188,7 +202,11 @@ More substantial content that definitely has more than 50 tokens worth of text i
     let chunks = chunk_markdown(content, 10000, 0, 50);
 
     // Sections A and B are small and should be merged
-    assert!(chunks.len() < 3, "Small chunks should be merged: got {} chunks", chunks.len());
+    assert!(
+        chunks.len() < 3,
+        "Small chunks should be merged: got {} chunks",
+        chunks.len()
+    );
 }
 
 #[test]
@@ -202,10 +220,19 @@ fn test_chunk_markdown_preserves_line_numbers() {
     // Section A starts at line 1 (the header)
     assert_eq!(chunks[0].start_line, 1);
     // Section A ends before Section B starts
-    assert!(chunks[0].end_line < chunks[1].start_line, "Chunk 0 end ({}) should be < chunk 1 start ({})", chunks[0].end_line, chunks[1].start_line);
+    assert!(
+        chunks[0].end_line < chunks[1].start_line,
+        "Chunk 0 end ({}) should be < chunk 1 start ({})",
+        chunks[0].end_line,
+        chunks[1].start_line
+    );
 
     // Section B starts at line 6 (after the empty line 5)
-    assert_eq!(chunks[1].start_line, 6, "Section B should start at line 6, got {}", chunks[1].start_line);
+    assert_eq!(
+        chunks[1].start_line, 6,
+        "Section B should start at line 6, got {}",
+        chunks[1].start_line
+    );
 }
 
 #[test]
@@ -237,7 +264,10 @@ fn test_chunk_markdown_overlap_utf8_safety() {
 
     let chunks = chunk_markdown(content, 10000, 20, 0);
     assert_eq!(chunks.len(), 2);
-    assert!(chunks[1].text.starts_with("..."), "Overlap should be applied with multi-byte content");
+    assert!(
+        chunks[1].text.starts_with("..."),
+        "Overlap should be applied with multi-byte content"
+    );
 }
 
 #[test]
@@ -247,13 +277,20 @@ fn test_chunk_markdown_merge_preserves_specific_heading() {
     let chunks = chunk_markdown(content, 10000, 0, 200);
     assert_eq!(chunks.len(), 1, "Both small chunks should merge");
     let heading = chunks[0].heading.as_deref().unwrap();
-    assert!(heading.contains("Intro"), "Merged heading should contain first heading");
-    assert!(heading.contains("Detailed Topic"), "Merged heading should contain second heading");
+    assert!(
+        heading.contains("Intro"),
+        "Merged heading should contain first heading"
+    );
+    assert!(
+        heading.contains("Detailed Topic"),
+        "Merged heading should contain second heading"
+    );
 }
 
 #[test]
 fn test_chunk_markdown_merge_adopts_heading_when_pending_has_none() {
-    let content = "Some intro text without a heading.\n\n## Named Section\n\nContent for named section.\n";
+    let content =
+        "Some intro text without a heading.\n\n## Named Section\n\nContent for named section.\n";
 
     let chunks = chunk_markdown(content, 10000, 0, 200);
     assert_eq!(chunks.len(), 1, "Should merge into one chunk");
@@ -264,7 +301,7 @@ fn test_chunk_markdown_merge_adopts_heading_when_pending_has_none() {
 // Phase 2-3 Structural Tests
 // ============================================================================
 
-use crate::memories::{TopicIndex, InsightIndex, InsightMeta};
+use crate::memories::{InsightIndex, InsightMeta, TopicIndex};
 use chrono::Utc;
 
 #[test]
@@ -278,7 +315,8 @@ fn test_topic_index_metadata_only_serialization() {
     // Verify it doesn't contain "embedding" or large float arrays
     assert!(!serialized.contains("embedding"));
 
-    let deserialized: TopicIndex = serde_json::from_str(&serialized).expect("Failed to deserialize TopicIndex");
+    let deserialized: TopicIndex =
+        serde_json::from_str(&serialized).expect("Failed to deserialize TopicIndex");
     assert_eq!(deserialized.topics.len(), 2);
     assert!(deserialized.topics.contains("Rust_Optimization"));
 }
@@ -297,7 +335,8 @@ fn test_insight_meta_no_embedding_serialization() {
     assert!(!serialized.contains("embedding"));
     assert!(serialized.contains("\"reference_count\":5"));
 
-    let deserialized: InsightMeta = serde_json::from_str(&serialized).expect("Failed to deserialize InsightMeta");
+    let deserialized: InsightMeta =
+        serde_json::from_str(&serialized).expect("Failed to deserialize InsightMeta");
     assert_eq!(deserialized.reference_count, 5);
     assert_eq!(deserialized.update_count, 2);
 }
@@ -305,18 +344,25 @@ fn test_insight_meta_no_embedding_serialization() {
 #[test]
 fn test_insight_index_metadata_only_serialization() {
     let mut index = InsightIndex::default();
-    index.insights.insert("Fact_1".to_string(), InsightMeta {
-        reference_count: 1,
-        update_count: 1,
-        created_at: Utc::now(),
-    });
+    index.insights.insert(
+        "Fact_1".to_string(),
+        InsightMeta {
+            reference_count: 1,
+            update_count: 1,
+            created_at: Utc::now(),
+        },
+    );
 
     let serialized = serde_json::to_string(&index).expect("Failed to serialize InsightIndex");
     assert!(!serialized.contains("embedding"));
 
-    let deserialized: InsightIndex = serde_json::from_str(&serialized).expect("Failed to deserialize InsightIndex");
+    let deserialized: InsightIndex =
+        serde_json::from_str(&serialized).expect("Failed to deserialize InsightIndex");
     assert!(deserialized.insights.contains_key("Fact_1"));
-    assert_eq!(deserialized.insights.get("Fact_1").unwrap().reference_count, 1);
+    assert_eq!(
+        deserialized.insights.get("Fact_1").unwrap().reference_count,
+        1
+    );
 }
 
 // ============================================================================
@@ -325,9 +371,13 @@ fn test_insight_index_metadata_only_serialization() {
 
 #[test]
 fn test_topic_index_old_format_deserializes_to_default() {
-    let old_format = r#"{"topics":{"rust_optimization":[0.1,0.2,0.3],"tauri_architecture":[0.4,0.5,0.6]}}"#;
+    let old_format =
+        r#"{"topics":{"rust_optimization":[0.1,0.2,0.3],"tauri_architecture":[0.4,0.5,0.6]}}"#;
     let result: Result<TopicIndex, _> = serde_json::from_str(old_format);
-    assert!(result.is_err(), "Old embedding-based format should not parse as new TopicIndex");
+    assert!(
+        result.is_err(),
+        "Old embedding-based format should not parse as new TopicIndex"
+    );
 }
 
 #[test]

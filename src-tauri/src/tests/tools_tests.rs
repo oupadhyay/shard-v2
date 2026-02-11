@@ -20,7 +20,10 @@ mod tests {
     #[test]
     fn test_tool_structure() {
         let tools = get_all_tools();
-        let weather_tool = tools.iter().find(|t| t.function.name == "get_weather").unwrap();
+        let weather_tool = tools
+            .iter()
+            .find(|t| t.function.name == "get_weather")
+            .unwrap();
 
         assert_eq!(weather_tool.tool_type, "function");
         assert!(weather_tool.function.description.contains("weather"));

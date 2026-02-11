@@ -5,8 +5,8 @@
  * Replaces JSON-based chunk index with ACID-compliant SQLite storage.
  */
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, params, OptionalExtension};
-use sha2::{Sha256, Digest};
+use rusqlite::{params, Connection, OptionalExtension};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 use crate::memories::{Chunk, ChunkIndex, SourceType};
@@ -54,7 +54,7 @@ impl From<std::io::Error> for VectorStoreError {
 
 /// SQLite-backed vector store using sqlite-vec for KNN search
 pub struct VectorStore {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 /// Embedding dimension (Gemini text-embedding-004)
@@ -71,18 +71,17 @@ impl VectorStore {
         use std::sync::OnceLock;
         static VEC_INIT_STATUS: OnceLock<i32> = OnceLock::new();
 
-        let init_rc = *VEC_INIT_STATUS.get_or_init(|| {
-            unsafe {
-                rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
-                    sqlite_vec::sqlite3_vec_init as *const (),
-                )))
-            }
+        let init_rc = *VEC_INIT_STATUS.get_or_init(|| unsafe {
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )))
         });
 
         if init_rc != 0 {
-            return Err(VectorStoreError::SqliteVec(
-                format!("sqlite3_auto_extension failed with code {}", init_rc),
-            ));
+            return Err(VectorStoreError::SqliteVec(format!(
+                "sqlite3_auto_extension failed with code {}",
+                init_rc
+            )));
         }
 
         let conn = Connection::open(db_path)?;
@@ -107,21 +106,25 @@ impl VectorStore {
 
     /// Get the number of chunks in the store
     pub fn chunk_count(&self) -> Result<usize, VectorStoreError> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM chunks",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 
     /// Get an embedding from cache by content hash
-    pub fn get_cached_embedding(&self, content_hash: &str) -> Result<Option<Vec<f32>>, VectorStoreError> {
-        let result: Option<Vec<u8>> = self.conn.query_row(
-            "SELECT embedding FROM embedding_cache WHERE content_hash = ?",
-            [content_hash],
-            |row| row.get(0),
-        ).optional()?;
+    pub fn get_cached_embedding(
+        &self,
+        content_hash: &str,
+    ) -> Result<Option<Vec<f32>>, VectorStoreError> {
+        let result: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT embedding FROM embedding_cache WHERE content_hash = ?",
+                [content_hash],
+                |row| row.get(0),
+            )
+            .optional()?;
 
         match result {
             Some(bytes) => Ok(Some(bytes_to_f32_vec(&bytes)?)),
@@ -130,12 +133,18 @@ impl VectorStore {
     }
 
     /// Cache an embedding for future reuse
-    pub fn cache_embedding(&self, content_hash: &str, embedding: &[f32]) -> Result<(), VectorStoreError> {
+    pub fn cache_embedding(
+        &self,
+        content_hash: &str,
+        embedding: &[f32],
+    ) -> Result<(), VectorStoreError> {
         // Validate dimension before caching to prevent cache poisoning
         if embedding.len() != EMBEDDING_DIM {
-            return Err(VectorStoreError::Migration(
-                format!("Cannot cache embedding with wrong dimension: expected {}, got {}", EMBEDDING_DIM, embedding.len()),
-            ));
+            return Err(VectorStoreError::Migration(format!(
+                "Cannot cache embedding with wrong dimension: expected {}, got {}",
+                EMBEDDING_DIM,
+                embedding.len()
+            )));
         }
 
         let embedding_bytes = f32_vec_to_bytes(embedding);
@@ -149,8 +158,20 @@ impl VectorStore {
         Ok(())
     }
 
-    /// Insert or update a chunk with its embedding
+    /// Insert or update a chunk with its embedding (public wrapper with transaction)
     pub fn upsert_chunk(&self, chunk: &Chunk) -> Result<(), VectorStoreError> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.upsert_chunk_internal(&tx, chunk)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Internal logic for upserting a chunk, using an existing connection/transaction
+    pub(crate) fn upsert_chunk_internal(
+        &self,
+        conn: &Connection,
+        chunk: &Chunk,
+    ) -> Result<(), VectorStoreError> {
         let now = Utc::now().to_rfc3339();
         let source_type_str = match chunk.source_type {
             SourceType::Topic => "topic",
@@ -159,16 +180,15 @@ impl VectorStore {
         let content_hash = Self::content_hash(&chunk.text);
 
         if chunk.embedding.len() != EMBEDDING_DIM {
-            return Err(VectorStoreError::Migration(
-                format!("Invalid embedding dimension: expected {}, got {}", EMBEDDING_DIM, chunk.embedding.len()),
-            ));
+            return Err(VectorStoreError::Migration(format!(
+                "Invalid embedding dimension: expected {}, got {}",
+                EMBEDDING_DIM,
+                chunk.embedding.len()
+            )));
         }
 
-        // Begin transaction
-        let tx = self.conn.unchecked_transaction()?;
-
         // Upsert metadata
-        tx.execute(
+        conn.execute(
             r#"
             INSERT INTO chunks (id, source_type, source_name, heading, text, start_line, end_line, content_hash, created_at, updated_at)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
@@ -199,60 +219,76 @@ impl VectorStore {
         // vec0 doesn't strictly support UPSERT/REPLACE in all versions, so we DELETE then INSERT
         let embedding_bytes = f32_vec_to_bytes(&chunk.embedding);
 
-        tx.execute(
+        conn.execute(
             "DELETE FROM chunk_embeddings WHERE chunk_id = ?",
             [chunk.id.as_str()],
         )?;
 
-        tx.execute(
+        conn.execute(
             "INSERT INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
             params![chunk.id, embedding_bytes],
         )?;
 
         // Also cache the embedding
-        tx.execute(
+        conn.execute(
             "INSERT OR REPLACE INTO embedding_cache (content_hash, embedding, created_at) VALUES (?, ?, ?)",
             params![content_hash, embedding_bytes, now],
         )?;
 
-        tx.commit()?;
         Ok(())
     }
+    /// Delete all chunks for a given source (public wrapper with transaction)
+    pub fn delete_by_source(
+        &self,
+        source_type: SourceType,
+        source_name: &str,
+    ) -> Result<usize, VectorStoreError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let deleted = self.delete_by_source_internal(&tx, source_type, source_name)?;
+        tx.commit()?;
+        Ok(deleted)
+    }
 
-    /// Delete all chunks for a given source
-    pub fn delete_by_source(&self, source_type: SourceType, source_name: &str) -> Result<usize, VectorStoreError> {
+    /// Internal logic for deleting chunks by source
+    pub(crate) fn delete_by_source_internal(
+        &self,
+        conn: &Connection,
+        source_type: SourceType,
+        source_name: &str,
+    ) -> Result<usize, VectorStoreError> {
         let source_type_str = match source_type {
             SourceType::Topic => "topic",
             SourceType::Insight => "insight",
         };
 
-        let tx = self.conn.unchecked_transaction()?;
-
         // Delete from vec0 table using subquery (efficient single-statement delete)
-        tx.execute(
+        conn.execute(
             "DELETE FROM chunk_embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE source_type = ? AND source_name = ?)",
             params![source_type_str, source_name],
         )?;
 
         // Delete from chunks table
-        let deleted = tx.execute(
+        let deleted = conn.execute(
             "DELETE FROM chunks WHERE source_type = ? AND source_name = ?",
             params![source_type_str, source_name],
         )?;
 
-        tx.commit()?;
         Ok(deleted)
     }
-
-    /// K-Nearest Neighbor search using sqlite-vec
-    ///
     /// Returns top-k chunks ordered by cosine similarity (descending)
-    pub fn knn_search(&self, query_embedding: &[f32], k: usize, min_score: f32) -> Result<Vec<Chunk>, VectorStoreError> {
+    pub fn knn_search(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+        min_score: f32,
+    ) -> Result<Vec<Chunk>, VectorStoreError> {
         // Validate embedding dimension before passing to SQLite
         if query_embedding.len() != EMBEDDING_DIM {
-            return Err(VectorStoreError::Migration(
-                format!("Query embedding dimension mismatch: expected {}, got {}", EMBEDDING_DIM, query_embedding.len()),
-            ));
+            return Err(VectorStoreError::Migration(format!(
+                "Query embedding dimension mismatch: expected {}, got {}",
+                EMBEDDING_DIM,
+                query_embedding.len()
+            )));
         }
 
         let query_bytes = f32_vec_to_bytes(query_embedding);
@@ -294,16 +330,25 @@ impl VectorStore {
                 }
             };
 
-            Ok((Chunk {
-                id: row.get(0)?,
-                source_type,
-                source_name: row.get(2)?,
-                heading: row.get(3)?,
-                text: row.get(4)?,
-                start_line: row.get(5)?,
-                end_line: row.get(6)?,
-                embedding: bytes_to_f32_vec(&embedding_bytes).map_err(|e| rusqlite::Error::InvalidColumnType(7, e.to_string(), rusqlite::types::Type::Blob))?,
-            }, similarity))
+            Ok((
+                Chunk {
+                    id: row.get(0)?,
+                    source_type,
+                    source_name: row.get(2)?,
+                    heading: row.get(3)?,
+                    text: row.get(4)?,
+                    start_line: row.get(5)?,
+                    end_line: row.get(6)?,
+                    embedding: bytes_to_f32_vec(&embedding_bytes).map_err(|e| {
+                        rusqlite::Error::InvalidColumnType(
+                            7,
+                            e.to_string(),
+                            rusqlite::types::Type::Blob,
+                        )
+                    })?,
+                },
+                similarity,
+            ))
         })?;
 
         // Collect with error propagation instead of silently dropping errors
@@ -319,7 +364,11 @@ impl VectorStore {
     }
 
     /// Search using FTS5 (Keyword Search)
-    pub fn search_fts(&self, query_text: &str, limit: usize) -> Result<Vec<Chunk>, VectorStoreError> {
+    pub fn search_fts(
+        &self,
+        query_text: &str,
+        limit: usize,
+    ) -> Result<Vec<Chunk>, VectorStoreError> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT
@@ -332,21 +381,21 @@ impl VectorStore {
             WHERE chunks_fts MATCH ?1
             ORDER BY bm25(chunks_fts)
             LIMIT ?2
-            "#
+            "#,
         )?;
 
         let params = params![query_text, limit as i64];
         let chunks = stmt.query_map(params, |row| {
-             let source_type_str: String = row.get(1)?;
-             let embedding_bytes: Vec<u8> = row.get(7)?;
+            let source_type_str: String = row.get(1)?;
+            let embedding_bytes: Vec<u8> = row.get(7)?;
 
-             let source_type = match source_type_str.as_str() {
+            let source_type = match source_type_str.as_str() {
                 "topic" => SourceType::Topic,
                 "insight" => SourceType::Insight,
                 _ => SourceType::Insight, // Fallback for FTS results if type unknown
-             };
+            };
 
-             Ok(Chunk {
+            Ok(Chunk {
                 id: row.get(0)?,
                 source_type,
                 source_name: row.get(2)?,
@@ -354,18 +403,32 @@ impl VectorStore {
                 text: row.get(4)?,
                 start_line: row.get(5)?,
                 end_line: row.get(6)?,
-                embedding: bytes_to_f32_vec(&embedding_bytes).map_err(|e| rusqlite::Error::InvalidColumnType(7, e.to_string(), rusqlite::types::Type::Blob))?,
-             })
+                embedding: bytes_to_f32_vec(&embedding_bytes).map_err(|e| {
+                    rusqlite::Error::InvalidColumnType(
+                        7,
+                        e.to_string(),
+                        rusqlite::types::Type::Blob,
+                    )
+                })?,
+            })
         })?;
 
         // Collect with error propagation instead of silently dropping errors
-        chunks.collect::<Result<Vec<_>, _>>().map_err(VectorStoreError::from)
+        chunks
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(VectorStoreError::from)
     }
 
     /// Hybrid Search (Vector + Keyword)
     /// Returns a merged list of chunks, deduplicated by ID.
     /// vector_min_score: Threshold for vector search (e.g. 0.4)
-    pub fn hybrid_search(&self, query_text: &str, query_embedding: &[f32], k: usize, vector_min_score: f32) -> Result<Vec<Chunk>, VectorStoreError> {
+    pub fn hybrid_search(
+        &self,
+        query_text: &str,
+        query_embedding: &[f32],
+        k: usize,
+        vector_min_score: f32,
+    ) -> Result<Vec<Chunk>, VectorStoreError> {
         use std::collections::HashSet;
 
         // 1. Get Top-K Vector Results (filtered)
@@ -417,49 +480,67 @@ impl VectorStore {
                 text: row.get(4)?,
                 start_line: row.get(5)?,
                 end_line: row.get(6)?,
-                embedding: bytes_to_f32_vec(&embedding_bytes).map_err(|e| rusqlite::Error::InvalidColumnType(7, e.to_string(), rusqlite::types::Type::Blob))?,
+                embedding: bytes_to_f32_vec(&embedding_bytes).map_err(|e| {
+                    rusqlite::Error::InvalidColumnType(
+                        7,
+                        e.to_string(),
+                        rusqlite::types::Type::Blob,
+                    )
+                })?,
             })
         })?;
 
         // Collect with error propagation instead of silently dropping errors
-        chunks.collect::<Result<Vec<_>, _>>().map_err(VectorStoreError::from)
+        chunks
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(VectorStoreError::from)
     }
 
     /// Get all unique sources (type, name) in the store
     pub fn get_unique_sources(&self) -> Result<Vec<(SourceType, String)>, VectorStoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT source_type, source_name FROM chunks"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT source_type, source_name FROM chunks")?;
 
         let rows = stmt.query_map([], |row| {
             let type_str: String = row.get(0)?;
             let name: String = row.get(1)?;
-            let source_type = if type_str == "topic" { SourceType::Topic } else { SourceType::Insight };
+            let source_type = if type_str == "topic" {
+                SourceType::Topic
+            } else {
+                SourceType::Insight
+            };
             Ok((source_type, name))
         })?;
 
         // Collect with error propagation instead of silently dropping errors
-        rows.collect::<Result<Vec<_>, _>>().map_err(VectorStoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(VectorStoreError::from)
     }
 
     /// Clear all data (for testing)
     #[cfg(test)]
     pub fn clear(&self) -> Result<(), VectorStoreError> {
         self.conn.execute_batch(
-            "DELETE FROM chunk_embeddings; DELETE FROM chunks; DELETE FROM embedding_cache;"
+            "DELETE FROM chunk_embeddings; DELETE FROM chunks; DELETE FROM embedding_cache;",
         )?;
         Ok(())
     }
 
     /// Migrate from JSON chunk index to SQLite
     pub fn migrate_from_json(&self, chunk_index: &ChunkIndex) -> Result<usize, VectorStoreError> {
-        log::info!("[VectorStore] Migrating {} chunks from JSON", chunk_index.chunks.len());
+        log::info!(
+            "[VectorStore] Migrating {} chunks from JSON",
+            chunk_index.chunks.len()
+        );
 
+        let tx = self.conn.unchecked_transaction()?;
         let mut count = 0;
         for chunk in &chunk_index.chunks {
-            self.upsert_chunk(chunk)?;
+            self.upsert_chunk_internal(&tx, chunk)?;
             count += 1;
         }
+        tx.commit()?;
 
         log::info!("[VectorStore] Migration complete: {} chunks", count);
         Ok(count)
@@ -467,13 +548,20 @@ impl VectorStore {
 
     /// Get the timestamp of last rebuild (from metadata table)
     pub fn last_rebuilt(&self) -> Result<Option<DateTime<Utc>>, VectorStoreError> {
-        let result: Option<String> = self.conn.query_row(
-            "SELECT value FROM metadata WHERE key = 'last_rebuilt'",
-            [],
-            |row| row.get(0),
-        ).optional()?;
+        let result: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'last_rebuilt'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
 
-        Ok(result.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))))
+        Ok(result.and_then(|s| {
+            DateTime::parse_from_rfc3339(&s)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        }))
     }
 
     /// Set the last rebuilt timestamp
@@ -503,22 +591,18 @@ fn f32_vec_to_bytes(v: &[f32]) -> Vec<u8> {
 /// Convert bytes from SQLite to f32 vector
 fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, VectorStoreError> {
     if bytes.len() % std::mem::size_of::<f32>() != 0 {
-        return Err(VectorStoreError::Migration(
-            format!(
-                "Invalid embedding blob size: {} bytes (not a multiple of 4)",
-                bytes.len()
-            ),
-        ));
+        return Err(VectorStoreError::Migration(format!(
+            "Invalid embedding blob size: {} bytes (not a multiple of 4)",
+            bytes.len()
+        )));
     }
 
     let num_f32 = bytes.len() / std::mem::size_of::<f32>();
     if num_f32 != EMBEDDING_DIM {
-        return Err(VectorStoreError::Migration(
-            format!(
-                "Invalid embedding length: expected {} floats, got {}",
-                EMBEDDING_DIM, num_f32
-            ),
-        ));
+        return Err(VectorStoreError::Migration(format!(
+            "Invalid embedding length: expected {} floats, got {}",
+            EMBEDDING_DIM, num_f32
+        )));
     }
 
     Ok(bytes
@@ -608,7 +692,11 @@ mod tests {
 
         // Insert 5 chunks
         for i in 0..5 {
-            let chunk = make_test_chunk(&format!("chunk_{}", i), &format!("Content {}", i), SourceType::Topic);
+            let chunk = make_test_chunk(
+                &format!("chunk_{}", i),
+                &format!("Content {}", i),
+                SourceType::Topic,
+            );
             store.upsert_chunk(&chunk).unwrap();
         }
 
@@ -673,7 +761,9 @@ mod tests {
         assert_eq!(store.chunk_count().unwrap(), 3);
 
         // Delete source_a
-        let deleted = store.delete_by_source(SourceType::Topic, "source_a").unwrap();
+        let deleted = store
+            .delete_by_source(SourceType::Topic, "source_a")
+            .unwrap();
         assert_eq!(deleted, 2);
         assert_eq!(store.chunk_count().unwrap(), 1);
     }

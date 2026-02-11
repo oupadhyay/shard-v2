@@ -1,3 +1,4 @@
+use crate::agent::ChatMessage;
 /**
  * Compaction system tests
  *
@@ -6,7 +7,6 @@
 use crate::compaction::{
     estimate_history_tokens, estimate_message_tokens, get_context_size, should_compact,
 };
-use crate::agent::ChatMessage;
 
 // Test helper: create a message with specific content length
 fn make_message(role: &str, content_len: usize) -> ChatMessage {
@@ -81,10 +81,7 @@ fn test_should_compact_with_artificial_limit() {
     // 2000 chars = ~500 tokens, so this should trigger compaction
     // at a very low threshold
 
-    let history = vec![
-        make_message("user", 2000),
-        make_message("assistant", 2000),
-    ];
+    let history = vec![make_message("user", 2000), make_message("assistant", 2000)];
     let tokens = estimate_history_tokens(&history);
 
     // With ~1000 tokens, this would trigger at 50% for a 2000 token model

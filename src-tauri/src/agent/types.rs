@@ -30,10 +30,12 @@ where
         Some(v) => {
             // Try to parse as ImageOrImages
             serde_json::from_value::<ImageOrImages>(v)
-                .map(|ioi| Some(match ioi {
-                    ImageOrImages::Single(img) => vec![img],
-                    ImageOrImages::Multiple(imgs) => imgs,
-                }))
+                .map(|ioi| {
+                    Some(match ioi {
+                        ImageOrImages::Single(img) => vec![img],
+                        ImageOrImages::Multiple(imgs) => imgs,
+                    })
+                })
                 .map_err(|e| D::Error::custom(format!("Failed to parse images: {}", e)))
         }
     }
@@ -219,7 +221,9 @@ pub struct GeminiContent {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 pub enum GeminiPart {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     FileData {
         #[serde(rename = "fileData")]
         file_data: GeminiFileData,
@@ -234,7 +238,10 @@ pub enum GeminiPart {
         #[serde(rename = "functionResponse")]
         function_response: GeminiFunctionResponse,
     },
-    Thought { thought: bool, text: String },
+    Thought {
+        thought: bool,
+        text: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
