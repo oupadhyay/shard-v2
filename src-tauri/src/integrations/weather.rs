@@ -88,8 +88,8 @@ pub async fn perform_weather_lookup(
         }
     };
 
-    let lat = location_data.latitude.ok_or("Missing latitude")?;
-    let lon = location_data.longitude.ok_or("Missing longitude")?;
+    let lat = match location_data.latitude { Some(l) => l, None => return Err("Missing latitude".to_string()) };
+    let lon = match location_data.longitude { Some(l) => l, None => return Err("Missing longitude".to_string()) };
 
     // Sanitize strings from remote API to prevent log injection
     let name = location_data
@@ -104,7 +104,7 @@ pub async fn perform_weather_lookup(
         .unwrap_or_default()
         .replace('\n', " ")
         .replace('\r', " ");
-    let location_display = format!("{}, {}", name, country);
+    let location_display = format!("{}, {}", name, country).replace('\n', " ").replace('\r', " ");
 
     // 2. Weather
     let weather_url = "https://api.open-meteo.com/v1/forecast";
@@ -115,10 +115,8 @@ pub async fn perform_weather_lookup(
     ];
 
     log::info!(
-        "Performing Weather lookup for: {} ({}, {})",
-        location_display,
-        lat,
-        lon
+        "Performing Weather lookup for: {}",
+        location_display
     );
 
     let weather_resp = client
