@@ -75,4 +75,3 @@ harness = false
 [[bench]]
 name = "vector_search_bench"
 harness = false
-

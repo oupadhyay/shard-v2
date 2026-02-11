@@ -431,7 +431,8 @@ async fn run_summary_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summar
     };
 
     // Gather interactions from lookback period
-    let (interactions, stats) = gather_recent_interactions(&interactions_dir, LOOKBACK_HOURS)?;
+    let interactions_dir_clone = interactions_dir.clone();
+    let (interactions, stats) = tokio::task::spawn_blocking(move || gather_recent_interactions(&interactions_dir_clone, LOOKBACK_HOURS)).await.map_err(|e| e.to_string())??;
 
     if interactions.is_empty() {
         log::info!("[Summary] No interactions in lookback period.");
@@ -447,26 +448,34 @@ async fn run_summary_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summar
         });
     }
 
-    // Load existing topic summaries so LLM can update/merge them
-    let existing_topics = load_topic_summaries_context(app_handle);
-    let existing_insights = load_insight_summaries_context(app_handle);
+    // Load context from disk (offload blocking I/O)
+    let handle = app_handle.clone();
+    let (existing_topics, existing_insights, daily_logs, candidates_context) = tokio::task::spawn_blocking(move || {
+        let topics = load_topic_summaries_context_sync(&handle);
+        let insights = load_insight_summaries_context_sync(&handle);
 
-    // Get promotion candidates (insights with >= 3 updates)
-    let promotion_candidates =
-        crate::memories::get_promotion_candidates(app_handle, 3).unwrap_or_default();
-    let mut candidates_context = String::new();
-    if !promotion_candidates.is_empty() {
-        candidates_context.push_str("CANDIDATES FOR PROMOTION TO TOPIC (Review these):\n");
-        for title in &promotion_candidates {
-            if let Ok(content) = crate::memories::read_insight(app_handle, title) {
-                candidates_context
-                    .push_str(&format!("- Title: {}\n  Content: {}\n", title, content));
+        // Get promotion candidates (insights with >= 3 updates)
+        let promotion_candidates =
+            crate::memories::get_promotion_candidates(&handle, 3).unwrap_or_default();
+        let mut candidates = String::new();
+        if !promotion_candidates.is_empty() {
+            candidates.push_str("CANDIDATES FOR PROMOTION TO TOPIC (Review these):\n");
+            for title in &promotion_candidates {
+                if let Ok(content) = crate::memories::read_insight(&handle, title) {
+                    candidates
+                        .push_str(&format!("- Title: {}\n  Content: {}\n", title, content));
+                }
             }
         }
-    }
 
-    // Read daily logs from pre-compaction flushes (staging area for insights)
-    let daily_logs = crate::memories::read_all_daily_logs(app_handle).unwrap_or_default();
+        // Read daily logs from pre-compaction flushes (staging area for insights)
+        let logs = crate::memories::read_all_daily_logs(&handle).unwrap_or_default();
+
+        (topics, insights, logs, candidates)
+    })
+    .await
+    .map_err(|e| format!("Blocking context load failed: {}", e))?;
+
     let mut daily_logs_context = String::new();
     let logs_to_archive: Vec<String> = daily_logs.iter().map(|(date, _)| date.clone()).collect();
     if !daily_logs.is_empty() {
@@ -548,101 +557,97 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
         Ok(response) => {
             log::debug!("[Summary] LLM response: {}", response);
 
-            // Try new combined format first
-            match parse_extraction_response(&response) {
-                Ok(extraction) => {
-                    // Process topics
-                    for update in extraction.topics {
-                        match crate::memories::update_topic_summary(
-                            app_handle,
-                            &update.topic,
-                            &update.summary,
-                        ) {
-                            Ok(_) => {
-                                log::info!("[Summary] Updated topic: {}", update.topic);
-                                topics_updated.push(update.topic);
-                            }
-                            Err(e) => {
-                                log::warn!(
-                                    "[Summary] Failed to update topic {}: {}",
-                                    update.topic,
-                                    e
-                                );
-                            }
-                        }
-                    }
+            let response_clone = response.clone();
+            let handle = app_handle.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let mut topics = Vec::new();
+                let mut insights = Vec::new();
+                let mut promoted = Vec::new();
 
-                    // Process insights
-                    for insight in extraction.insights {
-                        match crate::memories::update_insight(
-                            app_handle,
-                            &insight.title,
-                            &insight.content,
-                        ) {
-                            Ok(_) => {
-                                log::info!(
-                                    "[Summary] Created/Updated insight: {}",
-                                    insight.title
-                                );
-                                insights_created.push(insight.title);
-                            }
-                            Err(e) => {
-                                log::warn!(
-                                    "[Summary] Failed to create insight {}: {}",
-                                    insight.title,
-                                    e
-                                );
-                            }
-                        }
-                    }
-
-                    // Process promotions (delete old insights)
-                    for promotion in extraction.promotions {
-                        match crate::memories::delete_insight(app_handle, &promotion.insight_title)
-                        {
-                            Ok(true) => {
-                                log::info!(
-                                    "[Summary] Promoted insight {} to topic {}",
-                                    promotion.insight_title,
-                                    promotion.new_topic
-                                );
-                                insights_promoted.push(promotion.insight_title);
-                            }
-                            Ok(false) => {
-                                log::warn!(
-                                    "[Summary] Failed to find insight to promote: {}",
-                                    promotion.insight_title
-                                );
-                            }
-                            Err(e) => {
-                                log::warn!(
-                                    "[Summary] Error promoting insight {}: {}",
-                                    promotion.insight_title,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    // Fallback: try old topic-only format
-                    log::debug!(
-                        "[Summary] Combined format failed ({}), trying legacy format",
-                        e
-                    );
-                    if let Ok(updates) = parse_topic_updates(&response) {
-                        for update in updates {
-                            if let Ok(_) = crate::memories::update_topic_summary(
-                                app_handle,
+                // Try new combined format first
+                match parse_extraction_response(&response_clone) {
+                    Ok(extraction) => {
+                        // Process topics
+                        for update in extraction.topics {
+                            match crate::memories::update_topic_summary(
+                                &handle,
                                 &update.topic,
                                 &update.summary,
                             ) {
-                                topics_updated.push(update.topic);
+                                Ok(_) => {
+                                    log::info!("[Summary] Updated topic: {}", update.topic);
+                                    topics.push(update.topic);
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "[Summary] Failed to update topic {}: {}",
+                                        update.topic,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+
+                        // Process insights
+                        for insight in extraction.insights {
+                            match crate::memories::update_insight(
+                                &handle,
+                                &insight.title,
+                                &insight.content,
+                            ) {
+                                Ok(_) => {
+                                    log::info!(
+                                        "[Summary] Created/Updated insight: {}",
+                                        insight.title
+                                    );
+                                    insights.push(insight.title);
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "[Summary] Failed to create insight {}: {}",
+                                        insight.title,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+
+                        // Process promotions (delete old insights)
+                        for promotion in extraction.promotions {
+                            match crate::memories::delete_insight(&handle, &promotion.insight_title)
+                            {
+                                Ok(true) => {
+                                    log::info!(
+                                        "[Summary] Promoted insight {} to topic {}",
+                                        promotion.insight_title,
+                                        promotion.new_topic
+                                    );
+                                    promoted.push(promotion.insight_title);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        if let Ok(updates) = parse_topic_updates(&response_clone) {
+                            for update in updates {
+                                if let Ok(_) = crate::memories::update_topic_summary(
+                                    &handle,
+                                    &update.topic,
+                                    &update.summary,
+                                ) {
+                                    topics.push(update.topic);
+                                }
                             }
                         }
                     }
                 }
-            }
+                (topics, insights, promoted)
+            }).await.map_err(|e| format!("Blocking save failed: {}", e))?;
+
+            topics_updated = result.0;
+            insights_created = result.1;
+            insights_promoted = result.2;
             Some(response)
         }
         Err(e) => {
@@ -653,10 +658,13 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
 
     // Archive processed daily logs (move to archived/ folder)
     if !logs_to_archive.is_empty() && !insights_created.is_empty() {
+        let handle = app_handle.clone();
         for date in &logs_to_archive {
-            if let Err(e) = crate::memories::archive_daily_log(app_handle, date) {
-                log::warn!("[Summary] Failed to archive daily log {}: {}", date, e);
-            }
+            let date_clone = date.clone();
+            let h = handle.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::memories::archive_daily_log(&h, &date_clone)
+            }).await;
         }
         log::info!("[Summary] Archived {} daily logs", logs_to_archive.len());
     }
@@ -706,11 +714,13 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
             "[Cleanup] No API key for {}, falling back to date-based cleanup",
             background_model
         );
-        return cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS);
+        let dir = interactions_dir.clone();
+        return tokio::task::spawn_blocking(move || cleanup_interactions_in_dir(&dir, LOG_RETENTION_DAYS)).await.map_err(|e| e.to_string())?;
     }
 
     // Gather same interactions as summary job
-    let (interactions, _) = gather_recent_interactions(&interactions_dir, LOOKBACK_HOURS)?;
+    let interactions_dir_clone = interactions_dir.clone();
+    let (interactions, _) = tokio::task::spawn_blocking(move || gather_recent_interactions(&interactions_dir_clone, LOOKBACK_HOURS)).await.map_err(|e| e.to_string())??;
 
     if interactions.is_empty() {
         return Ok(CleanupResult {
@@ -721,7 +731,8 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
     }
 
     // Load existing topic summaries for context
-    let topics_context = load_topic_summaries_context(app_handle);
+    let handle = app_handle.clone();
+    let topics_context = tokio::task::spawn_blocking(move || load_topic_summaries_context_sync(&handle)).await.map_err(|e| e.to_string())?;
 
     // Call LLM to decide what to clean up
     let prompt = format!(
@@ -754,11 +765,12 @@ Interaction Entries:
                 Ok(decision) => {
                     if decision.to_remove.is_empty() {
                         // Also prune BM25 index
-                        if let Err(e) = crate::retrieval::prune_bm25_index(
-                            app_handle,
+                        let h = app_handle.clone();
+                        if let Err(e) = tokio::task::spawn_blocking(move || crate::retrieval::prune_bm25_index(
+                            &h,
                             LOG_RETENTION_DAYS,
                             10000,
-                        ) {
+                        )).await.map_err(|e| e.to_string())? {
                             log::warn!("[Cleanup] BM25 prune failed: {}", e);
                         }
                         return Ok(CleanupResult {
@@ -769,12 +781,17 @@ Interaction Entries:
                     }
 
                     // Remove entries by timestamp
-                    let (deleted, bytes) =
-                        remove_entries_by_timestamp(&interactions_dir, &decision.to_remove)?;
+                    let dir = interactions_dir.clone();
+                    let ts = decision.to_remove.clone();
+                    let (deleted, bytes) = tokio::task::spawn_blocking(move ||
+                        remove_entries_by_timestamp(&dir, &ts)
+                    ).await.map_err(|e| e.to_string())??;
 
                     // Also prune BM25 index
-                    if let Err(e) =
-                        crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000)
+                    let h = app_handle.clone();
+                    if let Err(e) = tokio::task::spawn_blocking(move ||
+                        crate::retrieval::prune_bm25_index(&h, LOG_RETENTION_DAYS, 10000)
+                    ).await.map_err(|e| e.to_string())?
                     {
                         log::warn!("[Cleanup] BM25 prune failed: {}", e);
                     }
@@ -790,11 +807,15 @@ Interaction Entries:
                         "[Cleanup] Failed to parse LLM response: {}. Using date-based fallback.",
                         e
                     );
-                    let result =
-                        cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS)?;
+                    let dir = interactions_dir.clone();
+                    let result = tokio::task::spawn_blocking(move ||
+                        cleanup_interactions_in_dir(&dir, LOG_RETENTION_DAYS)
+                    ).await.map_err(|e| e.to_string())??;
                     // Also prune BM25 index
-                    if let Err(e) =
-                        crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000)
+                    let h = app_handle.clone();
+                    if let Err(e) = tokio::task::spawn_blocking(move ||
+                        crate::retrieval::prune_bm25_index(&h, LOG_RETENTION_DAYS, 10000)
+                    ).await.map_err(|e| e.to_string())?
                     {
                         log::warn!("[Cleanup] BM25 prune failed: {}", e);
                     }
@@ -807,10 +828,13 @@ Interaction Entries:
                 "[Cleanup] LLM call failed: {}. Using date-based fallback.",
                 e
             );
-            let result = cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS)?;
+            let dir = interactions_dir.clone();
+            let result = tokio::task::spawn_blocking(move || cleanup_interactions_in_dir(&dir, LOG_RETENTION_DAYS)).await.map_err(|e| e.to_string())??;
             // Also prune BM25 index
-            if let Err(e) =
-                crate::retrieval::prune_bm25_index(app_handle, LOG_RETENTION_DAYS, 10000)
+            let h = app_handle.clone();
+            if let Err(e) = tokio::task::spawn_blocking(move ||
+                crate::retrieval::prune_bm25_index(&h, LOG_RETENTION_DAYS, 10000)
+            ).await.map_err(|e| e.to_string())?
             {
                 log::warn!("[Cleanup] BM25 prune failed: {}", e);
             }
@@ -956,8 +980,8 @@ fn gather_recent_interactions(
     Ok((output, stats))
 }
 
-/// Load topic summaries as context string
-fn load_topic_summaries_context<R: Runtime>(app_handle: &AppHandle<R>) -> String {
+/// Load topic summaries as context string (sync version for blocking tasks)
+fn load_topic_summaries_context_sync<R: Runtime>(app_handle: &AppHandle<R>) -> String {
     match crate::memories::get_topics_dir(app_handle) {
         Ok(topics_dir) => {
             if !topics_dir.exists() {
@@ -995,8 +1019,8 @@ fn load_topic_summaries_context<R: Runtime>(app_handle: &AppHandle<R>) -> String
     }
 }
 
-/// Load insight summaries as context string for background job
-fn load_insight_summaries_context<R: Runtime>(app_handle: &AppHandle<R>) -> String {
+/// Load insight summaries as context string for background job (sync version)
+fn load_insight_summaries_context_sync<R: Runtime>(app_handle: &AppHandle<R>) -> String {
     match crate::memories::get_insights_dir(app_handle) {
         Ok(insights_dir) => {
             if !insights_dir.exists() {
