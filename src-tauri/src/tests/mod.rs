@@ -9,3 +9,4 @@ mod memories_tests;
 mod cache_tests;
 mod interactions_tests;
 mod compaction_tests;
+pub mod openrouter_tests;
