@@ -1271,9 +1271,8 @@ impl Agent {
         let is_cerebras = provider_config.provider_name == "Cerebras";
         let is_groq = provider_config.provider_name == "Groq";
 
-        let (api_key, base_url, model, reasoning_effort, provider_name) = (
+        let (api_key, model, reasoning_effort, provider_name) = (
             api_key,
-            provider_config.base_url.clone(),
             provider_config.model_id.clone(),
             provider_config.reasoning_effort.clone(),
             provider_config.provider_name.clone(),

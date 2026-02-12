@@ -46,6 +46,7 @@ pub struct AppConfig {
     pub fallback_model: Option<String>,        // Default: openai/gpt-oss-120b:free
 }
 
+#[derive(Debug)]
 pub struct ModelProviderConfig {
     pub base_url: String,
     pub model_id: String,
@@ -74,10 +75,10 @@ impl AppConfig {
             };
             ("Cerebras", "https://api.cerebras.ai/v1/", model_id, Some("high".to_string()))
         } else if model.contains("(Groq)") {
-            let model_id = if model.contains("20b") {
-                "openai/gpt-oss-20b".to_string()
-            } else if model.contains("120b") {
+            let model_id = if model.contains("120b") {
                 "openai/gpt-oss-120b".to_string()
+            } else if model.contains("20b") {
+                "openai/gpt-oss-20b".to_string()
             } else {
                 let base_model = model.replace(" (Groq)", "").trim().to_string();
                 format!("openai/{}", base_model)
@@ -288,4 +289,58 @@ pub fn save_config<R: Runtime>(app_handle: &AppHandle<R>, config: &AppConfig) ->
     // Save non-sensitive config to TOML (API keys cleared before serialization)
     let config_path = get_config_path(app_handle)?;
     save_config_internal(&config_path, config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cerebras_provider_config() {
+        let config = AppConfig {
+            cerebras_api_key: Some("test-key".to_string()),
+            ..Default::default()
+        };
+        let (pc, key) = config.get_model_provider_config("gpt-oss-120b (Cerebras)", "test").unwrap();
+        assert_eq!(pc.provider_name, "Cerebras");
+        assert_eq!(pc.base_url, "https://api.cerebras.ai/v1/");
+        assert_eq!(pc.model_id, "gpt-oss-120b");
+        assert_eq!(key, "test-key");
+        assert_eq!(pc.reasoning_effort, Some("high".to_string()));
+    }
+
+    #[test]
+    fn test_groq_provider_config() {
+        let config = AppConfig {
+            groq_api_key: Some("groq-key".to_string()),
+            ..Default::default()
+        };
+        let (pc, key) = config.get_model_provider_config("gpt-oss-120b (Groq)", "test").unwrap();
+        assert_eq!(pc.provider_name, "Groq");
+        assert_eq!(pc.base_url, "https://api.groq.com/openai/v1/");
+        assert_eq!(pc.model_id, "openai/gpt-oss-120b");
+        assert_eq!(key, "groq-key");
+    }
+
+    #[test]
+    fn test_openrouter_provider_config() {
+        let config = AppConfig {
+            openrouter_api_key: Some("or-key".to_string()),
+            ..Default::default()
+        };
+        let (pc, key) = config.get_model_provider_config("google/gemma-3-27b-it:free", "test").unwrap();
+        assert_eq!(pc.provider_name, "OpenRouter");
+        assert_eq!(pc.base_url, "https://openrouter.ai/api/v1/");
+        assert_eq!(pc.model_id, "google/gemma-3-27b-it:free");
+        assert_eq!(key, "or-key");
+        assert_eq!(pc.reasoning_effort, None);
+    }
+
+    #[test]
+    fn test_missing_api_key_error() {
+        let config = AppConfig::default();
+        let err = config.get_model_provider_config("gpt-oss-120b (Cerebras)", "main chat").unwrap_err();
+        assert!(err.contains("Cerebras"));
+        assert!(err.contains("main chat"));
+    }
 }

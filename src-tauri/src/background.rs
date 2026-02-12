@@ -157,7 +157,7 @@ pub struct CleanupDecision {
 // ============================================================================
 
 /// Make an LLM call for background processing
-/// Routes to Groq or Cerebras based on the model name
+/// Routes to the appropriate provider based on the model name
 pub async fn call_background_llm(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,
@@ -199,7 +199,7 @@ pub async fn call_background_llm(
     let body: serde_json::Value = res
         .json()
         .await
-        .map_err(|e| format!("Failed to parse Groq response: {}", e))?;
+        .map_err(|e| format!("Failed to parse {} response: {}", provider_config.provider_name, e))?;
 
     // Extract text content from response
     if let Some(choices) = body.get("choices").and_then(|c| c.as_array()) {
@@ -214,7 +214,7 @@ pub async fn call_background_llm(
         }
     }
 
-    Err("No content in Groq response".to_string())
+    Err(format!("No content in {} response", provider_config.provider_name))
 }
 
 /// Parse topic updates from LLM JSON response
