@@ -8,7 +8,7 @@ use tauri_plugin_global_shortcut::{self as tauri_gs, GlobalShortcutExt, Shortcut
 static CURRENT_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 static CANCELLED_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 
-mod agent;
+pub mod agent;
 mod background;
 mod cache;
 pub mod compaction;
