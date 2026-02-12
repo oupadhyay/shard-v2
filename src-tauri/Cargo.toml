@@ -76,6 +76,9 @@ name = "optimizations_bench"
 harness = false
 
 [[bench]]
-name = "vector_search_bench"
+name = "history_serialization_bench"
 harness = false
 
+[[bench]]
+name = "vector_search_bench"
+harness = false
