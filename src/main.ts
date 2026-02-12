@@ -28,6 +28,8 @@ import {
   RETRY_ICON,
   COPY_ICON,
   CHECK_ICON,
+  SETTINGS_MODAL_HTML,
+  initSettingsTabs,
 } from "./ui";
 
 // DOM Elements
@@ -824,7 +826,9 @@ listen<string>("agent-retry", (event) => {
     const retryingDiv = document.createElement("div");
     retryingDiv.id = "loading-indicator";
     retryingDiv.className = "message assistant";
-    retryingDiv.innerHTML = `<span class="loading-dots">Retrying (${payload.attempt}/${payload.max})...</span>`;
+    const escapedAttempt = md.utils.escapeHtml(String(payload.attempt));
+    const escapedMax = md.utils.escapeHtml(String(payload.max));
+    retryingDiv.innerHTML = `<span class="loading-dots">Retrying (${escapedAttempt}/${escapedMax})...</span>`;
     chatArea.appendChild(retryingDiv);
     chatArea.scrollTop = chatArea.scrollHeight;
   } catch (e) {
@@ -1292,9 +1296,10 @@ function showSuggestions(suggestions: string[]) {
   // Generate short display names (max 30 chars) with full prompt in title
   suggestionsContainer.innerHTML = suggestions.map((s, i) => {
     const displayName = s.length > 30 ? s.substring(0, 27) + "..." : s;
-    // Escape HTML for title attribute
-    const escapedTitle = s.replace(/"/g, "&quot;").replace(/</g, "&lt;");
-    return `<button class="suggestion-pill" data-index="${i}" title="${escapedTitle}">${displayName}</button>`;
+    // Escape HTML for both display and title attribute
+    const escapedDisplayName = md.utils.escapeHtml(displayName);
+    const escapedTitle = md.utils.escapeHtml(s);
+    return `<button class="suggestion-pill" data-index="${i}" title="${escapedTitle}">${escapedDisplayName}</button>`;
   }).join("");
 
   // Add click handlers
@@ -1393,114 +1398,11 @@ document.addEventListener("click", (e) => {
 // Settings Modal Logic
 const settingsModal = document.createElement("div");
 settingsModal.className = "settings-modal hidden";
-settingsModal.innerHTML = `
-  <div class="settings-content">
-    <!-- Tab Navigation -->
-    <div class="settings-tabs">
-      <button class="settings-tab active" data-tab="api-keys">API Keys</button>
-      <button class="settings-tab" data-tab="models">Models</button>
-      <button class="settings-tab" data-tab="capabilities">Capabilities</button>
-    </div>
-
-    <!-- Tab Panels -->
-    <div class="settings-panels">
-      <!-- API Keys Panel -->
-      <div class="settings-panel active" id="panel-api-keys">
-        <div class="setting-group">
-          <label>Gemini API Key</label>
-          <input type="password" id="gemini-key" placeholder="Enter Gemini API Key" />
-        </div>
-        <div class="setting-group">
-          <label>OpenRouter API Key <span class="required-hint">*</span></label>
-          <input type="password" id="openrouter-key" placeholder="Enter OpenRouter API Key" />
-        </div>
-        <div class="setting-group">
-          <label>Cerebras API Key</label>
-          <input type="password" id="cerebras-key" placeholder="Enter Cerebras API Key" />
-        </div>
-        <div class="setting-group">
-          <label>Groq API Key <span class="required-hint">*</span></label>
-          <input type="password" id="groq-key" placeholder="Enter Groq API Key" />
-        </div>
-        <div class="setting-group">
-          <label>Brave Search API Key</label>
-          <input type="password" id="brave-key" placeholder="Enter Brave API Key for web search" />
-        </div>
-      </div>
-
-      <!-- Models Panel -->
-      <div class="settings-panel" id="panel-models">
-        <div class="setting-group">
-          <label>Chat Model</label>
-          <select id="model-id">
-            <!-- Dynamically populated from backend -->
-          </select>
-        </div>
-        <div class="setting-group">
-          <label>Background Job Model</label>
-          <select id="background-model-id">
-            <!-- Dynamically populated from backend -->
-          </select>
-        </div>
-        <div id="provider-conflict-warning" style="color: #ff8844; font-size: 0.8em; display: none;">
-          ⚠ Chat and background models use the same provider. This may cause rate limiting.
-        </div>
-      </div>
-
-      <!-- Capabilities Panel -->
-      <div class="settings-panel" id="panel-capabilities">
-        <div class="setting-group checkbox-setting">
-          <label>
-            <input type="checkbox" id="enable-tools" />
-            <span class="checkbox-label">Enable Tools (Search, etc.)</span>
-          </label>
-        </div>
-        <div class="setting-group checkbox-setting">
-          <label>
-            <input type="checkbox" id="incognito-mode" />
-            <span class="checkbox-label">Incognito Mode (No Memories)</span>
-          </label>
-        </div>
-        <div class="setting-group checkbox-setting">
-          <label>
-            <input type="checkbox" id="enable-screen-context" />
-            <span class="checkbox-label">Screen Context (Beta)</span>
-          </label>
-        </div>
-      </div>
-    </div>
-
-    <div class="settings-actions">
-      <button id="save-settings">Save</button>
-      <button id="close-settings">Close</button>
-    </div>
-  </div>
-`;
+settingsModal.innerHTML = SETTINGS_MODAL_HTML;
 document.body.appendChild(settingsModal);
 
 // Tab switching logic
-const settingsTabs = settingsModal.querySelector(".settings-tabs");
-settingsTabs?.addEventListener("click", (e) => {
-  const target = e.target as HTMLElement;
-  if (!target.classList.contains("settings-tab")) return;
-
-  const tabId = target.dataset.tab;
-  if (!tabId) return;
-
-  // Update active tab
-  settingsTabs.querySelectorAll(".settings-tab").forEach((tab) => {
-    tab.classList.remove("active");
-  });
-  target.classList.add("active");
-
-  // Update active panel
-  const panels = settingsModal.querySelectorAll(".settings-panel");
-  panels.forEach((panel) => {
-    panel.classList.remove("active");
-  });
-  const activePanel = settingsModal.querySelector(`#panel-${tabId}`);
-  activePanel?.classList.add("active");
-});
+initSettingsTabs(settingsModal);
 
 const geminiKeyInput = document.getElementById("gemini-key") as HTMLInputElement;
 const openRouterKeyInput = document.getElementById("openrouter-key") as HTMLInputElement;
@@ -1547,16 +1449,14 @@ const updateToolAvailability = () => {
 modelInput.addEventListener("change", updateToolAvailability);
 
 // Provider conflict detection
-const getProvider = (model: string): string | null => {
-  if (model.includes("(Groq)")) return "groq";
-  if (model.includes("(Cerebras)")) return "cerebras";
-  if (model.includes("(OpenRouter)")) return "openrouter";
-  return null;
+const getProvider = (selectEl: HTMLSelectElement): string | null => {
+  const selectedOption = selectEl.options[selectEl.selectedIndex];
+  return selectedOption?.dataset.provider || null;
 };
 
 const checkProviderConflict = () => {
-  const chatProvider = getProvider(modelInput.value);
-  const bgProvider = getProvider(backgroundModelInput.value);
+  const chatProvider = getProvider(modelInput);
+  const bgProvider = getProvider(backgroundModelInput);
 
   if (chatProvider && bgProvider && chatProvider === bgProvider) {
     providerConflictWarning.style.display = "block";
@@ -1622,6 +1522,7 @@ function populateModelDropdown(
       const option = document.createElement("option");
       option.value = model.id;
       option.textContent = model.display_name;
+      option.dataset.provider = model.provider;
       optgroup.appendChild(option);
     }
 

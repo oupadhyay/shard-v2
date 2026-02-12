@@ -91,7 +91,7 @@ export function createToolCallElement(name: string, argsStr: string, id?: string
 
   const argsPretty = JSON.stringify(argsObj, null, 2);
   const summaryArgs = Object.entries(argsObj)
-    .map(([k, v]) => `${k}="${v}"`)
+    .map(([k, v]) => `${md.utils.escapeHtml(k)}="${md.utils.escapeHtml(String(v))}"`)
     .join(" ");
 
   const openAttr = isOpen ? "open" : "";
@@ -100,10 +100,10 @@ export function createToolCallElement(name: string, argsStr: string, id?: string
     <details ${openAttr}>
       <summary>
         <span class="tool-icon">🛠️</span>
-        <span class="tool-name">Tool: ${name}</span>
+        <span class="tool-name">Tool: ${md.utils.escapeHtml(name)}</span>
         <span class="tool-summary-args">${summaryArgs}</span>
       </summary>
-      <div class="tool-args">${argsPretty}</div>
+      <div class="tool-args">${md.utils.escapeHtml(argsPretty)}</div>
       <div class="tool-result" style="display: none;">
         <div class="tool-result-label">Result:</div>
         <div class="tool-result-content"></div>
@@ -125,7 +125,7 @@ export function createWebSearchQueryElement(query: string, id?: string): HTMLEle
   queryDiv.innerHTML = `
     <details>
       <summary>
-        <span class="query-text">"${DOMPurify.sanitize(query)}"</span>
+        <span class="query-text">"${md.utils.escapeHtml(query)}"</span>
       </summary>
       <div class="tool-result" style="display: none;">
         <div class="tool-result-content markdown-body"></div>

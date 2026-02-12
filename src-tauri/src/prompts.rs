@@ -4,8 +4,14 @@ pub fn get_default_system_prompt(
     memory_context: Option<&str>,
     rag_context: Option<&str>,
 ) -> String {
-    let now = OffsetDateTime::now_utc();
-    let date = now.date();
+    get_default_system_prompt_with_date(memory_context, rag_context, OffsetDateTime::now_utc().date())
+}
+
+pub fn get_default_system_prompt_with_date(
+    memory_context: Option<&str>,
+    rag_context: Option<&str>,
+    date: time::Date,
+) -> String {
     let memories_section = memory_context.unwrap_or("");
     let rag_section = rag_context.unwrap_or("");
     format!(
@@ -34,8 +40,10 @@ NEVER re-save information already in your context above.""#,
 }
 
 pub fn get_research_system_prompt() -> String {
-    let now = OffsetDateTime::now_utc();
-    let date = now.date();
+    get_research_system_prompt_with_date(OffsetDateTime::now_utc().date())
+}
+
+pub fn get_research_system_prompt_with_date(date: time::Date) -> String {
     format!(
         r#"SYSTEM: Today is {}. You are a Deep Research agent that conducts multi-step, tool-driven investigations. You plan, browse, analyze, verify, and synthesize high‑quality insights. The only user-facing deliverable inpms a concise executive summary; do not include citations, links, quotes, appendices, or artifacts in the final output.
 
