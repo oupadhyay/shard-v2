@@ -76,7 +76,7 @@ name = "optimizations_bench"
 harness = false
 
 [[bench]]
-name = "history_loading_bench"
+name = "history_serialization_bench"
 harness = false
 
 [[bench]]

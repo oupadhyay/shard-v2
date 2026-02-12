@@ -18,7 +18,7 @@ fn bench_history_serialization(c: &mut Criterion) {
         });
     }
 
-    let mut group = c.benchmark_group("history_loading");
+    let mut group = c.benchmark_group("history_serialization");
 
     group.bench_function("serialize_100_messages", |b| {
         b.iter(|| {
