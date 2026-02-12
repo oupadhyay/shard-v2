@@ -660,11 +660,10 @@ trashBtn.addEventListener("click", async () => {
 updateButtonStates();
 
 async function loadChatHistory() {
+  const fragment = document.createDocumentFragment();
   try {
     const history = await invoke<ChatMessage[]>("get_chat_history");
     chatArea.innerHTML = ""; // Clear existing
-
-    const fragment = document.createDocumentFragment();
 
     // Process messages sequentially
     for (const msg of history) {
@@ -706,12 +705,11 @@ async function loadChatHistory() {
                 updateWebSearchCount(container);
               }
             } else {
-            // Regular tool call
               const toolDiv = createToolCallElement(
                 toolName,
                 toolCall.function.arguments,
                 toolCall.id,
-                false, // Closed by default on restore
+                false,
               );
               fragment.appendChild(toolDiv);
             }
@@ -786,6 +784,9 @@ async function loadChatHistory() {
     chatArea.scrollTop = chatArea.scrollHeight;
   } catch (e) {
     console.error("Failed to load chat history:", e);
+    if (fragment.hasChildNodes()) {
+      chatArea.appendChild(fragment);
+    }
   }
 }
 
