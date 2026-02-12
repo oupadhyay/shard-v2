@@ -86,10 +86,12 @@ impl Agent {
                 for uri in uploaded_files.iter() {
                     if let Some(file_name) = uri.split('/').last() {
                         let delete_url = format!(
-                            "https://generativelanguage.googleapis.com/v1beta/files/{}?key={}",
-                            file_name, key
+                            "https://generativelanguage.googleapis.com/v1beta/files/{}",
+                            file_name
                         );
-                        let _ = self.http_client.delete(&delete_url).send().await;
+                        let _ = self.http_client.delete(&delete_url)
+                            .header("X-Goog-Api-Key", key.as_str())
+                            .send().await;
                     }
                 }
             }
@@ -900,10 +902,7 @@ impl Agent {
     }
 
     async fn classify_intent(&self, query: &str, api_key: &str) -> Result<bool, String> {
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={}",
-            api_key
-        );
+        let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
 
         let payload = serde_json::json!({
             "contents": [{
@@ -919,7 +918,8 @@ impl Agent {
 
         let client = reqwest::Client::new();
         let res = client
-            .post(&url)
+            .post(url)
+            .header("X-Goog-Api-Key", api_key)
             .json(&payload)
             .send()
             .await
@@ -961,8 +961,8 @@ impl Agent {
     ) -> Result<bool, String> {
         let enable_tools = config.enable_tools.unwrap_or(true);
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?key={}",
-            selected_model, api_key
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent",
+            selected_model
         );
 
         // Load memories for injection into system prompt (skip in incognito mode)
@@ -1038,6 +1038,7 @@ impl Agent {
         let response = self
             .http_client
             .post(&url)
+            .header("X-Goog-Api-Key", api_key)
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()

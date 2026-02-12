@@ -79,8 +79,8 @@ pub async fn generate_embedding(
     };
 
     let res = client
-        .post(&url)
-        .header("x-goog-api-key", api_key)
+        .post(url)
+        .header("X-Goog-Api-Key", api_key)
         .json(&payload)
         .send()
         .await
