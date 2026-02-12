@@ -1,6 +1,5 @@
 use tauri::{AppHandle, Emitter, Manager};
 
-use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tauri_plugin_global_shortcut::{self as tauri_gs, GlobalShortcutExt, Shortcut};
@@ -76,33 +75,27 @@ struct OcrResult {
 
 #[tauri::command]
 async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String> {
-    #[cfg(target_os = "macos")]
-    {
-        // Use macOS native screencapture for interactive region selection
+    // Use macOS native screencapture for interactive region selection
+    // Wrap all blocking I/O in spawn_blocking to avoid starving the async executor
+    let result = tokio::task::spawn_blocking(move || {
         let temp_dir = std::env::temp_dir();
-        let temp_path = temp_dir.join("shard_ocr_capture.png");
-        let temp_path_str = temp_path.to_string_lossy().to_string();
+        // Use a unique temp file name to avoid predictable path attacks
+        let temp_path = temp_dir.join(format!("shard_ocr_{}.png", uuid::Uuid::new_v4()));
 
-        // Execute screencapture with absolute path to prevent path hijacking
+        // Execute screencapture with absolute path, passing Path/OsStr directly
         let output = std::process::Command::new("/usr/sbin/screencapture")
             .arg("-i")
-            .arg(&temp_path_str)
+            .arg(&temp_path)
             .output()
             .map_err(|e| format!("Failed to execute screencapture: {}", e))?;
 
-        if !output.status.success() {
-            if !temp_path.exists() {
-                return Err("Capture cancelled or failed".to_string());
-            }
+        if !output.status.success() && !temp_path.exists() {
+            return Err("Capture cancelled or failed".to_string());
         }
 
         // Read image
-        let image_data =
-            std::fs::read(&temp_path).map_err(|e| format!("Failed to read capture file: {}", e))?;
-
-        // Convert to base64
-        let image_base64 =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
+        let image_data = std::fs::read(&temp_path)
+            .map_err(|e| format!("Failed to read capture file: {}", e))?;
 
         // Clean up temp file
         if let Err(e) = std::fs::remove_file(&temp_path) {
@@ -113,48 +106,20 @@ async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String
             );
         }
 
-        return Ok(OcrResult {
-            text: "[Processing...]".to_string(),
-            image_base64,
-            mime_type: "image/png".to_string(),
-        });
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        // Fallback for non-macOS: capture full screen using screenshots crate
-        // Since screenshots crate doesn't support interactive selection
-        let screens =
-            screenshots::Screen::all().map_err(|e| format!("Failed to get screens: {}", e))?;
-        let screen = screens.first().ok_or("No screens found")?;
-
-        let image = screen
-            .capture()
-            .map_err(|e| format!("Failed to capture screen: {}", e))?;
-
-        let width = image.width();
-        let height = image.height();
-        let rgba_data = image.rgba().to_vec();
-        let rgba_image = image::RgbaImage::from_raw(width, height, rgba_data)
-            .ok_or("Failed to create image buffer")?;
-
-        // Convert to PNG
-        let mut png_data: Vec<u8> = Vec::new();
-        let mut cursor = Cursor::new(&mut png_data);
-        let dynamic_image = image::DynamicImage::ImageRgba8(rgba_image);
-        dynamic_image
-            .write_to(&mut cursor, image::ImageFormat::Png)
-            .map_err(|e| format!("Failed to encode PNG: {}", e))?;
-
+        // Convert to base64
         let image_base64 =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png_data);
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
 
-        Ok(OcrResult {
+        Ok::<OcrResult, String>(OcrResult {
             text: "[Processing...]".to_string(),
             image_base64,
             mime_type: "image/png".to_string(),
         })
-    }
+    })
+    .await
+    .map_err(|e| format!("OCR task panicked: {}", e))??;
+
+    Ok(result)
 }
 
 // Perform contextual image analysis on a base64-encoded image
