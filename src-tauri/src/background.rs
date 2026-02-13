@@ -157,60 +157,17 @@ pub struct CleanupDecision {
 // ============================================================================
 
 /// Make an LLM call for background processing
-/// Routes to Groq or Cerebras based on the model name
+/// Routes to the appropriate provider based on the model name
 pub async fn call_background_llm(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,
     model: &str,
     prompt: &str,
 ) -> Result<String, String> {
-    // Parse model to determine provider and model ID
-    let (url, api_key, model_id) = if model.contains("(Cerebras)") {
-        let key = config
-            .cerebras_api_key
-            .as_ref()
-            .ok_or("No Cerebras API key configured for background jobs")?;
-        let model_id = if model.contains("120b") {
-            "gpt-oss-120b"
-        } else {
-            "llama-3.3-70b"
-        };
-        ("https://api.cerebras.ai/v1/chat/completions", key, model_id)
-    } else if model.contains("(OpenRouter)") {
-        let key = config
-            .openrouter_api_key
-            .as_ref()
-            .ok_or("No OpenRouter API key configured for background jobs")?;
-        // Extract model ID from format like "google/gemma-3-27b-it:free (OpenRouter)"
-        let model_id = model
-            .split(" (OpenRouter)")
-            .next()
-            .unwrap_or("google/gemma-3-27b-it:free");
-        (
-            "https://openrouter.ai/api/v1/chat/completions",
-            key,
-            model_id.to_string().leak() as &str,
-        )
-    } else {
-        // Default to Groq
-        let key = config
-            .groq_api_key
-            .as_ref()
-            .ok_or("No Groq API key configured for background jobs")?;
-        let model_id = if model.contains("20b") {
-            "openai/gpt-oss-20b"
-        } else {
-            "openai/gpt-oss-120b"
-        };
-        (
-            "https://api.groq.com/openai/v1/chat/completions",
-            key,
-            model_id,
-        )
-    };
+    let (provider_config, api_key) = config.get_model_provider_config(model, "background jobs")?;
 
     let payload = serde_json::json!({
-        "model": model_id,
+        "model": provider_config.model_id,
         "messages": [
             {
                 "role": "system",
@@ -226,7 +183,7 @@ pub async fn call_background_llm(
     });
 
     let res = http_client
-        .post(url)
+        .post(provider_config.full_url())
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&payload)
@@ -242,7 +199,7 @@ pub async fn call_background_llm(
     let body: serde_json::Value = res
         .json()
         .await
-        .map_err(|e| format!("Failed to parse Groq response: {}", e))?;
+        .map_err(|e| format!("Failed to parse {} response: {}", provider_config.provider_name, e))?;
 
     // Extract text content from response
     if let Some(choices) = body.get("choices").and_then(|c| c.as_array()) {
@@ -257,7 +214,7 @@ pub async fn call_background_llm(
         }
     }
 
-    Err("No content in Groq response".to_string())
+    Err(format!("No content in {} response", provider_config.provider_name))
 }
 
 /// Parse topic updates from LLM JSON response
@@ -413,22 +370,7 @@ async fn run_summary_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summar
         .unwrap_or(DEFAULT_BACKGROUND_MODEL);
 
     // Verify we have the required API key
-    if background_model.contains("(Cerebras)") {
-        config
-            .cerebras_api_key
-            .as_ref()
-            .ok_or("No Cerebras API key configured for background jobs")?;
-    } else if background_model.contains("(OpenRouter)") {
-        config
-            .openrouter_api_key
-            .as_ref()
-            .ok_or("No OpenRouter API key configured for background jobs")?;
-    } else {
-        config
-            .groq_api_key
-            .as_ref()
-            .ok_or("No Groq API key configured for background jobs")?;
-    };
+    let _ = config.get_model_provider_config(background_model, "background jobs")?;
 
     // Gather interactions from lookback period
     let (interactions, stats) = gather_recent_interactions(&interactions_dir, LOOKBACK_HOURS)?;
@@ -693,18 +635,10 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
         .unwrap_or(DEFAULT_BACKGROUND_MODEL);
 
     // Verify we have the required API key
-    let has_key = if background_model.contains("(Cerebras)") {
-        config.cerebras_api_key.is_some()
-    } else if background_model.contains("(OpenRouter)") {
-        config.openrouter_api_key.is_some()
-    } else {
-        config.groq_api_key.is_some()
-    };
-
-    if !has_key {
+    if let Err(e) = config.get_model_provider_config(background_model, "background jobs") {
         log::info!(
-            "[Cleanup] No API key for {}, falling back to date-based cleanup",
-            background_model
+            "[Cleanup] {}. Falling back to date-based cleanup.",
+            e
         );
         return cleanup_interactions_in_dir(&interactions_dir, LOG_RETENTION_DAYS);
     }
