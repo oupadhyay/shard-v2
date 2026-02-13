@@ -1271,13 +1271,9 @@ impl Agent {
         let is_cerebras = provider_config.provider_name == "Cerebras";
         let is_groq = provider_config.provider_name == "Groq";
 
-        let (api_key, model, reasoning_effort, provider_name) = (
-            api_key,
-            provider_config.model_id.clone(),
-            provider_config.reasoning_effort.clone(),
-            provider_config.provider_name.clone(),
-        );
-
+        let model = provider_config.model_id.clone();
+        let reasoning_effort = provider_config.reasoning_effort.clone();
+        let provider_name = provider_config.provider_name.clone();
         let url = provider_config.full_url();
 
         // Load memories for injection into system prompt (skip in incognito mode)
