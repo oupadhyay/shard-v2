@@ -80,7 +80,13 @@ async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String
         perform_ocr_capture_blocking()
     })
     .await
-    .map_err(|e| format!("OCR task panicked: {}", e))??;
+    .map_err(|e| {
+        if e.is_cancelled() {
+            "OCR task was cancelled".to_string()
+        } else {
+            format!("OCR task panicked: {}", e)
+        }
+    })??;
 
     Ok(result)
 }
@@ -100,8 +106,7 @@ fn perform_ocr_capture_blocking() -> Result<OcrResult, String> {
         .map_err(|e| format!("Failed to execute screencapture: {}", e))?;
 
     if !output.status.success() {
-        // Don't check temp_path.exists() separately to avoid TOCTOU race;
-        // just attempt the read and let it fail with a clear error.
+        // Clean up any partial file and return a generic cancellation/failure error
         let _ = std::fs::remove_file(&temp_path);
         return Err("Capture cancelled or failed".to_string());
     }
