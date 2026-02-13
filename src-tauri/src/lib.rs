@@ -99,13 +99,20 @@ fn perform_ocr_capture_blocking() -> Result<OcrResult, String> {
         .output()
         .map_err(|e| format!("Failed to execute screencapture: {}", e))?;
 
-    if !output.status.success() && !temp_path.exists() {
+    if !output.status.success() {
+        // Don't check temp_path.exists() separately to avoid TOCTOU race;
+        // just attempt the read and let it fail with a clear error.
+        let _ = std::fs::remove_file(&temp_path);
         return Err("Capture cancelled or failed".to_string());
     }
 
-    // Read image
+    // Read image and validate it's non-empty (guards against corrupted/incomplete captures)
     let image_data =
         std::fs::read(&temp_path).map_err(|e| format!("Failed to read capture file: {}", e))?;
+    if image_data.is_empty() {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err("Capture produced an empty file".to_string());
+    }
 
     // Clean up temp file
     if let Err(e) = std::fs::remove_file(&temp_path) {
