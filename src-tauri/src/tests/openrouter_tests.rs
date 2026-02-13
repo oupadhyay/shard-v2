@@ -1,8 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::agent::{ChatMessage, ImageAttachment, ToolCall, FunctionCall};
-    use crate::agent::openrouter::{to_multimodal_messages, has_images, supports_tools};
-    use serde_json::json;
+    use crate::agent::{ChatMessage, ImageAttachment, ToolCall, FunctionCall, to_multimodal_messages, has_images, supports_tools};
 
     #[test]
     fn test_to_multimodal_messages_text_only() {

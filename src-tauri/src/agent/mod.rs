@@ -2,7 +2,7 @@
  * Agent module - AI chat agent with Gemini and OpenRouter support
  */
 mod gemini;
-pub mod openrouter;
+pub(crate) mod openrouter;
 mod types;
 
 pub use gemini::{construct_gemini_messages, parse_gemini_chunk, AgentEvent};
