@@ -82,6 +82,7 @@ fn bench_image_encoding(c: &mut Criterion) {
 }
 
 /// Benchmark image resize operations (used to reduce image size before Vision LLM)
+/// Compares Nearest (fast, minor aliasing) vs Triangle (smoother, slower) filters
 fn bench_image_resize(c: &mut Criterion) {
     let mut group = c.benchmark_group("screen_context");
     group.sample_size(10);
@@ -93,23 +94,32 @@ fn bench_image_resize(c: &mut Criterion) {
         ("4K", 3840, 2160),
     ];
 
-    for (name, width, height) in resolutions {
+    let filters = [
+        ("nearest", image::imageops::FilterType::Nearest),
+        ("triangle", image::imageops::FilterType::Triangle),
+    ];
+
+    for (res_name, width, height) in resolutions {
         let source_img = generate_test_image(width, height);
         let rgba_img = source_img.to_rgba8();
 
-        group.bench_function(format!("resize_{}_to_1280w", name), |b| {
-            b.iter(|| {
-                let max_width = 1280u32;
-                let scale = max_width as f32 / rgba_img.width() as f32;
-                let new_height = (rgba_img.height() as f32 * scale) as u32;
-                image::imageops::resize(
-                    black_box(&rgba_img),
-                    max_width,
-                    new_height,
-                    image::imageops::FilterType::Nearest,
-                )
-            })
-        });
+        // Pre-compute target dimensions outside b.iter() to isolate resize cost
+        let max_width = 1280u32;
+        let scale = max_width as f32 / rgba_img.width() as f32;
+        let new_height = (rgba_img.height() as f32 * scale) as u32;
+
+        for (filter_name, filter_type) in &filters {
+            group.bench_function(format!("resize_{}_{}_to_1280w", res_name, filter_name), |b| {
+                b.iter(|| {
+                    image::imageops::resize(
+                        black_box(&rgba_img),
+                        max_width,
+                        new_height,
+                        *filter_type,
+                    )
+                })
+            });
+        }
     }
 
     group.finish();
