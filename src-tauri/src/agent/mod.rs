@@ -2,10 +2,11 @@
  * Agent module - AI chat agent with Gemini and OpenRouter support
  */
 mod gemini;
-mod openrouter;
+pub(crate) mod openrouter;
 mod types;
 
 pub use gemini::{construct_gemini_messages, parse_gemini_chunk, AgentEvent};
+pub use openrouter::{has_images, supports_tools, to_api_messages, to_multimodal_messages};
 pub use types::*;
 
 use crate::integrations::{
@@ -86,10 +87,12 @@ impl Agent {
                 for uri in uploaded_files.iter() {
                     if let Some(file_name) = uri.split('/').last() {
                         let delete_url = format!(
-                            "https://generativelanguage.googleapis.com/v1beta/files/{}?key={}",
-                            file_name, key
+                            "https://generativelanguage.googleapis.com/v1beta/files/{}",
+                            file_name
                         );
-                        let _ = self.http_client.delete(&delete_url).send().await;
+                        let _ = self.http_client.delete(&delete_url)
+                            .header("X-Goog-Api-Key", key.as_str())
+                            .send().await;
                     }
                 }
             }
@@ -936,10 +939,7 @@ impl Agent {
     }
 
     async fn classify_intent(&self, query: &str, api_key: &str) -> Result<bool, String> {
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={}",
-            api_key
-        );
+        let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
 
         let payload = serde_json::json!({
             "contents": [{
@@ -955,7 +955,8 @@ impl Agent {
 
         let client = reqwest::Client::new();
         let res = client
-            .post(&url)
+            .post(url)
+            .header("X-Goog-Api-Key", api_key)
             .json(&payload)
             .send()
             .await
@@ -997,8 +998,8 @@ impl Agent {
     ) -> Result<bool, String> {
         let enable_tools = config.enable_tools.unwrap_or(true);
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?key={}",
-            selected_model, api_key
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent",
+            selected_model
         );
 
         // Load memories for injection into system prompt (skip in incognito mode)
@@ -1075,6 +1076,7 @@ impl Agent {
         let response = self
             .http_client
             .post(&url)
+            .header("X-Goog-Api-Key", api_key)
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
@@ -1278,55 +1280,14 @@ impl Agent {
         let enable_tools = config.enable_tools.unwrap_or(true);
 
         // Detect provider from model name and configure accordingly
-        let is_cerebras = selected_model.contains("(Cerebras)");
-        let is_groq = selected_model.contains("(Groq)");
+        let (provider_config, api_key) = config.get_model_provider_config(&selected_model, "main chat")?;
+        let is_cerebras = provider_config.provider_name == "Cerebras";
+        let is_groq = provider_config.provider_name == "Groq";
 
-        let (api_key, base_url, model, reasoning_effort, provider_name) = if is_cerebras {
-            // Cerebras: strip suffix and use Cerebras endpoint
-            let key = config
-                .cerebras_api_key
-                .as_ref()
-                .ok_or("No Cerebras API key configured")?;
-            let clean_model = selected_model.replace(" (Cerebras)", "").trim().to_string();
-            (
-                key.clone(),
-                "https://api.cerebras.ai/v1/".to_string(),
-                clean_model,
-                Some("high".to_string()), // Cerebras supports reasoning_effort
-                "Cerebras",
-            )
-        } else if is_groq {
-            // Groq: strip suffix, add openai/ prefix, and use Groq endpoint
-            let key = config
-                .groq_api_key
-                .as_ref()
-                .ok_or("No Groq API key configured")?;
-            // Groq expects model names like "openai/gpt-oss-120b"
-            let base_model = selected_model.replace(" (Groq)", "").trim().to_string();
-            let clean_model = format!("openai/{}", base_model);
-            (
-                key.clone(),
-                "https://api.groq.com/openai/v1/".to_string(),
-                clean_model,
-                Some("high".to_string()), // Groq GPT-OSS supports reasoning_effort
-                "Groq",
-            )
-        } else {
-            // OpenRouter
-            let key = config
-                .openrouter_api_key
-                .as_ref()
-                .ok_or("No OpenRouter API key configured")?;
-            (
-                key.clone(),
-                "https://openrouter.ai/api/v1/".to_string(),
-                selected_model,
-                None, // OpenRouter doesn't use reasoning_effort
-                "OpenRouter",
-            )
-        };
-
-        let url = format!("{}chat/completions", base_url);
+        let model = provider_config.model_id.clone();
+        let reasoning_effort = provider_config.reasoning_effort.clone();
+        let provider_name = provider_config.provider_name.clone();
+        let url = provider_config.full_url();
 
         // Load memories for injection into system prompt (skip in incognito mode)
         let incognito_mode = config.incognito_mode.unwrap_or(false);

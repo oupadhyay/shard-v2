@@ -47,7 +47,7 @@ pub async fn upload_image_to_gemini_files_api(
     let init_url = "https://generativelanguage.googleapis.com/upload/v1beta/files";
     let init_response = client
         .post(init_url)
-        .query(&[("key", api_key)])
+        .header("X-Goog-Api-Key", api_key)
         .header("X-Goog-Upload-Protocol", "resumable")
         .header("X-Goog-Upload-Command", "start")
         .header("X-Goog-Upload-Header-Content-Length", num_bytes.to_string())

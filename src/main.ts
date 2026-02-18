@@ -63,8 +63,9 @@ function addMessage(
   role: "user" | "assistant",
   content: string,
   images?: { base64: string; mimeType: string }[],
+  container: HTMLElement | DocumentFragment = chatArea,
 ) {
-  addMessageToChat(chatArea, role, content, images);
+  addMessageToChat(container, role, content, images);
 }
 
 // Helper: Handle Input
@@ -659,6 +660,7 @@ trashBtn.addEventListener("click", async () => {
 updateButtonStates();
 
 async function loadChatHistory() {
+  const fragment = document.createDocumentFragment();
   try {
     const history = await invoke<ChatMessage[]>("get_chat_history");
     chatArea.innerHTML = ""; // Clear existing
@@ -669,12 +671,12 @@ async function loadChatHistory() {
         // Reset web search container for each user message (new turn)
         resetWebSearchContainer();
         // Pass all images if present in history
-        addMessage("user", msg.content || "", msg.images);
+        addMessage("user", msg.content || "", msg.images, fragment);
       } else if (msg.role === "assistant") {
         // 1. Render Reasoning (if present)
         if (msg.reasoning) {
           const thinkingMsg = createThinkingElement(msg.reasoning, true);
-          chatArea.appendChild(thinkingMsg);
+          fragment.appendChild(thinkingMsg);
         }
 
         // 2. Render Tool Calls (if present)
@@ -684,9 +686,9 @@ async function loadChatHistory() {
 
             if (isWebSearchTool(toolName)) {
               // Group web searches into container
-              const container = getOrCreateWebSearchContainer(chatArea);
-              if (!chatArea.contains(container)) {
-                chatArea.appendChild(container);
+              const container = getOrCreateWebSearchContainer(fragment);
+              if (!fragment.contains(container)) {
+                fragment.appendChild(container);
               }
 
               const queriesContainer = container.querySelector(".web-search-queries");
@@ -703,21 +705,20 @@ async function loadChatHistory() {
                 updateWebSearchCount(container);
               }
             } else {
-            // Regular tool call
               const toolDiv = createToolCallElement(
                 toolName,
                 toolCall.function.arguments,
                 toolCall.id,
-                false, // Closed by default on restore
+                false,
               );
-              chatArea.appendChild(toolDiv);
+              fragment.appendChild(toolDiv);
             }
           });
         }
 
         // 3. Render Assistant Content (if present)
         if (msg.content) {
-          addMessage("assistant", msg.content, msg.images);
+          addMessage("assistant", msg.content, msg.images, fragment);
         }
       } else if (msg.role === "tool") {
         // Tool result message - try to find matching element by ID
@@ -725,7 +726,7 @@ async function loadChatHistory() {
 
         // First, try to match web search query by ID
         if (msg.tool_call_id) {
-          const webSearchQueries = Array.from(chatArea.querySelectorAll(".web-search-query"));
+          const webSearchQueries = Array.from(fragment.querySelectorAll(".web-search-query"));
           const matchingQuery = webSearchQueries.find((el) =>
             el.getAttribute("data-tool-id") === msg.tool_call_id
           );
@@ -755,7 +756,7 @@ async function loadChatHistory() {
 
         // If not matched as web search, try regular tool-output
         if (!matched) {
-          const toolMessages = Array.from(chatArea.querySelectorAll(".tool-output"));
+          const toolMessages = Array.from(fragment.querySelectorAll(".tool-output"));
           let matchingTool: Element | undefined;
 
           // Try to match by ID first if available
@@ -777,10 +778,15 @@ async function loadChatHistory() {
       }
     }
 
+    chatArea.appendChild(fragment);
+
     // Scroll to bottom
     chatArea.scrollTop = chatArea.scrollHeight;
   } catch (e) {
     console.error("Failed to load chat history:", e);
+    if (fragment.hasChildNodes()) {
+      chatArea.appendChild(fragment);
+    }
   }
 }
 
