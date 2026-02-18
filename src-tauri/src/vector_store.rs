@@ -54,7 +54,7 @@ impl From<std::io::Error> for VectorStoreError {
 
 /// SQLite-backed vector store using sqlite-vec for KNN search
 pub struct VectorStore {
-    pub(crate) conn: Connection,
+    conn: Connection,
 }
 
 /// Embedding dimension (Gemini text-embedding-004)
@@ -95,6 +95,18 @@ impl VectorStore {
         log::info!("[VectorStore] Opened database at {:?}", db_path);
 
         Ok(Self { conn })
+    }
+
+    /// Execute a closure within a single SQLite transaction.
+    /// The transaction is committed on success and rolled back on error.
+    pub fn with_transaction<F, T>(&self, f: F) -> Result<T, VectorStoreError>
+    where
+        F: FnOnce(&Self, &Connection) -> Result<T, VectorStoreError>,
+    {
+        let tx = self.conn.unchecked_transaction()?;
+        let result = f(self, &tx)?;
+        tx.commit()?;
+        Ok(result)
     }
 
     /// Compute SHA256 hash of content for cache key

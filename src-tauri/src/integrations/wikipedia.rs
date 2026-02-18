@@ -38,7 +38,7 @@ pub async fn perform_wikipedia_lookup(
         ("formatversion", "2"),
     ];
 
-    let sanitized_term = search_term.replace('\n', ' ').replace('\r', ' ');
+    let sanitized_term = search_term.replace('\n', " ").replace('\r', " ");
     log::info!("Performing Wikipedia lookup for: {}", sanitized_term);
 
     match client

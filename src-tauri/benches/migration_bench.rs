@@ -41,13 +41,16 @@ fn benchmark_migration(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(20));
 
+    // Create tempdir once outside b.iter() to isolate OS-level directory
+    // allocation overhead from the transaction write cost we're measuring.
+    let bench_dir = tempdir().unwrap();
+    let mut iter_count: u64 = 0;
+
     group.bench_function("migrate_from_json_1000", |b| {
         b.iter(|| {
-            // We create a fresh DB in temp to measure realistic disk I/O sync overhead
-            let iter_dir = tempdir().unwrap();
-            let iter_db_path = iter_dir.path().join("iter.sqlite");
+            iter_count += 1;
+            let iter_db_path = bench_dir.path().join(format!("bench_{}.sqlite", iter_count));
             let store = VectorStore::open(&iter_db_path).unwrap();
-
             store.migrate_from_json(black_box(&chunk_index)).unwrap();
         })
     });

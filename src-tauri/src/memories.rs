@@ -1,3 +1,4 @@
+use crate::vector_store::VectorStore;
 /**
  * Memories module - Persistent memory system for the AI agent
  *
@@ -10,7 +11,6 @@ use std::collections::HashMap;
 use std::fs::{self};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
-use crate::vector_store::VectorStore;
 
 // ============================================================================
 // Data Structures
@@ -290,7 +290,9 @@ fn load_topic_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<TopicIndex,
                     // Check if this is the wrapped format { "topics": { ... } }
                     if map.len() == 1 && map.contains_key("topics") {
                         if let Some(serde_json::Value::Object(inner)) = map.get("topics") {
-                            log::info!("[Memories] Migrated topic index from wrapped legacy format");
+                            log::info!(
+                                "[Memories] Migrated topic index from wrapped legacy format"
+                            );
                             let topics = inner.keys().cloned().collect();
                             return Ok(TopicIndex { topics });
                         }
@@ -1011,7 +1013,11 @@ pub fn chunk_markdown(
                 let safe_start = prev_text
                     .char_indices()
                     .rev()
-                    .nth(overlap_chars.min(prev_text.chars().count()).saturating_sub(1))
+                    .nth(
+                        overlap_chars
+                            .min(prev_text.chars().count())
+                            .saturating_sub(1),
+                    )
                     .map(|(i, _)| i)
                     .unwrap_or(0);
                 let overlap = &prev_text[safe_start..];
@@ -1044,95 +1050,103 @@ pub async fn rebuild_chunk_index<R: Runtime>(
     use futures::StreamExt;
     use std::collections::HashSet;
 
-    let handle = app_handle.clone();
+    // Get existing sources BEFORE any .await to avoid !Send issues with rusqlite::Connection.
+    // VectorStore owns a Connection which is !Send, so we must not hold it across .await.
+    let known_sources: HashSet<(SourceType, String)> = {
+        let vector_store = get_vector_store(app_handle)?;
+        let existing_sources = vector_store
+            .get_unique_sources()
+            .map_err(|e| format!("Failed to get sources: {}", e))?;
+        HashSet::from_iter(existing_sources.into_iter())
+    };
+    // Note: vector_store is dropped here before any .await
+    let mut processed_sources: HashSet<(SourceType, String)> = HashSet::new();
 
-    // 1 & 2. Scan, Chunk, and Check Cache in a single blocking task to avoid multiple context switches
-    let (
-        chunks_to_embed,
-        ready_chunks,
-        known_sources,
-        processed_sources,
-        sources_to_rebuild,
-        expected_chunks_per_source,
-    ) = tokio::task::spawn_blocking(move || -> Result<_, String> {
-        let mut files_to_process = Vec::new();
-        let mut processed_sources = HashSet::new();
+    let mut files_to_process: Vec<(SourceType, String, String)> = Vec::new();
 
-        // Get existing sources
-        let known_sources: std::collections::HashSet<_> = {
-            let vector_store = get_vector_store(&handle)?;
-            let existing_sources = vector_store
-                .get_unique_sources()
-                .map_err(|e| format!("Failed to get sources: {}", e))?;
-            existing_sources.into_iter().collect()
-        };
-
-        // Scan Topics
-        let topics_dir = get_topics_dir(&handle)?;
-        if topics_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&topics_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                        if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                            if let Ok(content) = fs::read_to_string(&path) {
-                                files_to_process.push((SourceType::Topic, name.to_string(), content));
-                                processed_sources.insert((SourceType::Topic, name.to_string()));
-                            }
+    // 1. Scan Topics
+    let topics_dir = get_topics_dir(app_handle)?;
+    if topics_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&topics_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                    if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            files_to_process.push((SourceType::Topic, name.to_string(), content));
+                            processed_sources.insert((SourceType::Topic, name.to_string()));
                         }
                     }
                 }
             }
         }
+    }
 
-        // Scan Insights
-        let insights_dir = get_insights_dir(&handle)?;
-        if insights_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&insights_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                        if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                            if let Ok(content) = fs::read_to_string(&path) {
-                                files_to_process.push((SourceType::Insight, name.to_string(), content));
-                                processed_sources.insert((SourceType::Insight, name.to_string()));
-                            }
+    // 2. Scan Insights
+    let insights_dir = get_insights_dir(app_handle)?;
+    if insights_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&insights_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                    if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            files_to_process.push((SourceType::Insight, name.to_string(), content));
+                            processed_sources.insert((SourceType::Insight, name.to_string()));
                         }
                     }
                 }
             }
         }
+    }
 
-        log::info!("[Chunk] Processing {} files", files_to_process.len());
+    log::info!("[Chunk] Processing {} files", files_to_process.len());
 
-        let mut tasks = Vec::new();
-        let mut sources_to_rebuild = Vec::new();
-        let mut expected_chunks_per_source = std::collections::HashMap::new();
+    // 3. Process each file (concurrent embedding generation)
+    // We create a stream of futures that process chunks
 
-        for (source_type, source_name, content) in files_to_process {
-            sources_to_rebuild.push((source_type.clone(), source_name.clone()));
-            let raw_chunks = chunk_markdown(&content, 400, 80, 50);
-            let chunk_count = raw_chunks.len();
-            expected_chunks_per_source
-                .insert((source_type.clone(), source_name.clone()), chunk_count);
+    let mut tasks = Vec::new();
 
-            for (idx, raw) in raw_chunks.into_iter().enumerate() {
-                tasks.push((source_type.clone(), source_name.clone(), idx, raw));
-            }
+    // Track sources and how many chunks we expect per source
+    let mut sources_to_rebuild: Vec<(SourceType, String)> = Vec::new();
+    let mut expected_chunks_per_source: std::collections::HashMap<(SourceType, String), usize> =
+        std::collections::HashMap::new();
+
+    for (source_type, source_name, content) in files_to_process {
+        sources_to_rebuild.push((source_type.clone(), source_name.clone()));
+
+        let raw_chunks = chunk_markdown(&content, 400, 80, 50);
+        let chunk_count = raw_chunks.len();
+        expected_chunks_per_source.insert((source_type.clone(), source_name.clone()), chunk_count);
+
+        for (idx, raw) in raw_chunks.into_iter().enumerate() {
+            let s_type = source_type.clone();
+            let s_name = source_name.clone();
+
+            tasks.push((s_type, s_name, idx, raw));
         }
+    }
 
-        let mut chunks_to_embed = Vec::new();
-        let mut ready_chunks = Vec::new();
-        let vector_store = get_vector_store(&handle)?;
+    // Step A: Check cache and prepare embedding tasks
+    // Re-open vector store for cache lookups (dropped before .await)
+    let mut chunks_to_embed = Vec::new();
+    let mut ready_chunks = Vec::new();
 
+    {
+        let vector_store = get_vector_store(app_handle)?;
         for (s_type, s_name, idx, raw) in tasks {
+            // Cache key: use sha256(chunk.text) to match what upsert_chunk stores
+            // This ensures cache consistency between rebuild and upsert
             let content_hash = VectorStore::content_hash(&raw.text);
-            let cached = vector_store
-                .get_cached_embedding(&content_hash)
-                .unwrap_or_else(|e| {
-                    log::warn!("[Chunk] Cache lookup failed for {}: {} — treating as miss", content_hash, e);
+
+            // Try cache
+            let cached = match vector_store.get_cached_embedding(&content_hash) {
+                Ok(emb) => emb,
+                Err(e) => {
+                    log::warn!("[Chunk] Cache check failed: {}", e);
                     None
-                });
+                }
+            };
 
             if let Some(embedding) = cached {
                 let type_str = if s_type == SourceType::Topic {
@@ -1154,20 +1168,13 @@ pub async fn rebuild_chunk_index<R: Runtime>(
                 chunks_to_embed.push((s_type, s_name, idx, raw));
             }
         }
+    } // vector_store dropped here before .await
 
-        Ok((
-            chunks_to_embed,
-            ready_chunks,
-            known_sources,
-            processed_sources,
-            sources_to_rebuild,
-            expected_chunks_per_source,
-        ))
-    })
-    .await
-    .map_err(|e| format!("Blocking scan task failed: {}", e))??;
-
-    log::info!("[Chunk] Found {} chunks cached, {} to embed", ready_chunks.len(), chunks_to_embed.len());
+    log::info!(
+        "[Chunk] Found {} chunks cached, {} to embed",
+        ready_chunks.len(),
+        chunks_to_embed.len()
+    );
 
     // Step B: Generate embeddings in parallel
     let generated_chunks: Vec<Option<Chunk>> = futures::stream::iter(chunks_to_embed.into_iter())
@@ -1176,15 +1183,24 @@ pub async fn rebuild_chunk_index<R: Runtime>(
             let key = api_key.to_string();
             let embedding_text = format!(
                 "{}: {}\n{}",
-                if s_type == SourceType::Topic { "Topic" } else { "Insight" },
+                if s_type == SourceType::Topic {
+                    "Topic"
+                } else {
+                    "Insight"
+                },
                 s_name,
                 &raw.text.chars().take(1000).collect::<String>()
             );
 
             async move {
-                match crate::interactions::generate_embedding(&client, &embedding_text, &key).await {
+                match crate::interactions::generate_embedding(&client, &embedding_text, &key).await
+                {
                     Ok(embedding) => {
-                        let type_str = if s_type == SourceType::Topic { "topic" } else { "insight" };
+                        let type_str = if s_type == SourceType::Topic {
+                            "topic"
+                        } else {
+                            "insight"
+                        };
                         Some(Chunk {
                             id: format!("{}::{}::{}", type_str, s_name, idx),
                             source_type: s_type,
@@ -1217,69 +1233,73 @@ pub async fn rebuild_chunk_index<R: Runtime>(
     let expected_per_source = expected_chunks_per_source.clone();
 
     // Count actual chunks we have per source (cached + generated)
-    let mut actual_chunks_per_source: std::collections::HashMap<(SourceType, String), usize> = std::collections::HashMap::new();
+    let mut actual_chunks_per_source: std::collections::HashMap<(SourceType, String), usize> =
+        std::collections::HashMap::new();
     for chunk in &chunks_to_save {
-        *actual_chunks_per_source.entry((chunk.source_type.clone(), chunk.source_name.clone())).or_insert(0) += 1;
+        *actual_chunks_per_source
+            .entry((chunk.source_type.clone(), chunk.source_name.clone()))
+            .or_insert(0) += 1;
     }
     for chunk in &gen_chunks {
-        *actual_chunks_per_source.entry((chunk.source_type.clone(), chunk.source_name.clone())).or_insert(0) += 1;
+        *actual_chunks_per_source
+            .entry((chunk.source_type.clone(), chunk.source_name.clone()))
+            .or_insert(0) += 1;
     }
 
-    let saved_count = tokio::task::spawn_blocking(move || -> Result<usize, String> {
-        let mut count = 0;
-        let vs = get_vector_store(&handle)?;
+    let saved_count =
+        tokio::task::spawn_blocking(move || -> Result<usize, String> {
+            let vs = get_vector_store(&handle)?;
 
-        // Step C: Delete old chunks only for sources where ALL chunks are ready
-        // Skip delete if any embedding failed for the source (to avoid data loss)
-        for (s_type, s_name) in &sources {
-            let key = (s_type.clone(), s_name.clone());
-            let expected = expected_per_source.get(&key).copied().unwrap_or(0);
-            let actual = actual_chunks_per_source.get(&key).copied().unwrap_or(0);
+            // Use with_transaction() for encapsulated, atomic writes.
+            // Fail-fast: any upsert/delete error rolls back the entire transaction
+            // to prevent a partially-committed index.
+            vs.with_transaction(|vs, tx| {
+                let mut count = 0;
 
-            if actual < expected {
-                log::warn!(
-                    "[Chunk] Skipping delete for {} - only {}/{} chunks ready (embedding failures)",
-                    s_name, actual, expected
-                );
-                continue;
-            }
+                // Step C: Delete old chunks only for sources where ALL chunks are ready
+                // Skip delete if any embedding failed for the source (to avoid data loss)
+                for (s_type, s_name) in &sources {
+                    let key = (s_type.clone(), s_name.clone());
+                    let expected = expected_per_source.get(&key).copied().unwrap_or(0);
+                    let actual = actual_chunks_per_source.get(&key).copied().unwrap_or(0);
 
-            if let Err(e) = vs.delete_by_source(s_type.clone(), s_name) {
-                log::warn!("[Chunk] Failed to clear old chunks for {}: {}", s_name, e);
-            }
-        }
+                    if actual < expected {
+                        log::warn!(
+                            "[Chunk] Skipping delete for {} - only {}/{} chunks ready (embedding failures)",
+                            s_name, actual, expected
+                        );
+                        continue;
+                    }
 
-        // Save cached chunks
-        for chunk in chunks_to_save {
-            if let Err(e) = vs.upsert_chunk(&chunk) {
-                log::error!("[Chunk] Failed to save cached chunk {}: {}", chunk.id, e);
-            } else {
-                count += 1;
-            }
-        }
+                    vs.delete_by_source_internal(tx, s_type.clone(), s_name)?;
+                }
 
-        // Save newly generated chunks
-        for chunk in gen_chunks {
-            if let Err(e) = vs.upsert_chunk(&chunk) {
-                log::error!("[Chunk] Failed to save generated chunk {}: {}", chunk.id, e);
-            } else {
-                count += 1;
-            }
-        }
+                // Save cached chunks (fail-fast on any error)
+                for chunk in &chunks_to_save {
+                    vs.upsert_chunk_internal(tx, chunk)?;
+                    count += 1;
+                }
 
-        // 4. Cleanup deleted files
-        for (s_type, s_name) in known {
-            if !processed.contains(&(s_type.clone(), s_name.clone())) {
-                 if let Err(e) = vs.delete_by_source(s_type.clone(), &s_name) {
-                     log::warn!("[Chunk] Failed to cleanup deleted source {}: {}", s_name, e);
-                 } else {
-                     log::info!("[Chunk] Removed deleted source: {}", s_name);
-                 }
-            }
-        }
+                // Save newly generated chunks (fail-fast on any error)
+                for chunk in &gen_chunks {
+                    vs.upsert_chunk_internal(tx, chunk)?;
+                    count += 1;
+                }
 
-        Ok(count)
-    }).await.map_err(|e| format!("Blocking save task failed: {}", e))??;
+                // Cleanup deleted files
+                for (s_type, s_name) in &known {
+                    if !processed.contains(&(s_type.clone(), s_name.clone())) {
+                        vs.delete_by_source_internal(tx, s_type.clone(), s_name)?;
+                        log::info!("[Chunk] Removed deleted source: {}", s_name);
+                    }
+                }
+
+                Ok(count)
+            })
+            .map_err(|e| format!("Transaction failed: {}", e))
+        })
+        .await
+        .map_err(|e| format!("Blocking save task failed: {}", e))??;
 
     // Update metadata (re-open vector store since we're after .await)
     {
@@ -1289,7 +1309,10 @@ pub async fn rebuild_chunk_index<R: Runtime>(
         }
     }
 
-    log::info!("[Chunk] Index rebuilt locally: {} chunks active", saved_count);
+    log::info!(
+        "[Chunk] Index rebuilt locally: {} chunks active",
+        saved_count
+    );
 
     Ok(saved_count)
 }
@@ -1324,7 +1347,8 @@ mod tests {
         let legacy_json = r#"{"Topic A": {"metadata": {}}, "Topic B": {"metadata": {}}}"#;
 
         // Test the migration logic extracted into a parse attempt
-        let old_format: Result<HashMap<String, serde_json::Value>, _> = serde_json::from_str(legacy_json);
+        let old_format: Result<HashMap<String, serde_json::Value>, _> =
+            serde_json::from_str(legacy_json);
         assert!(old_format.is_ok());
 
         let map = old_format.unwrap();
