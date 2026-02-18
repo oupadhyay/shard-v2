@@ -624,7 +624,18 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
                                     );
                                     promoted.push(promotion.insight_title);
                                 }
-                                _ => {}
+                                Ok(false) => {
+                                    log::warn!(
+                                        "[Summary] Insight {} not found for promotion",
+                                        promotion.insight_title
+                                    );
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "[Summary] Failed to delete promoted insight {}: {}",
+                                        promotion.insight_title, e
+                                    );
+                                }
                             }
                         }
                     }
@@ -662,9 +673,13 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
         for date in &logs_to_archive {
             let date_clone = date.clone();
             let h = handle.clone();
-            let _ = tokio::task::spawn_blocking(move || {
+            match tokio::task::spawn_blocking(move || {
                 crate::memories::archive_daily_log(&h, &date_clone)
-            }).await;
+            }).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => log::warn!("[Summary] Failed to archive daily log {}: {}", date, e),
+                Err(e) => log::error!("[Summary] Archive daily log task panicked for {}: {}", date, e),
+            }
         }
         log::info!("[Summary] Archived {} daily logs", logs_to_archive.len());
     }
@@ -766,12 +781,14 @@ Interaction Entries:
                     if decision.to_remove.is_empty() {
                         // Also prune BM25 index
                         let h = app_handle.clone();
-                        if let Err(e) = tokio::task::spawn_blocking(move || crate::retrieval::prune_bm25_index(
+                        match tokio::task::spawn_blocking(move || crate::retrieval::prune_bm25_index(
                             &h,
                             LOG_RETENTION_DAYS,
                             10000,
-                        )).await.map_err(|e| e.to_string())? {
-                            log::warn!("[Cleanup] BM25 prune failed: {}", e);
+                        )).await {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(e)) => log::warn!("[Cleanup] BM25 prune failed: {}", e),
+                            Err(e) => log::error!("[Cleanup] BM25 prune task panicked: {}", e),
                         }
                         return Ok(CleanupResult {
                             deleted_count: 0,
@@ -789,11 +806,12 @@ Interaction Entries:
 
                     // Also prune BM25 index
                     let h = app_handle.clone();
-                    if let Err(e) = tokio::task::spawn_blocking(move ||
+                    match tokio::task::spawn_blocking(move ||
                         crate::retrieval::prune_bm25_index(&h, LOG_RETENTION_DAYS, 10000)
-                    ).await.map_err(|e| e.to_string())?
-                    {
-                        log::warn!("[Cleanup] BM25 prune failed: {}", e);
+                    ).await {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => log::warn!("[Cleanup] BM25 prune failed: {}", e),
+                        Err(e) => log::error!("[Cleanup] BM25 prune task panicked: {}", e),
                     }
 
                     Ok(CleanupResult {
@@ -813,11 +831,12 @@ Interaction Entries:
                     ).await.map_err(|e| e.to_string())??;
                     // Also prune BM25 index
                     let h = app_handle.clone();
-                    if let Err(e) = tokio::task::spawn_blocking(move ||
+                    match tokio::task::spawn_blocking(move ||
                         crate::retrieval::prune_bm25_index(&h, LOG_RETENTION_DAYS, 10000)
-                    ).await.map_err(|e| e.to_string())?
-                    {
-                        log::warn!("[Cleanup] BM25 prune failed: {}", e);
+                    ).await {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => log::warn!("[Cleanup] BM25 prune failed: {}", e),
+                        Err(e) => log::error!("[Cleanup] BM25 prune task panicked: {}", e),
                     }
                     Ok(result)
                 }
@@ -832,11 +851,12 @@ Interaction Entries:
             let result = tokio::task::spawn_blocking(move || cleanup_interactions_in_dir(&dir, LOG_RETENTION_DAYS)).await.map_err(|e| e.to_string())??;
             // Also prune BM25 index
             let h = app_handle.clone();
-            if let Err(e) = tokio::task::spawn_blocking(move ||
+            match tokio::task::spawn_blocking(move ||
                 crate::retrieval::prune_bm25_index(&h, LOG_RETENTION_DAYS, 10000)
-            ).await.map_err(|e| e.to_string())?
-            {
-                log::warn!("[Cleanup] BM25 prune failed: {}", e);
+            ).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => log::warn!("[Cleanup] BM25 prune failed: {}", e),
+                Err(e) => log::error!("[Cleanup] BM25 prune task panicked: {}", e),
             }
             Ok(result)
         }

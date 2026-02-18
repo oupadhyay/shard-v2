@@ -1100,12 +1100,12 @@ pub async fn rebuild_chunk_index<R: Runtime>(
         let mut processed_sources = HashSet::new();
 
         // Get existing sources
-        let known_sources = {
+        let known_sources: std::collections::HashSet<_> = {
             let vector_store = get_vector_store(&handle)?;
             let existing_sources = vector_store
                 .get_unique_sources()
                 .map_err(|e| format!("Failed to get sources: {}", e))?;
-            HashSet::from_iter(existing_sources.into_iter())
+            existing_sources.into_iter().collect()
         };
 
         // Scan Topics
@@ -1170,7 +1170,10 @@ pub async fn rebuild_chunk_index<R: Runtime>(
             let content_hash = VectorStore::content_hash(&raw.text);
             let cached = vector_store
                 .get_cached_embedding(&content_hash)
-                .map_err(|e| format!("Cache check failed: {}", e))?;
+                .unwrap_or_else(|e| {
+                    log::warn!("[Chunk] Cache lookup failed for {}: {} — treating as miss", content_hash, e);
+                    None
+                });
 
             if let Some(embedding) = cached {
                 let type_str = if s_type == SourceType::Topic {

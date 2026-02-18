@@ -433,9 +433,15 @@ impl Agent {
             let handle = app_handle.clone();
             let msg = message.clone();
             let embedding = emb.clone();
-            let context_res = tokio::task::spawn_blocking(move || {
+            let context_res = match tokio::task::spawn_blocking(move || {
                 crate::memories::find_relevant_context(&handle, &msg, &embedding)
-            }).await.map_err(|e| format!("Blocking context lookup failed: {}", e))?;
+            }).await {
+                Ok(res) => res,
+                Err(e) => {
+                    log::error!("[Agent] Context lookup task panicked: {}", e);
+                    Ok(None) // Gracefully degrade — continue without context
+                }
+            };
 
             if let Ok(Some((name, content, is_insight))) = context_res {
                 let s = rag_context_str.get_or_insert_with(String::new);
@@ -449,6 +455,7 @@ impl Agent {
                     log::debug!("[Agent] Using topic: {}", name);
                 }
             }
+        }
 
         // ====================================================================
         // Compaction: Check if we're approaching context window limits
