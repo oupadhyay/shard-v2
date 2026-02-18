@@ -1579,8 +1579,7 @@ if ((import.meta as any).env.DEV) {
     console.log("Loading benchmark module...");
     try {
       const { runBenchmark } = await import("./tests/image_bench");
-      const { resizeImage: currentResizeImage } = await import("./ui/image");
-      await runBenchmark(currentResizeImage);
+      await runBenchmark(resizeImage);
     } catch (err) {
       console.error("Failed to run benchmark:", err);
     }
