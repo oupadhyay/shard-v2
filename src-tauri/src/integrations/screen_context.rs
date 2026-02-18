@@ -133,7 +133,7 @@ pub fn capture_screen() -> Result<(String, String, image::RgbImage), String> {
         .ok_or("Failed to create image buffer")?;
 
     // Resize to max 1280px width for faster processing
-    // Using Triangle filter for maximum quality on high-res displays
+    // OPTIMIZATION: Use Nearest filter for maximum speed. Vision LLMs are robust to aliasing.
     let max_width = 1280u32;
     let resized = if rgba_image.width() > max_width {
         let scale = max_width as f32 / rgba_image.width() as f32;
@@ -142,7 +142,7 @@ pub fn capture_screen() -> Result<(String, String, image::RgbImage), String> {
             &rgba_image,
             max_width,
             new_height,
-            image::imageops::FilterType::Triangle,
+            image::imageops::FilterType::Nearest,
         )
     } else {
         rgba_image
