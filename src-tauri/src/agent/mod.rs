@@ -433,9 +433,20 @@ impl Agent {
 
         // RAG: Context from Topics or Insights (Hybrid Vector/FTS)
         if let Some(emb) = &user_embedding {
-            if let Ok(Some((name, content, is_insight))) =
-                crate::memories::find_relevant_context(app_handle, &message, emb)
-            {
+            let handle = app_handle.clone();
+            let msg = message.clone();
+            let embedding = emb.clone();
+            let context_res = match tokio::task::spawn_blocking(move || {
+                crate::memories::find_relevant_context(&handle, &msg, &embedding)
+            }).await {
+                Ok(res) => res,
+                Err(e) => {
+                    log::error!("[Agent] Context lookup task panicked: {}", e);
+                    Ok(None) // Gracefully degrade — continue without context
+                }
+            };
+
+            if let Ok(Some((name, content, is_insight))) = context_res {
                 let s = rag_context_str.get_or_insert_with(String::new);
                 if is_insight {
                     s.push_str("\n\nRelevant Insight:\n");

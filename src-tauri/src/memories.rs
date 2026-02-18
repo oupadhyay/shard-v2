@@ -1044,106 +1044,103 @@ pub async fn rebuild_chunk_index<R: Runtime>(
     use futures::StreamExt;
     use std::collections::HashSet;
 
-    // Get existing sources BEFORE any .await to avoid !Send issues with rusqlite::Connection.
-    // VectorStore owns a Connection which is !Send, so we must not hold it across .await.
-    let known_sources: HashSet<(SourceType, String)> = {
-        let vector_store = get_vector_store(app_handle)?;
-        let existing_sources = vector_store
-            .get_unique_sources()
-            .map_err(|e| format!("Failed to get sources: {}", e))?;
-        HashSet::from_iter(existing_sources.into_iter())
-    };
-    // Note: vector_store is dropped here before any .await
-    let mut processed_sources: HashSet<(SourceType, String)> = HashSet::new();
+    let handle = app_handle.clone();
 
-    let mut files_to_process: Vec<(SourceType, String, String)> = Vec::new();
+    // 1 & 2. Scan, Chunk, and Check Cache in a single blocking task to avoid multiple context switches
+    let (
+        chunks_to_embed,
+        ready_chunks,
+        known_sources,
+        processed_sources,
+        sources_to_rebuild,
+        expected_chunks_per_source,
+    ) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        let mut files_to_process = Vec::new();
+        let mut processed_sources = HashSet::new();
 
-    // 1. Scan Topics
-    let topics_dir = get_topics_dir(app_handle)?;
-    if topics_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&topics_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                    if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                        if let Ok(content) = fs::read_to_string(&path) {
-                            files_to_process.push((SourceType::Topic, name.to_string(), content));
-                            processed_sources.insert((SourceType::Topic, name.to_string()));
+        // Get existing sources
+        let known_sources: std::collections::HashSet<_> = {
+            let vector_store = get_vector_store(&handle)?;
+            let existing_sources = vector_store
+                .get_unique_sources()
+                .map_err(|e| format!("Failed to get sources: {}", e))?;
+            existing_sources.into_iter().collect()
+        };
+
+        // Scan Topics
+        let topics_dir = get_topics_dir(&handle)?;
+        if topics_dir.exists() {
+            if let Ok(entries) = fs::read_dir(&topics_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                        if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                            if let Ok(content) = fs::read_to_string(&path) {
+                                files_to_process.push((SourceType::Topic, name.to_string(), content));
+                                processed_sources.insert((SourceType::Topic, name.to_string()));
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    // 2. Scan Insights
-    let insights_dir = get_insights_dir(app_handle)?;
-    if insights_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&insights_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                    if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                        if let Ok(content) = fs::read_to_string(&path) {
-                            files_to_process.push((SourceType::Insight, name.to_string(), content));
-                            processed_sources.insert((SourceType::Insight, name.to_string()));
+        // Scan Insights
+        let insights_dir = get_insights_dir(&handle)?;
+        if insights_dir.exists() {
+            if let Ok(entries) = fs::read_dir(&insights_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                        if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                            if let Ok(content) = fs::read_to_string(&path) {
+                                files_to_process.push((SourceType::Insight, name.to_string(), content));
+                                processed_sources.insert((SourceType::Insight, name.to_string()));
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    log::info!("[Chunk] Processing {} files", files_to_process.len());
+        log::info!("[Chunk] Processing {} files", files_to_process.len());
 
-    // 3. Process each file (concurrent embedding generation)
-    // We create a stream of futures that process chunks
+        let mut tasks = Vec::new();
+        let mut sources_to_rebuild = Vec::new();
+        let mut expected_chunks_per_source = std::collections::HashMap::new();
 
-    let mut tasks = Vec::new();
+        for (source_type, source_name, content) in files_to_process {
+            sources_to_rebuild.push((source_type.clone(), source_name.clone()));
+            let raw_chunks = chunk_markdown(&content, 400, 80, 50);
+            let chunk_count = raw_chunks.len();
+            expected_chunks_per_source
+                .insert((source_type.clone(), source_name.clone()), chunk_count);
 
-    // Track sources and how many chunks we expect per source
-    let mut sources_to_rebuild: Vec<(SourceType, String)> = Vec::new();
-    let mut expected_chunks_per_source: std::collections::HashMap<(SourceType, String), usize> = std::collections::HashMap::new();
-
-    for (source_type, source_name, content) in files_to_process {
-        sources_to_rebuild.push((source_type.clone(), source_name.clone()));
-
-        let raw_chunks = chunk_markdown(&content, 400, 80, 50);
-        let chunk_count = raw_chunks.len();
-        expected_chunks_per_source.insert((source_type.clone(), source_name.clone()), chunk_count);
-
-        for (idx, raw) in raw_chunks.into_iter().enumerate() {
-            let s_type = source_type.clone();
-            let s_name = source_name.clone();
-
-            tasks.push((s_type, s_name, idx, raw));
+            for (idx, raw) in raw_chunks.into_iter().enumerate() {
+                tasks.push((source_type.clone(), source_name.clone(), idx, raw));
+            }
         }
-    }
 
-    // Step A: Check cache and prepare embedding tasks
-    // Re-open vector store for cache lookups (dropped before .await)
-    let mut chunks_to_embed = Vec::new();
-    let mut ready_chunks = Vec::new();
+        let mut chunks_to_embed = Vec::new();
+        let mut ready_chunks = Vec::new();
+        let vector_store = get_vector_store(&handle)?;
 
-    {
-        let vector_store = get_vector_store(app_handle)?;
         for (s_type, s_name, idx, raw) in tasks {
-            // Cache key: use sha256(chunk.text) to match what upsert_chunk stores
-            // This ensures cache consistency between rebuild and upsert
             let content_hash = VectorStore::content_hash(&raw.text);
-
-            // Try cache
-            let cached = match vector_store.get_cached_embedding(&content_hash) {
-                Ok(emb) => emb,
-                Err(e) => {
-                    log::warn!("[Chunk] Cache check failed: {}", e);
+            let cached = vector_store
+                .get_cached_embedding(&content_hash)
+                .unwrap_or_else(|e| {
+                    log::warn!("[Chunk] Cache lookup failed for {}: {} — treating as miss", content_hash, e);
                     None
-                }
-            };
+                });
 
             if let Some(embedding) = cached {
-                 let type_str = if s_type == SourceType::Topic { "topic" } else { "insight" };
-                 ready_chunks.push(Chunk {
+                let type_str = if s_type == SourceType::Topic {
+                    "topic"
+                } else {
+                    "insight"
+                };
+                ready_chunks.push(Chunk {
                     id: format!("{}::{}::{}", type_str, s_name, idx),
                     source_type: s_type,
                     source_name: s_name,
@@ -1157,7 +1154,18 @@ pub async fn rebuild_chunk_index<R: Runtime>(
                 chunks_to_embed.push((s_type, s_name, idx, raw));
             }
         }
-    } // vector_store dropped here before .await
+
+        Ok((
+            chunks_to_embed,
+            ready_chunks,
+            known_sources,
+            processed_sources,
+            sources_to_rebuild,
+            expected_chunks_per_source,
+        ))
+    })
+    .await
+    .map_err(|e| format!("Blocking scan task failed: {}", e))??;
 
     log::info!("[Chunk] Found {} chunks cached, {} to embed", ready_chunks.len(), chunks_to_embed.len());
 
