@@ -25,6 +25,8 @@ dist-ssr
 *.sln
 *.sw?
 .env
-J*.md
 *.code-workspace
+
+# Agent files
 AGENTS.md
+lessons_learned.md
