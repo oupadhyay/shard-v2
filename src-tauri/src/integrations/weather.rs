@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use reqwest;
 use log;
+use reqwest;
+use serde::{Deserialize, Serialize};
 
 // --- Open-Meteo Geocoding API Structures ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -45,17 +45,29 @@ struct WeatherResponse {
     current: Option<WeatherCurrentData>,
 }
 
+fn sanitize_log_str(s: &str) -> String {
+    s.chars()
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == ',' || *c == '.' || *c == '-')
+        .collect()
+}
+
 pub async fn perform_weather_lookup(
     client: &reqwest::Client,
     location: &str,
 ) -> Result<Option<(f32, String, String)>, String> {
-    // (temperature, unit, description/location_name)
-
-    // 1. Geocoding
     let geo_url = "https://geocoding-api.open-meteo.com/v1/search";
-    let geo_params = [("name", location), ("count", "1"), ("language", "en"), ("format", "json")];
+    let geo_params = [
+        ("name", location),
+        ("count", "1"),
+        ("language", "en"),
+        ("format", "json"),
+    ];
 
-    log::info!("Performing Geocoding lookup for: {}", location);
+    log::info!(
+        "Performing Geocoding lookup for: {}",
+        sanitize_log_str(location)
+    );
 
     let geo_resp = client
         .get(geo_url)
@@ -76,15 +88,28 @@ pub async fn perform_weather_lookup(
     let location_data = match geo_data.results.as_ref().and_then(|r| r.first()) {
         Some(data) => data,
         None => {
-            log::info!("No location found for '{}'", location);
+            log::info!("No location found");
             return Ok(None);
         }
     };
 
-    let lat = location_data.latitude.ok_or("Missing latitude")?;
-    let lon = location_data.longitude.ok_or("Missing longitude")?;
-    let name = location_data.name.clone().unwrap_or_default();
-    let country = location_data.country.clone().unwrap_or_default();
+    let lat = match location_data.latitude {
+        Some(l) => l,
+        None => return Err("Missing latitude".to_string()),
+    };
+    let lon = match location_data.longitude {
+        Some(l) => l,
+        None => return Err("Missing longitude".to_string()),
+    };
+
+    let name = match &location_data.name {
+        Some(n) => sanitize_log_str(n),
+        None => String::new(),
+    };
+    let country = match &location_data.country {
+        Some(c) => sanitize_log_str(c),
+        None => String::new(),
+    };
     let location_display = format!("{}, {}", name, country);
 
     // 2. Weather
@@ -95,7 +120,7 @@ pub async fn perform_weather_lookup(
         ("current", "temperature_2m".to_string()),
     ];
 
-    log::info!("Performing Weather lookup for: {} ({}, {})", location_display, lat, lon);
+    log::info!("Performing Weather lookup for a sanitized location");
 
     let weather_resp = client
         .get(weather_url)

@@ -1,4 +1,3 @@
-
 use crate::prompts::get_research_system_prompt;
 
 #[test]

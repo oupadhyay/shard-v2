@@ -46,7 +46,9 @@ const SHARD_DEBUG_SCREENSHOTS_ENV: &str = "SHARD_DEBUG_SCREENSHOTS";
 
 /// Load the OCR engine using bundled PaddleOCR models
 async fn get_ocr_engine(app_handle: &tauri::AppHandle) -> Result<OcrEngine, String> {
-    let resource_dir = app_handle.path().resource_dir()
+    let resource_dir = app_handle
+        .path()
+        .resource_dir()
         .map_err(|e| format!("Failed to get resource directory: {}", e))?;
 
     let det_path = resource_dir.join("resources/ch_PP-OCRv4_det_infer.mnn");
@@ -60,13 +62,8 @@ async fn get_ocr_engine(app_handle: &tauri::AppHandle) -> Result<OcrEngine, Stri
     // Enable GPU (Metal) on macOS
     let config = OcrEngineConfig::gpu();
 
-    OcrEngine::new(
-        det_path_str,
-        rec_path_str,
-        keys_path_str,
-        Some(config),
-    )
-    .map_err(|e| format!("Failed to initialize OCR engine: {}", e))
+    OcrEngine::new(det_path_str, rec_path_str, keys_path_str, Some(config))
+        .map_err(|e| format!("Failed to initialize OCR engine: {}", e))
 }
 
 /// Vision LLM prompt for screen context analysis
@@ -119,7 +116,9 @@ pub fn capture_screen() -> Result<(String, String, image::RgbImage), String> {
                 let debug_dir = cache_dir.join("shard").join("debug");
                 let _ = std::fs::create_dir_all(&debug_dir);
                 let full_debug_path = debug_dir.join("shard_screen_debug_full.jpg");
-                if let Some(full_rgba) = image::RgbaImage::from_raw(width, height, (*rgba_data_for_debug).clone()) {
+                if let Some(full_rgba) =
+                    image::RgbaImage::from_raw(width, height, (*rgba_data_for_debug).clone())
+                {
                     let _ = image::DynamicImage::ImageRgba8(full_rgba)
                         .to_rgb8()
                         .save(full_debug_path);
@@ -252,27 +251,35 @@ pub async fn capture_and_analyze(
             // ocr-rs 2.0.2 expects a &DynamicImage
             let dynamic_image = image::DynamicImage::ImageRgb8(rgb_image);
             match ocr_engine.recognize(&dynamic_image) {
-                Ok(results) => {
-                    results
-                        .iter()
-                        .map(|r| r.text.clone())
-                        .collect::<Vec<String>>()
-                        .join("\n")
-                }
+                Ok(results) => results
+                    .iter()
+                    .map(|r| r.text.clone())
+                    .collect::<Vec<String>>()
+                    .join("\n"),
                 Err(e) => {
-                    log::warn!("[ScreenContext] OCR recognition failed, continuing without OCR: {}", e);
+                    log::warn!(
+                        "[ScreenContext] OCR recognition failed, continuing without OCR: {}",
+                        e
+                    );
                     String::new()
                 }
             }
         }
         Err(e) => {
-            log::warn!("[ScreenContext] Failed to load OCR engine, continuing without OCR: {}", e);
+            log::warn!(
+                "[ScreenContext] Failed to load OCR engine, continuing without OCR: {}",
+                e
+            );
             String::new()
         }
     };
 
     let ocr_elapsed = ocr_start.elapsed();
-    log::info!("[ScreenContext] OCR took {:?}, extracted {} chars", ocr_elapsed, local_ocr_text.len());
+    log::info!(
+        "[ScreenContext] OCR took {:?}, extracted {} chars",
+        ocr_elapsed,
+        local_ocr_text.len()
+    );
 
     log::info!(
         "[ScreenContext] Local OCR Result: {} chars",
@@ -299,7 +306,10 @@ pub async fn capture_and_analyze(
     .await?;
 
     let vision_elapsed = vision_start.elapsed();
-    log::info!("[ScreenContext] Vision LLM analysis took {:?}", vision_elapsed);
+    log::info!(
+        "[ScreenContext] Vision LLM analysis took {:?}",
+        vision_elapsed
+    );
 
     // Parse JSON response (with fallback for malformed responses)
     let (summary, suggestions) = parse_analysis_response(&analysis)?;
@@ -329,7 +339,10 @@ pub async fn capture_and_analyze(
     let total_elapsed = capture_start.elapsed();
     log::info!(
         "[ScreenContext] Total pipeline: {:?} (capture: {:?}, OCR: {:?}, vision: {:?})",
-        total_elapsed, capture_elapsed, ocr_elapsed, vision_elapsed
+        total_elapsed,
+        capture_elapsed,
+        ocr_elapsed,
+        vision_elapsed
     );
 
     log::info!(
@@ -367,24 +380,32 @@ fn parse_analysis_response(response: &str) -> Result<(String, Vec<String>), Stri
 
     match serde_json::from_str::<AnalysisResponse>(json_str) {
         Ok(parsed) => {
-            let summary = parsed.summary.unwrap_or_else(|| "Screen content analyzed".to_string());
+            let summary = parsed
+                .summary
+                .unwrap_or_else(|| "Screen content analyzed".to_string());
             Ok((summary, parsed.suggestions))
         }
         Err(e) => {
-            log::warn!("[ScreenContext] Failed to parse JSON, attempting regex fallback: {}", e);
+            log::warn!(
+                "[ScreenContext] Failed to parse JSON, attempting regex fallback: {}",
+                e
+            );
             // Fallback: try to extract any JSON object from the response
             if let Some(start) = response.find('{') {
                 if let Some(end) = response.rfind('}') {
                     let json_substr = &response[start..=end];
                     if let Ok(parsed) = serde_json::from_str::<AnalysisResponse>(json_substr) {
-                        let summary = parsed.summary.unwrap_or_else(|| "Screen content analyzed".to_string());
+                        let summary = parsed
+                            .summary
+                            .unwrap_or_else(|| "Screen content analyzed".to_string());
                         return Ok((summary, parsed.suggestions));
                     }
                 }
             }
             Err(format!(
                 "Failed to parse analysis JSON: {} - Response: {}",
-                e, &response[..response.len().min(200)]
+                e,
+                &response[..response.len().min(200)]
             ))
         }
     }
@@ -465,7 +486,13 @@ mod tests {
     #[test]
     fn test_debounce_constants() {
         // Verify constants are reasonable
-        assert!(CAPTURE_DEBOUNCE_MS >= 1000, "Debounce should be at least 1s");
-        assert!(CACHE_TTL_MS >= CAPTURE_DEBOUNCE_MS, "Cache TTL should be >= debounce");
+        assert!(
+            CAPTURE_DEBOUNCE_MS >= 1000,
+            "Debounce should be at least 1s"
+        );
+        assert!(
+            CACHE_TTL_MS >= CAPTURE_DEBOUNCE_MS,
+            "Cache TTL should be >= debounce"
+        );
     }
 }

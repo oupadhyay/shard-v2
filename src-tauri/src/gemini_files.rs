@@ -64,7 +64,10 @@ pub async fn upload_image_to_gemini_files_api(
 
     if !init_response.status().is_success() {
         let error_text = init_response.text().await.unwrap_or_default();
-        return Err(format!("Initial upload request failed (API error): {}", error_text));
+        return Err(format!(
+            "Initial upload request failed (API error): {}",
+            error_text
+        ));
     }
 
     // Extract upload URL from headers

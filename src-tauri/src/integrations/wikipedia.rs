@@ -1,6 +1,6 @@
+use log;
 use reqwest;
 use serde::{Deserialize, Serialize};
-use log;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct WikipediaQueryPage {
@@ -38,12 +38,16 @@ pub async fn perform_wikipedia_lookup(
         ("formatversion", "2"),
     ];
 
-    log::info!("Performing Wikipedia lookup for: {}", search_term);
+    let sanitized_term = search_term.replace('\n', " ").replace('\r', " ");
+    log::info!("Performing Wikipedia lookup for: {}", sanitized_term);
 
     match client
         .get(base_url)
         .query(&params)
-        .header("User-Agent", "Shard/1.0 (https://github.com/shard-app/shard)")
+        .header(
+            "User-Agent",
+            "Shard/1.0 (https://github.com/shard-app/shard)",
+        )
         .send()
         .await
     {
@@ -60,7 +64,10 @@ pub async fn perform_wikipedia_lookup(
                         if let Some(query_data) = wiki_response.query {
                             if let Some(page) = query_data.pages.first() {
                                 if page.missing.is_some() {
-                                    log::info!("Wikipedia: Page '{}' does not exist.", search_term);
+                                    log::info!(
+                                        "Wikipedia: Page '{}' does not exist.",
+                                        sanitized_term
+                                    );
                                     return Ok(None);
                                 }
                                 if let Some(extract) = &page.extract {
@@ -90,7 +97,10 @@ pub async fn perform_wikipedia_lookup(
                     }
                 }
             } else {
-                Err(format!("Wikipedia API error: {} - {}", status, response_text))
+                Err(format!(
+                    "Wikipedia API error: {} - {}",
+                    status, response_text
+                ))
             }
         }
         Err(e) => Err(format!("Wikipedia network error: {}", e)),

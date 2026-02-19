@@ -8,7 +8,6 @@
  * - Pre-compaction memory flush (LLM saves important facts before summarization)
  * - History summarization
  */
-
 use crate::agent::ChatMessage;
 use crate::config::AppConfig;
 use reqwest::Client;
@@ -20,14 +19,14 @@ use tauri::{AppHandle, Runtime};
 // ============================================================================
 
 /// Default context sizes per model family (in tokens)
-const GEMINI_CONTEXT_SIZE: usize = 1_000_000;   // 1M for all Gemini models
+const GEMINI_CONTEXT_SIZE: usize = 1_000_000; // 1M for all Gemini models
 const OPENROUTER_CONTEXT_SIZE: usize = 128_000; // 128K for OpenRouter models
-const GROQ_CONTEXT_SIZE: usize = 128_000;       // 128K for Groq
-const CEREBRAS_CONTEXT_SIZE: usize = 128_000;   // 128K for Cerebras
+const GROQ_CONTEXT_SIZE: usize = 128_000; // 128K for Groq
+const CEREBRAS_CONTEXT_SIZE: usize = 128_000; // 128K for Cerebras
 
 /// Default compaction settings
-pub const DEFAULT_THRESHOLD: f32 = 0.5;          // 50% of context window
-const DEFAULT_PRESERVE_TURNS: usize = 10;    // Keep last 10 turns
+pub const DEFAULT_THRESHOLD: f32 = 0.5; // 50% of context window
+const DEFAULT_PRESERVE_TURNS: usize = 10; // Keep last 10 turns
 
 /// Rough estimate: ~4 characters per token
 const CHARS_PER_TOKEN: usize = 4;
@@ -198,11 +197,7 @@ pub async fn pre_compaction_flush<R: Runtime>(
     // Build conversation summary for LLM
     let conversation_text = history
         .iter()
-        .filter_map(|msg| {
-            msg.content
-                .as_ref()
-                .map(|c| format!("{}: {}", msg.role, c))
-        })
+        .filter_map(|msg| msg.content.as_ref().map(|c| format!("{}: {}", msg.role, c)))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -230,10 +225,16 @@ pub async fn pre_compaction_flush<R: Runtime>(
     }
 
     // Count facts (lines starting with -)
-    let fact_count = response.lines().filter(|l| l.trim().starts_with('-')).count();
+    let fact_count = response
+        .lines()
+        .filter(|l| l.trim().starts_with('-'))
+        .count();
 
     // Append to daily log
-    let header = format!("\n## Pre-compaction Flush ({})\n", chrono::Utc::now().format("%H:%M"));
+    let header = format!(
+        "\n## Pre-compaction Flush ({})\n",
+        chrono::Utc::now().format("%H:%M")
+    );
     let content = format!("{}{}\n", header, response);
     crate::memories::append_to_daily_log(app_handle, &content)?;
 
@@ -294,11 +295,7 @@ pub async fn compact_history<R: Runtime>(
     // Build text for summarization
     let conversation_text = to_compact
         .iter()
-        .filter_map(|msg| {
-            msg.content
-                .as_ref()
-                .map(|c| format!("{}: {}", msg.role, c))
-        })
+        .filter_map(|msg| msg.content.as_ref().map(|c| format!("{}: {}", msg.role, c)))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -344,7 +341,10 @@ pub async fn compact_history<R: Runtime>(
     history.retain(|msg| {
         if let Some(ref tool_call_id) = msg.tool_call_id {
             if !valid_tool_call_ids.contains(tool_call_id) {
-                log::debug!("[Compaction] Removing orphaned tool response: {}", tool_call_id);
+                log::debug!(
+                    "[Compaction] Removing orphaned tool response: {}",
+                    tool_call_id
+                );
                 return false;
             }
         }
@@ -352,7 +352,10 @@ pub async fn compact_history<R: Runtime>(
     });
     let orphans_removed = before_filter - history.len();
     if orphans_removed > 0 {
-        log::info!("[Compaction] Removed {} orphaned tool responses", orphans_removed);
+        log::info!(
+            "[Compaction] Removed {} orphaned tool responses",
+            orphans_removed
+        );
     }
 
     log::info!(
@@ -417,18 +420,23 @@ mod tests {
         // 400 chars of content + ~10 for role = ~410 chars / 4 = ~103 tokens
         let msg = make_message("user", 400);
         let tokens = estimate_message_tokens(&msg);
-        assert!(tokens >= 100 && tokens <= 110, "Expected ~103 tokens, got {}", tokens);
+        assert!(
+            tokens >= 100 && tokens <= 110,
+            "Expected ~103 tokens, got {}",
+            tokens
+        );
     }
 
     #[test]
     fn test_estimate_history_tokens() {
-        let history = vec![
-            make_message("user", 400),
-            make_message("assistant", 800),
-        ];
+        let history = vec![make_message("user", 400), make_message("assistant", 800)];
         let tokens = estimate_history_tokens(&history);
         // (400 + 10) / 4 + (800 + 10) / 4 = 103 + 203 = 306
-        assert!(tokens >= 300 && tokens <= 320, "Expected ~306 tokens, got {}", tokens);
+        assert!(
+            tokens >= 300 && tokens <= 320,
+            "Expected ~306 tokens, got {}",
+            tokens
+        );
     }
 
     #[test]
@@ -442,15 +450,16 @@ mod tests {
     fn test_should_compact_with_artificial_limit() {
         // Use artificial 1000 token "model" to test threshold logic
         // 600 chars = 150 tokens, which is > 50% of 250 tokens
-        let history = vec![
-            make_message("user", 600),
-            make_message("assistant", 600),
-        ];
+        let history = vec![make_message("user", 600), make_message("assistant", 600)];
         // Simulate a 1000 token context by checking against 50% = 500 tokens
         // Our history is ~300 tokens, so should NOT compact against 500
         // But if we lower threshold to 0.25 (250 tokens), it SHOULD compact
         let tokens = estimate_history_tokens(&history);
-        assert!(tokens > 250, "History should be > 250 tokens, got {}", tokens);
+        assert!(
+            tokens > 250,
+            "History should be > 250 tokens, got {}",
+            tokens
+        );
 
         // Can't use get_context_size for artificial limit, but we can
         // test the core logic by comparing tokens directly
@@ -467,6 +476,10 @@ mod tests {
         let tokens = estimate_history_tokens(&history);
 
         // Just verify token count is reasonable
-        assert!(tokens >= 120 && tokens <= 140, "Expected ~128 tokens, got {}", tokens);
+        assert!(
+            tokens >= 120 && tokens <= 140,
+            "Expected ~128 tokens, got {}",
+            tokens
+        );
     }
 }

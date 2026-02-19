@@ -1,8 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use std::sync::{Arc, RwLock};
-use shard_lib::memories::{Memory, MemoryCategory, MemoryStore};
-use std::time::Duration;
 use futures::stream::StreamExt;
+use shard_lib::memories::{Memory, MemoryCategory, MemoryStore};
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 // 1. Image Buffer Cloning vs Arc Sharing
 fn bench_image_sharing(c: &mut Criterion) {
@@ -35,8 +35,11 @@ fn bench_memory_caching(c: &mut Criterion) {
     for i in 0..100 {
         store.add(Memory::new(
             MemoryCategory::Fact,
-            format!("Important fact #{} about the project architecture and the system design", i),
-            3
+            format!(
+                "Important fact #{} about the project architecture and the system design",
+                i
+            ),
+            3,
         ));
     }
 
@@ -71,25 +74,32 @@ fn bench_embedding_concurrency(c: &mut Criterion) {
     let mut group = c.benchmark_group("embedding_concurrency");
 
     group.bench_function("sequential_processing", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async {
-            for i in 0..num_tasks {
-                black_box(mock_embedding_task(i, mock_delay).await);
-            }
-        })
+        b.to_async(tokio::runtime::Runtime::new().unwrap())
+            .iter(|| async {
+                for i in 0..num_tasks {
+                    black_box(mock_embedding_task(i, mock_delay).await);
+                }
+            })
     });
 
     group.bench_function("concurrent_processing_4", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async {
-            let stream = futures::stream::iter(0..num_tasks)
-                .map(|i| mock_embedding_task(i, mock_delay))
-                .buffer_unordered(4);
-            let _results: Vec<_> = stream.collect().await;
-            black_box(_results);
-        })
+        b.to_async(tokio::runtime::Runtime::new().unwrap())
+            .iter(|| async {
+                let stream = futures::stream::iter(0..num_tasks)
+                    .map(|i| mock_embedding_task(i, mock_delay))
+                    .buffer_unordered(4);
+                let _results: Vec<_> = stream.collect().await;
+                black_box(_results);
+            })
     });
 
     group.finish();
 }
 
-criterion_group!(benches, bench_image_sharing, bench_memory_caching, bench_embedding_concurrency);
+criterion_group!(
+    benches,
+    bench_image_sharing,
+    bench_memory_caching,
+    bench_embedding_concurrency
+);
 criterion_main!(benches);

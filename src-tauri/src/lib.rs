@@ -444,8 +444,8 @@ pub fn run() {
                 if let Ok(store) = memories::get_vector_store(&app_handle_for_chunks) {
                     if let Ok(count) = store.chunk_count() {
                         if count > 0 {
-                             log::info!("[Startup] Vector store found with {} chunks", count);
-                             return;
+                            log::info!("[Startup] Vector store found with {} chunks", count);
+                            return;
                         }
                     }
                 }

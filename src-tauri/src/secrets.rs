@@ -7,7 +7,6 @@
 /// - Windows: Credential Manager
 ///
 /// All keys are stored in a single JSON entry to minimize password prompts.
-
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -59,8 +58,7 @@ fn load_all_keys() -> Result<ApiKeysStore, String> {
 
     match entry.get_password() {
         Ok(json) => {
-            serde_json::from_str(&json)
-                .map_err(|e| format!("Failed to parse keyring data: {}", e))
+            serde_json::from_str(&json).map_err(|e| format!("Failed to parse keyring data: {}", e))
         }
         Err(keyring::Error::NoEntry) => Ok(HashMap::new()),
         Err(e) => Err(format!("Failed to read keyring: {}", e)),
@@ -110,7 +108,10 @@ pub fn migrate_legacy_entries() {
     // Save the merged result - only proceed with deletion if this succeeds
     match save_all_keys(&migrated_keys) {
         Ok(()) => {
-            log::info!("[Secrets] Migration saved: {} keys consolidated", migrated_keys.len());
+            log::info!(
+                "[Secrets] Migration saved: {} keys consolidated",
+                migrated_keys.len()
+            );
             let count = entries_to_delete.len();
             // Now safe to delete old entries
             for entry in entries_to_delete {
@@ -120,7 +121,10 @@ pub fn migrate_legacy_entries() {
                     }
                 }
             }
-            log::info!("[Secrets] Migration complete: deleted {} legacy entries", count);
+            log::info!(
+                "[Secrets] Migration complete: deleted {} legacy entries",
+                count
+            );
         }
         Err(e) => {
             log::error!("[Secrets] Migration failed, keeping legacy entries: {}", e);
@@ -141,9 +145,10 @@ fn save_all_keys(keys: &ApiKeysStore) -> Result<(), String> {
             Err(e) => Err(format!("Failed to delete keyring entry: {}", e)),
         }
     } else {
-        let json = serde_json::to_string(keys)
-            .map_err(|e| format!("Failed to serialize keys: {}", e))?;
-        entry.set_password(&json)
+        let json =
+            serde_json::to_string(keys).map_err(|e| format!("Failed to serialize keys: {}", e))?;
+        entry
+            .set_password(&json)
             .map_err(|e| format!("Failed to save keyring: {}", e))
     }
 }

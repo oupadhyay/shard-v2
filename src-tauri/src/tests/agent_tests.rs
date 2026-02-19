@@ -110,18 +110,20 @@ mod tests {
     #[test]
     fn test_gemini_content_structure() {
         // Test that we can construct the Gemini structs correctly
-        use crate::agent::{GeminiContent, GeminiPart, GeminiFileData};
+        use crate::agent::{GeminiContent, GeminiFileData, GeminiPart};
 
         let content = GeminiContent {
             role: Some("user".to_string()),
             parts: vec![
-                GeminiPart::Text { text: "Hello".to_string() },
+                GeminiPart::Text {
+                    text: "Hello".to_string(),
+                },
                 GeminiPart::FileData {
                     file_data: GeminiFileData {
                         mime_type: "image/png".to_string(),
-                        file_uri: "uri".to_string()
-                    }
-                }
+                        file_uri: "uri".to_string(),
+                    },
+                },
             ],
         };
 
@@ -170,47 +172,60 @@ mod tests {
 
     #[test]
     fn test_parse_gemini_chunk() {
-        use crate::agent::{parse_gemini_chunk, GeminiPart, GeminiFunctionCall, AgentEvent};
+        use crate::agent::{parse_gemini_chunk, AgentEvent, GeminiFunctionCall, GeminiPart};
         use serde_json::json;
 
         // Test 1: Regular Text
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
         let mut tool_calls = Vec::new();
-        let part = GeminiPart::Text { text: "Hello".to_string() };
+        let part = GeminiPart::Text {
+            text: "Hello".to_string(),
+        };
         let events = parse_gemini_chunk(part, &mut full_text, &mut full_reasoning, &mut tool_calls);
 
         assert_eq!(full_text, "Hello");
         assert_eq!(events.len(), 1);
         if let AgentEvent::ResponseChunk(text) = &events[0] {
             assert_eq!(text, "Hello");
-        } else { panic!("Expected ResponseChunk"); }
+        } else {
+            panic!("Expected ResponseChunk");
+        }
 
         // Test 2: Thinking Text
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
         let mut tool_calls = Vec::new();
-        let part = GeminiPart::Text { text: "**Thinking...**\n\n".to_string() };
+        let part = GeminiPart::Text {
+            text: "**Thinking...**\n\n".to_string(),
+        };
         let events = parse_gemini_chunk(part, &mut full_text, &mut full_reasoning, &mut tool_calls);
 
         assert_eq!(full_reasoning, "**Thinking...**\n\n");
         assert_eq!(events.len(), 1);
         if let AgentEvent::ReasoningChunk(text) = &events[0] {
             assert_eq!(text, "**Thinking...**\n\n");
-        } else { panic!("Expected ReasoningChunk"); }
+        } else {
+            panic!("Expected ReasoningChunk");
+        }
 
         // Test 3: Explicit Thought Part (thought=true)
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
         let mut tool_calls = Vec::new();
-        let part = GeminiPart::Thought { thought: true, text: "I should check the weather".to_string() };
+        let part = GeminiPart::Thought {
+            thought: true,
+            text: "I should check the weather".to_string(),
+        };
         let events = parse_gemini_chunk(part, &mut full_text, &mut full_reasoning, &mut tool_calls);
 
         assert_eq!(full_reasoning, "I should check the weather");
         assert_eq!(events.len(), 1);
         if let AgentEvent::ReasoningChunk(text) = &events[0] {
             assert_eq!(text, "I should check the weather");
-        } else { panic!("Expected ReasoningChunk"); }
+        } else {
+            panic!("Expected ReasoningChunk");
+        }
 
         // Test 4: Function Call
         let mut full_text = String::new();
@@ -219,7 +234,7 @@ mod tests {
         let part = GeminiPart::FunctionCall {
             function_call: GeminiFunctionCall {
                 name: "get_weather".to_string(),
-                args: json!({"location": "London"})
+                args: json!({"location": "London"}),
             },
             thought_signature: Some("test_signature".to_string()),
         };
@@ -227,7 +242,10 @@ mod tests {
 
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function_call.name, "get_weather");
-        assert_eq!(tool_calls[0].thought_signature, Some("test_signature".to_string()));
+        assert_eq!(
+            tool_calls[0].thought_signature,
+            Some("test_signature".to_string())
+        );
         assert_eq!(events.len(), 0);
     }
 

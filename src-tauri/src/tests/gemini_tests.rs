@@ -16,9 +16,14 @@ mod tests {
             }
         });
 
-        let part: GeminiPart = serde_json::from_value(json_data).expect("Failed to deserialize FunctionCall");
+        let part: GeminiPart =
+            serde_json::from_value(json_data).expect("Failed to deserialize FunctionCall");
 
-        if let GeminiPart::FunctionCall { function_call, thought_signature: _ } = part {
+        if let GeminiPart::FunctionCall {
+            function_call,
+            thought_signature: _,
+        } = part
+        {
             assert_eq!(function_call.name, "get_weather");
             assert_eq!(function_call.args["location"], "San Francisco, CA");
         } else {
@@ -32,7 +37,8 @@ mod tests {
             "text": "Hello world"
         });
 
-        let part: GeminiPart = serde_json::from_value(json_data).expect("Failed to deserialize Text");
+        let part: GeminiPart =
+            serde_json::from_value(json_data).expect("Failed to deserialize Text");
 
         if let GeminiPart::Text { text } = part {
             assert_eq!(text, "Hello world");
@@ -50,7 +56,8 @@ mod tests {
             }
         });
 
-        let part: GeminiPart = serde_json::from_value(json_data).expect("Failed to deserialize FileData");
+        let part: GeminiPart =
+            serde_json::from_value(json_data).expect("Failed to deserialize FileData");
 
         if let GeminiPart::FileData { file_data } = part {
             assert_eq!(file_data.mime_type, "image/png");
@@ -71,7 +78,8 @@ mod tests {
             }
         });
 
-        let part: GeminiPart = serde_json::from_value(json_data).expect("Failed to deserialize FunctionResponse");
+        let part: GeminiPart =
+            serde_json::from_value(json_data).expect("Failed to deserialize FunctionResponse");
 
         if let GeminiPart::FunctionResponse { function_response } = part {
             assert_eq!(function_response.name, "get_weather");

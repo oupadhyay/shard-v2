@@ -38,9 +38,7 @@ fn bench_tokenize(c: &mut Criterion) {
     // Larger input to see scaling - use custom config for longer measurement
     let large = text.repeat(1024);
     group.measurement_time(std::time::Duration::from_secs(10));
-    group.bench_function("large_~100KB", |b| {
-        b.iter(|| tokenize(black_box(&large)))
-    });
+    group.bench_function("large_~100KB", |b| b.iter(|| tokenize(black_box(&large))));
     group.finish();
 }
 
@@ -107,8 +105,8 @@ fn bench_bm25_scaling(c: &mut Criterion) {
 
 fn configure_criterion() -> Criterion {
     Criterion::default()
-        .noise_threshold(0.05)     // Treat <5% change as noise
-        .significance_level(0.01)  // Require p<0.01 to declare change (stricter)
+        .noise_threshold(0.05) // Treat <5% change as noise
+        .significance_level(0.01) // Require p<0.01 to declare change (stricter)
         .measurement_time(Duration::from_secs(5))
 }
 

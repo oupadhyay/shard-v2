@@ -4,10 +4,9 @@
  * Tests for cleanup and summary analysis background job functions.
  * LLM integration uses mocked responses to avoid API quota consumption.
  */
-
 use crate::background::{
     analyze_interactions_in_dir, cleanup_interactions_in_dir, parse_cleanup_decision,
-    parse_topic_updates, LOOKBACK_HOURS, LOG_RETENTION_DAYS,
+    parse_topic_updates, LOG_RETENTION_DAYS, LOOKBACK_HOURS,
 };
 use chrono::{Duration as ChronoDuration, Utc};
 use std::fs;
@@ -78,7 +77,10 @@ fn test_cleanup_removes_old_files() {
 
     assert_eq!(result.deleted_count, 1, "Should delete 1 old file");
     assert!(result.bytes_freed > 0, "Should have freed some bytes");
-    assert!(result.llm_reasoning.is_none(), "Fallback cleanup has no LLM reasoning");
+    assert!(
+        result.llm_reasoning.is_none(),
+        "Fallback cleanup has no LLM reasoning"
+    );
 
     // Verify old file is gone, recent file remains
     let old_path = interactions_dir.join(format!("interactions-{}.jsonl", old_date));
@@ -144,7 +146,10 @@ fn test_analyze_counts_messages() {
     assert_eq!(result.user_messages, 3);
     assert_eq!(result.assistant_messages, 2); // "assistant" + "model"
     assert!(result.total_chars > 0);
-    assert!(result.topics_updated.is_empty(), "Stats-only analysis has no topics");
+    assert!(
+        result.topics_updated.is_empty(),
+        "Stats-only analysis has no topics"
+    );
 }
 
 #[test]

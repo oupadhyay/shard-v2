@@ -30,7 +30,6 @@ thread_local! {
     static STEMMER: Stemmer = Stemmer::create(Algorithm::English);
 }
 
-
 // ============================================================================
 // Data Structures
 // ============================================================================
@@ -243,7 +242,8 @@ impl BM25Index {
 
                     // BM25 scoring formula
                     let numerator = tf_f * (BM25_K1 + 1.0);
-                    let denominator = tf_f + BM25_K1 * (1.0 - BM25_B + BM25_B * doc_length / avg_dl);
+                    let denominator =
+                        tf_f + BM25_K1 * (1.0 - BM25_B + BM25_B * doc_length / avg_dl);
                     let score = idf * numerator / denominator;
 
                     *scores.entry(*internal_id).or_insert(0.0) += score;
@@ -255,13 +255,20 @@ impl BM25Index {
         let mut results: Vec<ScoredDocument> = scores
             .into_iter()
             .filter_map(|(internal_id, score)| {
-                self.doc_id_map.get(&internal_id).map(|doc_id| {
-                    ScoredDocument { doc_id: doc_id.clone(), score }
-                })
+                self.doc_id_map
+                    .get(&internal_id)
+                    .map(|doc_id| ScoredDocument {
+                        doc_id: doc_id.clone(),
+                        score,
+                    })
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit);
         results
     }
@@ -300,7 +307,11 @@ pub fn compute_rrf(
         .map(|(doc_id, score)| ScoredDocument { doc_id, score })
         .collect();
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(limit);
     results
 }
@@ -332,7 +343,10 @@ pub fn fuse_rrf_multi(lists: &[&[ScoredHit]], k: f32, limit: usize) -> Vec<Score
     let mut results: Vec<ScoredHit> = rrf_scores
         .into_iter()
         .map(|(doc_id, score)| {
-            let (source, ts) = hit_metadata.get(&doc_id).cloned().unwrap_or((HitSource::Bm25, None));
+            let (source, ts) = hit_metadata
+                .get(&doc_id)
+                .cloned()
+                .unwrap_or((HitSource::Bm25, None));
             ScoredHit {
                 doc_id,
                 score,
@@ -342,7 +356,11 @@ pub fn fuse_rrf_multi(lists: &[&[ScoredHit]], k: f32, limit: usize) -> Vec<Score
         })
         .collect();
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(limit);
     results
 }
@@ -366,7 +384,11 @@ pub fn apply_temporal_boost(hits: &mut [ScoredHit], tau_days: f32) {
     }
 
     // Re-sort after boosting
-    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 }
 
 /// Get the default minimum dense hits threshold (for external use)
@@ -468,7 +490,9 @@ pub fn rebuild_bm25_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<usize
 
         if let Ok(content) = fs::read_to_string(&path) {
             for line in content.lines() {
-                if let Ok(entry) = serde_json::from_str::<crate::interactions::InteractionEntry>(line) {
+                if let Ok(entry) =
+                    serde_json::from_str::<crate::interactions::InteractionEntry>(line)
+                {
                     // Use timestamp as doc_id for uniqueness
                     let doc_id = entry.ts.to_rfc3339();
                     index.add_document(&doc_id, &entry.content);
@@ -645,15 +669,33 @@ mod tests {
     #[test]
     fn test_rrf_fusion() {
         let bm25_results = vec![
-            ScoredDocument { doc_id: "A".to_string(), score: 10.0 },
-            ScoredDocument { doc_id: "B".to_string(), score: 8.0 },
-            ScoredDocument { doc_id: "C".to_string(), score: 5.0 },
+            ScoredDocument {
+                doc_id: "A".to_string(),
+                score: 10.0,
+            },
+            ScoredDocument {
+                doc_id: "B".to_string(),
+                score: 8.0,
+            },
+            ScoredDocument {
+                doc_id: "C".to_string(),
+                score: 5.0,
+            },
         ];
 
         let dense_results = vec![
-            ScoredDocument { doc_id: "B".to_string(), score: 0.9 },
-            ScoredDocument { doc_id: "D".to_string(), score: 0.8 },
-            ScoredDocument { doc_id: "A".to_string(), score: 0.7 },
+            ScoredDocument {
+                doc_id: "B".to_string(),
+                score: 0.9,
+            },
+            ScoredDocument {
+                doc_id: "D".to_string(),
+                score: 0.8,
+            },
+            ScoredDocument {
+                doc_id: "A".to_string(),
+                score: 0.7,
+            },
         ];
 
         let fused = compute_rrf(&bm25_results, &dense_results, 10);
@@ -671,8 +713,14 @@ mod tests {
     #[test]
     fn test_rrf_single_list() {
         let bm25_results = vec![
-            ScoredDocument { doc_id: "A".to_string(), score: 10.0 },
-            ScoredDocument { doc_id: "B".to_string(), score: 8.0 },
+            ScoredDocument {
+                doc_id: "A".to_string(),
+                score: 10.0,
+            },
+            ScoredDocument {
+                doc_id: "B".to_string(),
+                score: 8.0,
+            },
         ];
 
         let dense_results: Vec<ScoredDocument> = vec![];
@@ -688,12 +736,32 @@ mod tests {
     fn test_fuse_rrf_multi_two_lists() {
         let now = chrono::Utc::now();
         let bm25_hits = vec![
-            ScoredHit { doc_id: "A".to_string(), score: 10.0, source: HitSource::Bm25, ts: Some(now) },
-            ScoredHit { doc_id: "B".to_string(), score: 8.0, source: HitSource::Bm25, ts: Some(now) },
+            ScoredHit {
+                doc_id: "A".to_string(),
+                score: 10.0,
+                source: HitSource::Bm25,
+                ts: Some(now),
+            },
+            ScoredHit {
+                doc_id: "B".to_string(),
+                score: 8.0,
+                source: HitSource::Bm25,
+                ts: Some(now),
+            },
         ];
         let dense_hits = vec![
-            ScoredHit { doc_id: "B".to_string(), score: 0.9, source: HitSource::DenseInteraction, ts: Some(now) },
-            ScoredHit { doc_id: "C".to_string(), score: 0.8, source: HitSource::DenseInteraction, ts: Some(now) },
+            ScoredHit {
+                doc_id: "B".to_string(),
+                score: 0.9,
+                source: HitSource::DenseInteraction,
+                ts: Some(now),
+            },
+            ScoredHit {
+                doc_id: "C".to_string(),
+                score: 0.8,
+                source: HitSource::DenseInteraction,
+                ts: Some(now),
+            },
         ];
 
         let fused = fuse_rrf_multi(&[&bm25_hits, &dense_hits], 60.0, 10);
@@ -708,8 +776,18 @@ mod tests {
     fn test_fuse_rrf_multi_single_list() {
         let now = chrono::Utc::now();
         let hits = vec![
-            ScoredHit { doc_id: "X".to_string(), score: 5.0, source: HitSource::Bm25, ts: Some(now) },
-            ScoredHit { doc_id: "Y".to_string(), score: 3.0, source: HitSource::Bm25, ts: Some(now) },
+            ScoredHit {
+                doc_id: "X".to_string(),
+                score: 5.0,
+                source: HitSource::Bm25,
+                ts: Some(now),
+            },
+            ScoredHit {
+                doc_id: "Y".to_string(),
+                score: 3.0,
+                source: HitSource::Bm25,
+                ts: Some(now),
+            },
         ];
 
         let fused = fuse_rrf_multi(&[&hits], 60.0, 10);
@@ -721,9 +799,24 @@ mod tests {
     #[test]
     fn test_fuse_rrf_multi_three_lists() {
         let now = chrono::Utc::now();
-        let list1 = vec![ScoredHit { doc_id: "A".to_string(), score: 1.0, source: HitSource::Bm25, ts: Some(now) }];
-        let list2 = vec![ScoredHit { doc_id: "A".to_string(), score: 1.0, source: HitSource::DenseInteraction, ts: Some(now) }];
-        let list3 = vec![ScoredHit { doc_id: "A".to_string(), score: 1.0, source: HitSource::DenseTopicChunk, ts: Some(now) }];
+        let list1 = vec![ScoredHit {
+            doc_id: "A".to_string(),
+            score: 1.0,
+            source: HitSource::Bm25,
+            ts: Some(now),
+        }];
+        let list2 = vec![ScoredHit {
+            doc_id: "A".to_string(),
+            score: 1.0,
+            source: HitSource::DenseInteraction,
+            ts: Some(now),
+        }];
+        let list3 = vec![ScoredHit {
+            doc_id: "A".to_string(),
+            score: 1.0,
+            source: HitSource::DenseTopicChunk,
+            ts: Some(now),
+        }];
 
         let fused = fuse_rrf_multi(&[&list1, &list2, &list3], 60.0, 10);
 
@@ -741,8 +834,18 @@ mod tests {
         let month_ago = now - chrono::Duration::days(30);
 
         let mut hits = vec![
-            ScoredHit { doc_id: "old".to_string(), score: 1.0, source: HitSource::Bm25, ts: Some(month_ago) },
-            ScoredHit { doc_id: "new".to_string(), score: 1.0, source: HitSource::Bm25, ts: Some(hour_ago) },
+            ScoredHit {
+                doc_id: "old".to_string(),
+                score: 1.0,
+                source: HitSource::Bm25,
+                ts: Some(month_ago),
+            },
+            ScoredHit {
+                doc_id: "new".to_string(),
+                score: 1.0,
+                source: HitSource::Bm25,
+                ts: Some(hour_ago),
+            },
         ];
 
         apply_temporal_boost(&mut hits, 15.0); // 15-day half-life
@@ -756,8 +859,18 @@ mod tests {
     fn test_temporal_boost_no_timestamp() {
         let now = chrono::Utc::now();
         let mut hits = vec![
-            ScoredHit { doc_id: "with_ts".to_string(), score: 1.0, source: HitSource::Bm25, ts: Some(now) },
-            ScoredHit { doc_id: "no_ts".to_string(), score: 1.0, source: HitSource::Bm25, ts: None },
+            ScoredHit {
+                doc_id: "with_ts".to_string(),
+                score: 1.0,
+                source: HitSource::Bm25,
+                ts: Some(now),
+            },
+            ScoredHit {
+                doc_id: "no_ts".to_string(),
+                score: 1.0,
+                source: HitSource::Bm25,
+                ts: None,
+            },
         ];
 
         apply_temporal_boost(&mut hits, 15.0);

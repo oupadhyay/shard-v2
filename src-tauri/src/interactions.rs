@@ -1,3 +1,7 @@
+use crate::retrieval::{
+    apply_temporal_boost, fuse_rrf_multi, load_bm25_index, min_dense_hits, rrf_k_default,
+    temporal_tau_days, HitSource, ScoredHit,
+};
 /**
  * Interactions module - Logs full conversation history and provides RAG retrieval
  *
@@ -6,17 +10,12 @@
  * - Generates embeddings using gemini-embedding-001
  * - Performs semantic search for context retrieval
  */
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
-use crate::retrieval::{
-    apply_temporal_boost, fuse_rrf_multi, load_bm25_index, min_dense_hits, rrf_k_default,
-    temporal_tau_days, HitSource, ScoredHit,
-};
 
 // ============================================================================
 // Data Types
@@ -148,8 +147,7 @@ pub async fn log_interaction<R: Runtime>(
     let json = serde_json::to_string(&entry)
         .map_err(|e| format!("Failed to serialize interaction: {}", e))?;
 
-    writeln!(writer, "{}", json)
-        .map_err(|e| format!("Failed to write interaction: {}", e))?;
+    writeln!(writer, "{}", json).map_err(|e| format!("Failed to write interaction: {}", e))?;
 
     // Also update BM25 index for hybrid retrieval
     let doc_id = entry.ts.to_rfc3339();
@@ -212,7 +210,11 @@ pub fn search_interactions<R: Runtime>(
     results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
     // Return top K
-    Ok(results.into_iter().take(limit).map(|(_, entry)| entry).collect())
+    Ok(results
+        .into_iter()
+        .take(limit)
+        .map(|(_, entry)| entry)
+        .collect())
 }
 
 /// Hybrid search using RRF to fuse BM25 and dense retrieval results

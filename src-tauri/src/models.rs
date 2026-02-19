@@ -5,7 +5,6 @@
  * their providers, and capabilities. The frontend consumes this via the
  * `get_available_models` Tauri command.
  */
-
 use serde::{Deserialize, Serialize};
 
 /// Provider identifies which API endpoint handles this model
@@ -46,7 +45,6 @@ pub struct ModelInfo {
     /// Whether this model can directly process images (vision-capable)
     pub supports_vision: bool,
 }
-
 
 // ============================================================================
 // CHAT MODELS - Main chat dropdown

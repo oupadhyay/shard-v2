@@ -58,7 +58,8 @@ pub fn to_multimodal_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value
 
                     // Add optional fields
                     if let Some(tool_calls) = &msg.tool_calls {
-                        message["tool_calls"] = serde_json::to_value(tool_calls).unwrap_or_default();
+                        message["tool_calls"] =
+                            serde_json::to_value(tool_calls).unwrap_or_default();
                     }
                     if let Some(tool_call_id) = &msg.tool_call_id {
                         message["tool_call_id"] = serde_json::json!(tool_call_id);
@@ -91,7 +92,10 @@ pub fn to_multimodal_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value
 /// Check if any message in the conversation contains images
 pub fn has_images(messages: &[ChatMessage]) -> bool {
     messages.iter().any(|msg| {
-        msg.images.as_ref().map(|imgs| !imgs.is_empty()).unwrap_or(false)
+        msg.images
+            .as_ref()
+            .map(|imgs| !imgs.is_empty())
+            .unwrap_or(false)
     })
 }
 

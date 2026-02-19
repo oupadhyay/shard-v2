@@ -1,7 +1,7 @@
 // Gemini API utilities - message construction and response parsing
 
-use serde_json::{json, Value};
 use super::types::*;
+use serde_json::{json, Value};
 
 /// Events emitted during streaming responses
 pub enum AgentEvent {
@@ -153,7 +153,10 @@ pub fn parse_gemini_chunk(
                 events.push(AgentEvent::ResponseChunk(text));
             }
         }
-        GeminiPart::FunctionCall { function_call, thought_signature } => {
+        GeminiPart::FunctionCall {
+            function_call,
+            thought_signature,
+        } => {
             tool_calls.push(GeminiFunctionCallWithSignature {
                 function_call,
                 thought_signature,
