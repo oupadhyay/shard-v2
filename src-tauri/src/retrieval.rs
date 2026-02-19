@@ -569,16 +569,15 @@ mod tests {
 
     #[test]
     fn test_tokenize_basic() {
-        // "hello", "world", "test" are all in the stop_words English list,
-        // so this input produces no tokens after stopword filtering.
-        let tokens = tokenize("Hello, World! This is a TEST.");
-        assert!(tokens.is_empty(), "All words in this input are stopwords: {:?}", tokens);
+        // Unambiguous stopwords should produce no tokens
+        let tokens = tokenize("the and is a");
+        assert!(tokens.is_empty(), "Pure stopwords should produce empty output: {:?}", tokens);
 
-        // Verify with content that survives filtering + stemming
+        // Content words survive filtering + stemming
         let tokens2 = tokenize("The quick brown foxes jumped lazily.");
         assert!(tokens2.contains(&"quick".to_string()));
         assert!(tokens2.contains(&"brown".to_string()));
-        // Stopwords removed
+        // Common stopwords are removed
         assert!(!tokens2.contains(&"the".to_string()));
     }
 
@@ -596,20 +595,42 @@ mod tests {
     #[test]
     fn test_tokenize_unicode() {
         let tokens = tokenize("Café 🚀 and some 漢字");
+        // Accented latin survives
         assert!(tokens.contains(&"café".to_string()));
-        // unicode_words() filters out emoji; 漢字 is 2 chars but may be
-        // split by unicode_words depending on segmentation rules.
-        // The key invariant: emoji is excluded, accented latin survives.
+        // Emoji is excluded
         assert!(!tokens.contains(&"🚀".to_string()));
+        // CJK regression guard: at least one CJK-derived token should survive.
+        // If unicode_words() splits 漢字 into single chars, the >1 char filter
+        // drops them — that's a known limitation worth detecting.
+        let has_cjk = tokens.iter().any(|t| t.chars().any(|c| c > '\u{4E00}' && c < '\u{9FFF}'));
+        if !has_cjk {
+            eprintln!("WARNING: CJK tokens dropped by tokenizer — retrieval for CJK text is degraded");
+        }
     }
 
     #[test]
     fn test_tokenize_code_preservation() {
-        // "let" is a stopword; Porter stemmer: "my_variable_name" → "my_variable_nam"
         let tokens = tokenize("let my_variable_name = camelCaseToken;");
-        assert!(!tokens.contains(&"let".to_string()), "'let' should be filtered as stopword");
-        assert!(tokens.contains(&"my_variable_nam".to_string()));
-        assert!(tokens.contains(&"camelcasetoken".to_string()));
+
+        // snake_case identifiers are preserved as single tokens (lowercased + stemmed)
+        let expected_stem = STEMMER.with(|s| s.stem("my_variable_name").to_string());
+        assert!(
+            tokens.contains(&expected_stem),
+            "snake_case identifier should survive as single stemmed token, expected '{}', got {:?}",
+            expected_stem, tokens
+        );
+
+        // camelCase identifiers are lowercased as a single token
+        assert!(
+            tokens.contains(&"camelcasetoken".to_string()),
+            "camelCase identifier should be lowercased as single token, got {:?}", tokens
+        );
+
+        // Common programming keywords filtered as stopwords
+        assert!(
+            !tokens.contains(&"let".to_string()),
+            "'let' should be filtered (stopword), got {:?}", tokens
+        );
     }
 
     #[test]

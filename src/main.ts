@@ -104,9 +104,9 @@ async function handleInput(skipUi = false) {
 
   state.isProcessing = true;
 
-  // Capture images for API call BEFORE any clearing
-  // For normal sends: use lastAttachedImages (set at line 77 before clearing)
-  // For resends: attachedImages was restored by caller
+  // Capture images for API call BEFORE any clearing.
+  // Normal sends: use lastAttachedImages (snapshot taken above before clearing).
+  // Resends (skipUi): attachedImages was restored by the caller.
   const imagesToSend = skipUi ? [...state.attachedImages] : [...state.lastAttachedImages];
 
   // Reset web search container for new response
