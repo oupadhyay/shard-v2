@@ -69,8 +69,8 @@ async function handleInput(skipUi = false) {
   const text = inputField.value.trim();
   if ((!text && !skipUi) || state.isProcessing) return;
 
-  // Reset fallback notification flag for new turn
-  state.fallbackShownThisTurn = false;
+  // Reset per-turn state
+  state.resetForNewTurn();
 
   // If skipping UI, we use the text passed in or the input value (which should be set by caller)
   // But actually, if skipUi is true, we expect the caller to have set inputField.value.
@@ -112,8 +112,6 @@ async function handleInput(skipUi = false) {
   // Reset web search container for new response
   resetWebSearchContainer();
 
-  // Reset thinking block for new response (enables merging within this turn)
-  state.currentThinkingBlock = null;
 
   // Clear KaTeX errors for new response (for auto-retry tracking)
   clearKatexErrors();
