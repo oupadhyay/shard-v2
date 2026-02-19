@@ -6,6 +6,7 @@ import "katex/dist/katex.min.css";
 
 // Internal modules
 import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, AppConfig } from "./types";
+import { ChatState } from "./state";
 import {
   md,
   clearKatexErrors,
@@ -41,14 +42,8 @@ const trashBtn = document.getElementById("trash-btn") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
 const stopBtn = document.getElementById("stop-btn") as HTMLButtonElement;
 
-// State
-let isProcessing = false;
-let attachedImages: AttachedImage[] = [];
-let lastUserMessage = "";
-let lastAttachedImages: AttachedImage[] = [];
-let isCancelled = false;
-let fallbackShownThisTurn = false; // Prevent duplicate "Moving to OpenRouter" messages
-let currentThinkingBlock: HTMLElement | null = null; // Session-based thinking block for merging
+// State (centralized in ChatState – see src/state.ts)
+const state = new ChatState();
 
 // Open external links in default browser
 document.addEventListener("click", (e) => {
@@ -72,22 +67,22 @@ function addMessage(
 // Helper: Handle Input
 async function handleInput(skipUi = false) {
   const text = inputField.value.trim();
-  if ((!text && !skipUi) || isProcessing) return;
+  if ((!text && !skipUi) || state.isProcessing) return;
 
   // Reset fallback notification flag for new turn
-  fallbackShownThisTurn = false;
+  state.fallbackShownThisTurn = false;
 
   // If skipping UI, we use the text passed in or the input value (which should be set by caller)
   // But actually, if skipUi is true, we expect the caller to have set inputField.value.
   // Let's stick to the plan: caller sets inputField.value.
 
   if (!skipUi) {
-    lastUserMessage = text;
-    isCancelled = false;
+    state.lastUserMessage = text;
+    state.isCancelled = false;
 
     // Capture current images state before clearing it
-    const currentImages = [...attachedImages];
-    lastAttachedImages = [...attachedImages]; // Save for resend
+    const currentImages = [...state.attachedImages];
+    state.lastAttachedImages = [...state.attachedImages]; // Save for resend
 
     inputField.value = "";
     inputField.style.height = "auto"; // Reset height
@@ -95,30 +90,30 @@ async function handleInput(skipUi = false) {
     addMessage("user", text, currentImages);
 
     // Clear image preview immediately to prevent duplication
-    attachedImages = [];
+    state.attachedImages = [];
     const container = document.getElementById("image-preview-container");
     if (container) container.innerHTML = "";
   } else {
     // Resending: reset cancelled state
-    isCancelled = false;
+    state.isCancelled = false;
     // We don't clear inputField here because we assume it was set for the logic but we don't want to clear it if it wasn't used?
     // Actually, handleInput clears it.
     inputField.value = "";
     inputField.style.height = "auto"; // Reset height
   }
 
-  isProcessing = true;
+  state.isProcessing = true;
 
   // Capture images for API call BEFORE any clearing
   // For normal sends: use lastAttachedImages (set at line 77 before clearing)
   // For resends: attachedImages was restored by caller
-  const imagesToSend = skipUi ? [...attachedImages] : [...lastAttachedImages];
+  const imagesToSend = skipUi ? [...state.attachedImages] : [...state.lastAttachedImages];
 
   // Reset web search container for new response
   resetWebSearchContainer();
 
   // Reset thinking block for new response (enables merging within this turn)
-  currentThinkingBlock = null;
+  state.currentThinkingBlock = null;
 
   // Clear KaTeX errors for new response (for auto-retry tracking)
   clearKatexErrors();
@@ -131,7 +126,7 @@ async function handleInput(skipUi = false) {
 
   try {
     // Include image data or OCR text based on model
-    const messagePayload: ChatMessagePayload = { message: skipUi ? lastUserMessage : text };
+    const messagePayload: ChatMessagePayload = { message: skipUi ? state.lastUserMessage : text };
 
     if (imagesToSend.length > 0) {
       // For OpenRouter models (don't support images), prepend OCR text
@@ -183,10 +178,10 @@ async function handleInput(skipUi = false) {
     // This catch handles network/Tauri invoke errors only
     console.error("Chat error:", error);
   } finally {
-    isProcessing = false;
+    state.isProcessing = false;
     stopBtn.classList.remove("loading"); // Remove loading state
 
-    if (!isCancelled) {
+    if (!state.isCancelled) {
       stopBtn.style.display = "none"; // Hide Stop button only if NOT cancelled
     }
 
@@ -199,7 +194,7 @@ async function handleInput(skipUi = false) {
     }
 
     // Check for KaTeX errors (parse errors + unrendered LaTeX) and trigger retry if needed
-    if (!isCancelled) {
+    if (!state.isCancelled) {
       const parseErrors = getKatexErrors();
 
       // Find the last assistant message by iterating from the end
@@ -249,12 +244,12 @@ stopBtn.addEventListener("click", async () => {
     }
 
     // Restore image state
-    attachedImages = [...lastAttachedImages];
+    state.attachedImages = [...state.lastAttachedImages];
 
     // We don't need to set inputField.value if we use lastUserMessage inside handleInput
     // But handleInput reads inputField.value.
     // Let's set it so handleInput logic works, but pass skipUi=true
-    inputField.value = lastUserMessage;
+    inputField.value = state.lastUserMessage;
 
     // Sync backend history: remove the last turn so we don't duplicate
     try {
@@ -272,8 +267,8 @@ stopBtn.addEventListener("click", async () => {
   try {
     await invoke("cancel_current_stream");
     console.log("Cancellation requested");
-    isCancelled = true;
-    isProcessing = false;
+    state.isCancelled = true;
+    state.isProcessing = false;
 
     // Switch to Resend mode
     stopBtn.classList.remove("loading");
@@ -296,10 +291,10 @@ inputField.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     handleInput();
-  } else if (e.key === "Backspace" && inputField.value === "" && attachedImages.length > 0) {
+  } else if (e.key === "Backspace" && inputField.value === "" && state.attachedImages.length > 0) {
     e.preventDefault();
     // Remove last image
-    attachedImages.pop();
+    state.attachedImages.pop();
     const container = document.getElementById("image-preview-container");
     if (container) {
       const lastPreview = container.lastElementChild;
@@ -332,7 +327,7 @@ inputField.addEventListener("paste", async (e) => {
       const mimeType = file.type;
 
       // Predict index (since showImagePreview pushes)
-      const imageIndex = attachedImages.length;
+      const imageIndex = state.attachedImages.length;
 
       // Define the async process immediately so the promise exists synchronously
       const ocrTask = async () => {
@@ -346,8 +341,8 @@ inputField.addEventListener("paste", async (e) => {
           });
 
           // Update base64 for Gemini (side effect)
-          if (attachedImages[imageIndex]) {
-            attachedImages[imageIndex].base64 = base64;
+          if (state.attachedImages[imageIndex]) {
+            state.attachedImages[imageIndex].base64 = base64;
           }
 
           // 2. Resize
@@ -381,8 +376,8 @@ inputField.addEventListener("paste", async (e) => {
       // Add side-effect to update ocrText when done and remove loading state
       if (imageData.ocrPromise) {
         imageData.ocrPromise.then(text => {
-          if (attachedImages[imageIndex]) {
-            attachedImages[imageIndex].ocrText = text;
+          if (state.attachedImages[imageIndex]) {
+            state.attachedImages[imageIndex].ocrText = text;
           }
           // Remove loading indicator from preview
           const container = document.getElementById("image-preview-container");
@@ -401,8 +396,8 @@ inputField.addEventListener("paste", async (e) => {
 function showImagePreview(imageData: AttachedImage) {
   console.log("[showImagePreview] Called with mimeType:", imageData.mimeType);
   // Add to images array
-  attachedImages.push(imageData);
-  const index = attachedImages.length - 1;
+  state.attachedImages.push(imageData);
+  const index = state.attachedImages.length - 1;
 
   let container = document.getElementById("image-preview-container");
   if (!container) {
@@ -435,7 +430,7 @@ function showImagePreview(imageData: AttachedImage) {
   // Add close handler
   preview.querySelector(".image-close-btn")?.addEventListener("click", () => {
     const idx = parseInt(preview.dataset.index || "0");
-    attachedImages.splice(idx, 1);
+    state.attachedImages.splice(idx, 1);
     preview.remove();
     // Re-index remaining previews
     const remaining = container?.querySelectorAll(".image-preview") || [];
@@ -464,18 +459,18 @@ ocrBtn.addEventListener("click", async () => {
         ocrText: "[Processing...]",
         ocrPromise,
       });
-      const index = attachedImages.length - 1;
+      const index = state.attachedImages.length - 1;
 
       ocrPromise.then(text => {
         console.log("[OCR] Screenshot text:", text.substring(0, 50) + "...");
-        if (attachedImages[index]) attachedImages[index].ocrText = text;
+        if (state.attachedImages[index]) state.attachedImages[index].ocrText = text;
         // Remove loading indicator
         const container = document.getElementById("image-preview-container");
         const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
         if (preview) preview.classList.remove("ocr-processing");
       }).catch(err => {
         console.error("OCR failed:", err);
-        if (attachedImages[index]) attachedImages[index].ocrText = "[OCR failed]";
+        if (state.attachedImages[index]) state.attachedImages[index].ocrText = "[OCR failed]";
         // Remove loading indicator
         const container = document.getElementById("image-preview-container");
         const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
@@ -516,18 +511,18 @@ listen("trigger-ocr", async () => {
         ocrText: "[Processing...]",
         ocrPromise,
       });
-      const index = attachedImages.length - 1;
+      const index = state.attachedImages.length - 1;
 
       ocrPromise.then(text => {
         console.log("[OCR] Screenshot text:", text.substring(0, 50) + "...");
-        if (attachedImages[index]) attachedImages[index].ocrText = text;
+        if (state.attachedImages[index]) state.attachedImages[index].ocrText = text;
         // Remove loading indicator
         const container = document.getElementById("image-preview-container");
         const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
         if (preview) preview.classList.remove("ocr-processing");
       }).catch(err => {
         console.error("OCR failed:", err);
-        if (attachedImages[index]) attachedImages[index].ocrText = "[OCR failed]";
+        if (state.attachedImages[index]) state.attachedImages[index].ocrText = "[OCR failed]";
         // Remove loading indicator
         const container = document.getElementById("image-preview-container");
         const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
@@ -787,7 +782,7 @@ listen<string>("agent-retry", (event) => {
 
     // Reset state for new response
     resetWebSearchContainer();
-    currentThinkingBlock = null;
+    state.currentThinkingBlock = null;
     clearKatexErrors();
 
     // Show retrying indicator
@@ -948,22 +943,22 @@ listen<string>("agent-reasoning-chunk", (event) => {
   console.log("Received reasoning chunk:", content);
 
   // Use the session thinking block, or create one if needed
-  if (!currentThinkingBlock || !chatArea.contains(currentThinkingBlock)) {
-    currentThinkingBlock = document.createElement("div");
-    currentThinkingBlock.className = "message thinking-output";
-    chatArea.appendChild(currentThinkingBlock);
+  if (!state.currentThinkingBlock || !chatArea.contains(state.currentThinkingBlock)) {
+    state.currentThinkingBlock = document.createElement("div");
+    state.currentThinkingBlock.className = "message thinking-output";
+    chatArea.appendChild(state.currentThinkingBlock);
   }
 
   // Append content to the session block
-  let thinkingText = currentThinkingBlock.getAttribute("data-thinking") || "";
+  let thinkingText = state.currentThinkingBlock.getAttribute("data-thinking") || "";
   thinkingText += content;
-  currentThinkingBlock.setAttribute("data-thinking", thinkingText);
+  state.currentThinkingBlock.setAttribute("data-thinking", thinkingText);
 
   // Render as collapsible thinking block with Markdown (CLOSED by default to avoid flashing)
   // Summary shows "Thinking..." during streaming, completion handlers change to "Thought"
   const trimmedThinking = thinkingText.trimEnd();
 
-  currentThinkingBlock.innerHTML = `
+  state.currentThinkingBlock.innerHTML = `
         <details class="thought-block">
           <summary>Thinking...</summary>
           <div class="thought-content markdown-body">${DOMPurify.sanitize(md.render(preprocessMarkdown(trimmedThinking)))}</div>
@@ -1112,8 +1107,8 @@ listen<string>("agent-error", (event) => {
     }
 
     // Restore last images and resend
-    attachedImages = [...lastAttachedImages];
-    inputField.value = lastUserMessage;
+    state.attachedImages = [...state.lastAttachedImages];
+    inputField.value = state.lastUserMessage;
     handleInput(true);
   });
 
@@ -1121,7 +1116,7 @@ listen<string>("agent-error", (event) => {
   chatArea.scrollTop = chatArea.scrollHeight;
 
   // Reset processing state
-  isProcessing = false;
+  state.isProcessing = false;
   stopBtn.classList.remove("loading");
   stopBtn.style.display = "none";
 });
@@ -1129,11 +1124,11 @@ listen<string>("agent-error", (event) => {
 // Listen for provider fallback notifications (rate limit → OpenRouter)
 listen<string>("agent-fallback", (event) => {
   // Only show the fallback message once per conversation turn
-  if (fallbackShownThisTurn) {
+  if (state.fallbackShownThisTurn) {
     console.log("[Fallback] Skipping duplicate notification");
     return;
   }
-  fallbackShownThisTurn = true;
+  state.fallbackShownThisTurn = true;
 
   try {
     const data = JSON.parse(event.payload);
@@ -1240,8 +1235,7 @@ interface ScreenContext {
   ocr_text: string;
 }
 
-let suggestionTimeout: ReturnType<typeof setTimeout> | null = null;
-let currentScreenContextImage: { base64: string; mimeType: string; ocrText: string } | null = null;
+
 
 // Create suggestions container (positioned above bottom-bar)
 const suggestionsContainer = document.createElement("div");
@@ -1254,12 +1248,12 @@ inputField.addEventListener("input", () => {
   hideSuggestions();
 });
 
-let currentSuggestions: string[] = []; // Store full prompts
+
 
 function showSuggestions(suggestions: string[]) {
   if (suggestions.length === 0) return;
 
-  currentSuggestions = suggestions; // Store for click handler
+  state.currentSuggestions = suggestions; // Store for click handler
 
   // Generate short display names (max 30 chars) with full prompt in title
   suggestionsContainer.innerHTML = suggestions.map((s, i) => {
@@ -1275,14 +1269,14 @@ function showSuggestions(suggestions: string[]) {
     pill.addEventListener("click", (e) => {
       e.stopPropagation(); // Prevent click-to-hide
       const index = parseInt((pill as HTMLElement).dataset.index || "0", 10);
-      inputField.value = currentSuggestions[index] || pill.textContent || "";
+      inputField.value = state.currentSuggestions[index] || pill.textContent || "";
 
       // Attach the screen context image to chat (if available)
-      if (currentScreenContextImage) {
+      if (state.currentScreenContextImage) {
         showImagePreview({
-          base64: currentScreenContextImage.base64,
-          mimeType: currentScreenContextImage.mimeType,
-          ocrText: currentScreenContextImage.ocrText,
+          base64: state.currentScreenContextImage.base64,
+          mimeType: state.currentScreenContextImage.mimeType,
+          ocrText: state.currentScreenContextImage.ocrText,
         });
       }
 
@@ -1305,8 +1299,8 @@ function showSuggestions(suggestions: string[]) {
   }, 50);
 
   // Auto-hide after 15 seconds
-  if (suggestionTimeout) clearTimeout(suggestionTimeout);
-  suggestionTimeout = setTimeout(hideSuggestions, 15000);
+  if (state.suggestionTimeout) clearTimeout(state.suggestionTimeout);
+  state.suggestionTimeout = setTimeout(hideSuggestions, 15000);
 }
 
 function showLoadingChips() {
@@ -1328,9 +1322,9 @@ function showLoadingChips() {
 function hideSuggestions() {
   suggestionsContainer.classList.add("hidden");
   suggestionsContainer.classList.remove("loading");
-  if (suggestionTimeout) {
-    clearTimeout(suggestionTimeout);
-    suggestionTimeout = null;
+  if (state.suggestionTimeout) {
+    clearTimeout(state.suggestionTimeout);
+    state.suggestionTimeout = null;
   }
 }
 
@@ -1338,7 +1332,7 @@ listen<ScreenContext>("screen-context-ready", (event) => {
   console.log("[ScreenContext] Received suggestions:", event.payload);
 
   // Store image for when a suggestion is clicked
-  currentScreenContextImage = {
+  state.currentScreenContextImage = {
     base64: event.payload.image_base64,
     mimeType: event.payload.mime_type,
     ocrText: event.payload.ocr_text
