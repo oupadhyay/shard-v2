@@ -9,4 +9,5 @@ mod memories_tests;
 pub mod openrouter_tests;
 pub mod prompts_tests;
 mod research_tests;
+mod sessions_tests;
 pub mod tools_tests;

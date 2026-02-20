@@ -4,7 +4,7 @@
 -- Main chunks table (metadata)
 CREATE TABLE IF NOT EXISTS chunks (
     id TEXT PRIMARY KEY,
-    source_type TEXT NOT NULL CHECK(source_type IN ('topic', 'insight')),
+    source_type TEXT NOT NULL CHECK(source_type IN ('topic', 'insight', 'session')),
     source_name TEXT NOT NULL,
     heading TEXT,
     text TEXT NOT NULL,

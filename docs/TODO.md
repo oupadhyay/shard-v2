@@ -29,10 +29,10 @@
 
 ### 3. sqlite-vec for Embedding Storage
 
-- [ ] Replace JSON index files with SQLite database (`memories.sqlite`)
-- [ ] Use `sqlite-vec` extension for vector similarity search
-- [ ] Use FTS5 for BM25 keyword matching (hybrid search in one DB)
-- [ ] Add `embedding_cache` table to avoid re-embedding unchanged content
+- [x] Replace JSON index files with SQLite database (`memories.sqlite`)
+- [x] Use `sqlite-vec` extension for vector similarity search
+- [x] Use FTS5 for BM25 keyword matching (hybrid search in one DB)
+- [x] Add `embedding_cache` table to avoid re-embedding unchanged content
 
 ### 4. Session Memory Hooks + Descriptive Slugs
 
@@ -51,7 +51,7 @@
 
 ## P0: Read Page via Browser Tool
 
-- [ ] Add `open_url` tool to allow Shard to read any URL (HTML/browser?)
+- [ ] Add `open_url` tool to allow Shard to read any URL (HTML/browser/DOM?)
 
 ## P1: Better Screen Context Experience
 

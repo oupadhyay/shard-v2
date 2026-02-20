@@ -188,6 +188,7 @@ impl VectorStore {
         let source_type_str = match chunk.source_type {
             SourceType::Topic => "topic",
             SourceType::Insight => "insight",
+            SourceType::Session => "session",
         };
         let content_hash = Self::content_hash(&chunk.text);
 
@@ -271,6 +272,7 @@ impl VectorStore {
         let source_type_str = match source_type {
             SourceType::Topic => "topic",
             SourceType::Insight => "insight",
+            SourceType::Session => "session",
         };
 
         // Delete from vec0 table using subquery (efficient single-statement delete)
@@ -330,6 +332,7 @@ impl VectorStore {
             let source_type = match source_type_str.as_str() {
                 "topic" => SourceType::Topic,
                 "insight" => SourceType::Insight,
+                "session" => SourceType::Session,
                 other => {
                     return Err(rusqlite::Error::FromSqlConversionFailure(
                         1,
@@ -404,6 +407,7 @@ impl VectorStore {
             let source_type = match source_type_str.as_str() {
                 "topic" => SourceType::Topic,
                 "insight" => SourceType::Insight,
+                "session" => SourceType::Session,
                 _ => SourceType::Insight, // Fallback for FTS results if type unknown
             };
 
@@ -481,6 +485,7 @@ impl VectorStore {
             let source_type = match source_type_str.as_str() {
                 "topic" => SourceType::Topic,
                 "insight" => SourceType::Insight,
+                "session" => SourceType::Session,
                 _ => SourceType::Insight,
             };
 
@@ -519,6 +524,8 @@ impl VectorStore {
             let name: String = row.get(1)?;
             let source_type = if type_str == "topic" {
                 SourceType::Topic
+            } else if type_str == "session" {
+                SourceType::Session
             } else {
                 SourceType::Insight
             };
@@ -762,7 +769,7 @@ mod tests {
         chunk1.source_name = "source_a".to_string();
         store.upsert_chunk(&chunk1).unwrap();
 
-        let mut chunk2 = make_test_chunk("chunk_2", "Content 2", SourceType::Topic);
+        let mut chunk2 = make_test_chunk("chunk_2", "Content 2", SourceType::Session);
         chunk2.source_name = "source_a".to_string();
         store.upsert_chunk(&chunk2).unwrap();
 
@@ -772,11 +779,18 @@ mod tests {
 
         assert_eq!(store.chunk_count().unwrap(), 3);
 
-        // Delete source_a
+        // Delete source_a topics (leaves the Session chunk)
         let deleted = store
             .delete_by_source(SourceType::Topic, "source_a")
             .unwrap();
-        assert_eq!(deleted, 2);
+        assert_eq!(deleted, 1);
+        assert_eq!(store.chunk_count().unwrap(), 2);
+
+        // Delete source_a sessions
+        let deleted = store
+            .delete_by_source(SourceType::Session, "source_a")
+            .unwrap();
+        assert_eq!(deleted, 1);
         assert_eq!(store.chunk_count().unwrap(), 1);
     }
 

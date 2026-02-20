@@ -10,6 +10,7 @@ fn bench_image_sharing(c: &mut Criterion) {
     let data = vec![255u8; size];
 
     let mut group = c.benchmark_group("image_buffer_management");
+    group.noise_threshold(0.15); // High variance on raw memory cloning
 
     group.bench_function("cloning_33mb", |b| {
         b.iter(|| {
@@ -46,6 +47,7 @@ fn bench_memory_caching(c: &mut Criterion) {
     let cached_store = Arc::new(RwLock::new(Some(store.clone())));
 
     let mut group = c.benchmark_group("memory_access");
+    group.noise_threshold(0.15); // Adjust for microsecond-level RwLock contention variance
 
     group.bench_function("rwlock_cache_read", |b| {
         b.iter(|| {
@@ -72,6 +74,7 @@ fn bench_embedding_concurrency(c: &mut Criterion) {
     let mock_delay = Duration::from_millis(10);
 
     let mut group = c.benchmark_group("embedding_concurrency");
+    group.noise_threshold(0.05); // More stable, but network/async scheduling has some noise
 
     group.bench_function("sequential_processing", |b| {
         b.to_async(tokio::runtime::Runtime::new().unwrap())

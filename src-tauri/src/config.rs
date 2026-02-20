@@ -64,8 +64,13 @@ impl ModelProviderConfig {
 impl AppConfig {
     /// Get provider mapping and API key for a model name.
     /// Returns (ProviderConfig, ApiKey)
-    pub fn get_model_provider_config(&self, model: &str, context: &str) -> Result<(ModelProviderConfig, String), String> {
-        let (provider_name, base_url, model_id, reasoning_effort) = if model.contains("(Cerebras)") {
+    pub fn get_model_provider_config(
+        &self,
+        model: &str,
+        context: &str,
+    ) -> Result<(ModelProviderConfig, String), String> {
+        let (provider_name, base_url, model_id, reasoning_effort) = if model.contains("(Cerebras)")
+        {
             let base_model = model.replace(" (Cerebras)", "").trim().to_string();
             let model_id = if base_model.contains("120b") {
                 "gpt-oss-120b".to_string()
@@ -74,7 +79,12 @@ impl AppConfig {
             } else {
                 base_model
             };
-            ("Cerebras", "https://api.cerebras.ai/v1/", model_id, Some("high".to_string()))
+            (
+                "Cerebras",
+                "https://api.cerebras.ai/v1/",
+                model_id,
+                Some("high".to_string()),
+            )
         } else if model.contains("(Groq)") {
             let base_model = model.replace(" (Groq)", "").trim().to_string();
             let model_id = if base_model.contains("120b") {
@@ -84,7 +94,12 @@ impl AppConfig {
             } else {
                 format!("openai/{}", base_model)
             };
-            ("Groq", "https://api.groq.com/openai/v1/", model_id, Some("high".to_string()))
+            (
+                "Groq",
+                "https://api.groq.com/openai/v1/",
+                model_id,
+                Some("high".to_string()),
+            )
         } else {
             let model_id = model
                 .split(" (OpenRouter)")
@@ -92,8 +107,17 @@ impl AppConfig {
                 .unwrap_or(model)
                 .trim()
                 .to_string();
-            let model_id = if model_id.is_empty() { "google/gemma-3-27b-it:free".to_string() } else { model_id };
-            ("OpenRouter", "https://openrouter.ai/api/v1/", model_id, None)
+            let model_id = if model_id.is_empty() {
+                "google/gemma-3-27b-it:free".to_string()
+            } else {
+                model_id
+            };
+            (
+                "OpenRouter",
+                "https://openrouter.ai/api/v1/",
+                model_id,
+                None,
+            )
         };
 
         let key = match provider_name {
@@ -103,13 +127,19 @@ impl AppConfig {
         };
 
         match key {
-            Some(k) => Ok((ModelProviderConfig {
-                base_url: base_url.to_string(),
-                model_id,
-                provider_name: provider_name.to_string(),
-                reasoning_effort,
-            }, k.clone())),
-            None => Err(format!("No {} API key configured for {}", provider_name, context)),
+            Some(k) => Ok((
+                ModelProviderConfig {
+                    base_url: base_url.to_string(),
+                    model_id,
+                    provider_name: provider_name.to_string(),
+                    reasoning_effort,
+                },
+                k.clone(),
+            )),
+            None => Err(format!(
+                "No {} API key configured for {}",
+                provider_name, context
+            )),
         }
     }
 }
@@ -319,7 +349,9 @@ mod tests {
             cerebras_api_key: Some("test-key".to_string()),
             ..Default::default()
         };
-        let (pc, key) = config.get_model_provider_config("gpt-oss-120b (Cerebras)", "test").unwrap();
+        let (pc, key) = config
+            .get_model_provider_config("gpt-oss-120b (Cerebras)", "test")
+            .unwrap();
         assert_eq!(pc.provider_name, "Cerebras");
         assert_eq!(pc.base_url, "https://api.cerebras.ai/v1/");
         assert_eq!(pc.model_id, "gpt-oss-120b");
@@ -333,7 +365,9 @@ mod tests {
             groq_api_key: Some("groq-key".to_string()),
             ..Default::default()
         };
-        let (pc, key) = config.get_model_provider_config("gpt-oss-120b (Groq)", "test").unwrap();
+        let (pc, key) = config
+            .get_model_provider_config("gpt-oss-120b (Groq)", "test")
+            .unwrap();
         assert_eq!(pc.provider_name, "Groq");
         assert_eq!(pc.base_url, "https://api.groq.com/openai/v1/");
         assert_eq!(pc.model_id, "openai/gpt-oss-120b");
@@ -346,7 +380,9 @@ mod tests {
             openrouter_api_key: Some("or-key".to_string()),
             ..Default::default()
         };
-        let (pc, key) = config.get_model_provider_config("google/gemma-3-27b-it:free", "test").unwrap();
+        let (pc, key) = config
+            .get_model_provider_config("google/gemma-3-27b-it:free", "test")
+            .unwrap();
         assert_eq!(pc.provider_name, "OpenRouter");
         assert_eq!(pc.base_url, "https://openrouter.ai/api/v1/");
         assert_eq!(pc.model_id, "google/gemma-3-27b-it:free");
@@ -360,7 +396,9 @@ mod tests {
             cerebras_api_key: Some("key".to_string()),
             ..Default::default()
         };
-        let (pc, _) = config.get_model_provider_config("llama-3.3-70b (Cerebras)", "test").unwrap();
+        let (pc, _) = config
+            .get_model_provider_config("llama-3.3-70b (Cerebras)", "test")
+            .unwrap();
         assert_eq!(pc.model_id, "llama-3.3-70b");
         assert_eq!(pc.provider_name, "Cerebras");
     }
@@ -371,7 +409,9 @@ mod tests {
             cerebras_api_key: Some("key".to_string()),
             ..Default::default()
         };
-        let (pc, _) = config.get_model_provider_config("some-new-model (Cerebras)", "test").unwrap();
+        let (pc, _) = config
+            .get_model_provider_config("some-new-model (Cerebras)", "test")
+            .unwrap();
         assert_eq!(pc.model_id, "some-new-model");
     }
 
@@ -381,7 +421,9 @@ mod tests {
             groq_api_key: Some("key".to_string()),
             ..Default::default()
         };
-        let (pc, _) = config.get_model_provider_config("gpt-oss-20b (Groq)", "test").unwrap();
+        let (pc, _) = config
+            .get_model_provider_config("gpt-oss-20b (Groq)", "test")
+            .unwrap();
         assert_eq!(pc.model_id, "openai/gpt-oss-20b");
     }
 
@@ -391,7 +433,9 @@ mod tests {
             groq_api_key: Some("key".to_string()),
             ..Default::default()
         };
-        let (pc, _) = config.get_model_provider_config("llama-4-scout (Groq)", "test").unwrap();
+        let (pc, _) = config
+            .get_model_provider_config("llama-4-scout (Groq)", "test")
+            .unwrap();
         assert_eq!(pc.model_id, "openai/llama-4-scout");
     }
 
@@ -401,7 +445,9 @@ mod tests {
             openrouter_api_key: Some("key".to_string()),
             ..Default::default()
         };
-        let (pc, _) = config.get_model_provider_config("google/gemma-3-27b-it:free (OpenRouter)", "test").unwrap();
+        let (pc, _) = config
+            .get_model_provider_config("google/gemma-3-27b-it:free (OpenRouter)", "test")
+            .unwrap();
         assert_eq!(pc.model_id, "google/gemma-3-27b-it:free");
     }
 
@@ -419,7 +465,9 @@ mod tests {
     #[test]
     fn test_missing_api_key_error() {
         let config = AppConfig::default();
-        let err = config.get_model_provider_config("gpt-oss-120b (Cerebras)", "main chat").unwrap_err();
+        let err = config
+            .get_model_provider_config("gpt-oss-120b (Cerebras)", "main chat")
+            .unwrap_err();
         assert!(err.contains("Cerebras"));
         assert!(err.contains("main chat"));
     }
@@ -427,7 +475,9 @@ mod tests {
     #[test]
     fn test_missing_groq_key_error() {
         let config = AppConfig::default();
-        let err = config.get_model_provider_config("gpt-oss-120b (Groq)", "background jobs").unwrap_err();
+        let err = config
+            .get_model_provider_config("gpt-oss-120b (Groq)", "background jobs")
+            .unwrap_err();
         assert!(err.contains("Groq"));
         assert!(err.contains("background jobs"));
     }
@@ -435,7 +485,9 @@ mod tests {
     #[test]
     fn test_missing_openrouter_key_error() {
         let config = AppConfig::default();
-        let err = config.get_model_provider_config("some-model", "main chat").unwrap_err();
+        let err = config
+            .get_model_provider_config("some-model", "main chat")
+            .unwrap_err();
         assert!(err.contains("OpenRouter"));
     }
 }

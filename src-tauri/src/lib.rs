@@ -21,6 +21,7 @@ mod models;
 mod prompts;
 pub mod retrieval;
 mod secrets;
+pub mod sessions;
 mod tools;
 pub mod vector_store;
 
@@ -76,17 +77,15 @@ struct OcrResult {
 #[tauri::command]
 async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String> {
     // Wrap all blocking I/O in spawn_blocking to avoid starving the async executor
-    let result = tokio::task::spawn_blocking(move || {
-        perform_ocr_capture_blocking()
-    })
-    .await
-    .map_err(|e| {
-        if e.is_cancelled() {
-            "OCR task was cancelled".to_string()
-        } else {
-            format!("OCR task panicked: {}", e)
-        }
-    })??;
+    let result = tokio::task::spawn_blocking(move || perform_ocr_capture_blocking())
+        .await
+        .map_err(|e| {
+            if e.is_cancelled() {
+                "OCR task was cancelled".to_string()
+            } else {
+                format!("OCR task panicked: {}", e)
+            }
+        })??;
 
     Ok(result)
 }
@@ -173,8 +172,7 @@ fn perform_ocr_capture_blocking() -> Result<OcrResult, String> {
         )
         .map_err(|e| format!("Failed to encode PNG: {}", e))?;
 
-    let image_base64 =
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png_buf);
+    let image_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png_buf);
 
     Ok(OcrResult {
         text: "[Processing...]".to_string(),
@@ -232,18 +230,12 @@ async fn chat(
 }
 
 #[tauri::command]
-async fn clear_chat(
+async fn save_and_clear_chat(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let config = crate::config::load_config(&app_handle).map_err(|e| e.to_string())?;
-    state.agent.clear_history(config.gemini_api_key).await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn save_and_clear_chat(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.agent.save_and_clear_history().await;
+    state.agent.save_and_clear_history(config.gemini_api_key).await;
     Ok(())
 }
 
@@ -578,7 +570,6 @@ pub fn run() {
             perform_ocr_capture,
             ocr_image,
             chat,
-            clear_chat,
             save_and_clear_chat,
             restore_chat,
             get_message_count,

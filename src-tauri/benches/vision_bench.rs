@@ -232,7 +232,7 @@ fn configure_criterion() -> Criterion {
         .noise_threshold(0.10) // Higher threshold for network variance
         .significance_level(0.05) // Less strict for API latency
         .measurement_time(Duration::from_secs(20)) // Longer measurement for API calls
-        .sample_size(5) // Reduced from 10 due to long API latency
+        .sample_size(10) // Minimum required by Criterion
 }
 
 criterion_group! {

@@ -1,6 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use crate::prompts::{get_default_system_prompt_with_date, get_jailbreak_prompt, get_research_system_prompt_with_date};
+    use crate::prompts::{
+        get_default_system_prompt_with_date, get_jailbreak_prompt,
+        get_research_system_prompt_with_date,
+    };
     use time::Month;
 
     fn fixed_date() -> time::Date {

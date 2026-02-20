@@ -48,6 +48,7 @@ pub struct InsightMeta {
 pub enum SourceType {
     Topic,
     Insight,
+    Session,
 }
 
 /// A chunk of content from a topic or insight file
@@ -261,6 +262,19 @@ pub fn get_topics_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, 
     }
 
     Ok(topics_dir)
+}
+
+/// Get the path to the memory transcripts directory
+pub fn get_memory_transcripts_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
+    let memories_dir = get_memories_dir(app_handle)?;
+    let transcripts_dir = memories_dir.join("sessions");
+
+    if !transcripts_dir.exists() {
+        fs::create_dir_all(&transcripts_dir)
+            .map_err(|e| format!("Failed to create sessions directory: {}", e))?;
+    }
+
+    Ok(transcripts_dir)
 }
 
 fn get_topic_index_path<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -1093,6 +1107,24 @@ pub async fn rebuild_chunk_index<R: Runtime>(
                         if let Ok(content) = fs::read_to_string(&path) {
                             files_to_process.push((SourceType::Insight, name.to_string(), content));
                             processed_sources.insert((SourceType::Insight, name.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Scan Sessions
+    let sessions_dir = get_memory_transcripts_dir(app_handle)?;
+    if sessions_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&sessions_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                    if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            files_to_process.push((SourceType::Session, name.to_string(), content));
+                            processed_sources.insert((SourceType::Session, name.to_string()));
                         }
                     }
                 }

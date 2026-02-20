@@ -294,3 +294,23 @@ fn test_parse_cleanup_decision_no_json() {
 
     assert!(result.is_err());
 }
+
+#[test]
+fn test_cleanup_ignores_sessions() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let sessions_dir = temp_dir.path().join("sessions");
+    fs::create_dir_all(&sessions_dir).expect("Failed to create sessions dir");
+
+    // Create an old session file
+    let old_date = (Utc::now() - ChronoDuration::days(60))
+        .format("%Y-%m-%d")
+        .to_string();
+    let session_path = sessions_dir.join(format!("{}-old-slug.md", old_date));
+    fs::write(&session_path, "Session content").expect("Failed to write session file");
+
+    let result = cleanup_interactions_in_dir(&sessions_dir, 30).expect("Cleanup failed");
+
+    // Cleanup interactions only targets .jsonl files, so .md files should be ignored completely
+    assert_eq!(result.deleted_count, 0, "Should not delete .md files");
+    assert!(session_path.exists(), "Session file should remain untouched");
+}

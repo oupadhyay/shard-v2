@@ -50,8 +50,10 @@ mod tests {
                 { "base64": "img1", "mime_type": "image/png" },
                 { "base64": "img2", "mime_type": "image/jpeg" }
             ]
-        }).to_string();
-        let modern_msg: ChatMessage = serde_json::from_str(&modern_json).expect("Failed to parse modern format");
+        })
+        .to_string();
+        let modern_msg: ChatMessage =
+            serde_json::from_str(&modern_json).expect("Failed to parse modern format");
         assert_eq!(modern_msg.images.as_ref().unwrap().len(), 2);
         assert_eq!(modern_msg.images.as_ref().unwrap()[0].base64, "img1");
 
@@ -60,10 +62,15 @@ mod tests {
             "role": "user",
             "content": "Legacy Singular",
             "image": { "base64": "img-legacy", "mime_type": "image/png" }
-        }).to_string();
-        let legacy_singular_msg: ChatMessage = serde_json::from_str(&legacy_singular_json).expect("Failed to parse legacy singular format");
+        })
+        .to_string();
+        let legacy_singular_msg: ChatMessage = serde_json::from_str(&legacy_singular_json)
+            .expect("Failed to parse legacy singular format");
         assert_eq!(legacy_singular_msg.images.as_ref().unwrap().len(), 1);
-        assert_eq!(legacy_singular_msg.images.as_ref().unwrap()[0].base64, "img-legacy");
+        assert_eq!(
+            legacy_singular_msg.images.as_ref().unwrap()[0].base64,
+            "img-legacy"
+        );
 
         // Verify it serializes back to "images" array
         let reserialized = serde_json::to_string(&legacy_singular_msg).unwrap();
@@ -78,18 +85,25 @@ mod tests {
                 { "base64": "img-l1", "mime_type": "image/png" },
                 { "base64": "img-l2", "mime_type": "image/jpeg" }
             ]
-        }).to_string();
-        let legacy_array_msg: ChatMessage = serde_json::from_str(&legacy_array_json).expect("Failed to parse legacy array format");
+        })
+        .to_string();
+        let legacy_array_msg: ChatMessage =
+            serde_json::from_str(&legacy_array_json).expect("Failed to parse legacy array format");
         assert_eq!(legacy_array_msg.images.as_ref().unwrap().len(), 2);
-        assert_eq!(legacy_array_msg.images.as_ref().unwrap()[0].base64, "img-l1");
+        assert_eq!(
+            legacy_array_msg.images.as_ref().unwrap()[0].base64,
+            "img-l1"
+        );
 
         // 4. Mixed: "images" (plural) as single object
         let mixed_json = json!({
             "role": "user",
             "content": "Mixed",
             "images": { "base64": "img-mixed", "mime_type": "image/png" }
-        }).to_string();
-        let mixed_msg: ChatMessage = serde_json::from_str(&mixed_json).expect("Failed to parse mixed format");
+        })
+        .to_string();
+        let mixed_msg: ChatMessage =
+            serde_json::from_str(&mixed_json).expect("Failed to parse mixed format");
         assert_eq!(mixed_msg.images.as_ref().unwrap().len(), 1);
         assert_eq!(mixed_msg.images.as_ref().unwrap()[0].base64, "img-mixed");
 
@@ -98,7 +112,8 @@ mod tests {
             "role": "user",
             "content": "Malformed",
             "images": "not-an-object-or-array"
-        }).to_string();
+        })
+        .to_string();
         let err = serde_json::from_str::<ChatMessage>(&malformed_json).unwrap_err();
         assert!(err.to_string().contains("Failed to parse images"));
     }

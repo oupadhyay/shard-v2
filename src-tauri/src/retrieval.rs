@@ -6,7 +6,6 @@
  * - Reciprocal Rank Fusion (RRF) to combine BM25 + dense retrieval
  * - Hybrid search combining both modalities
  */
-
 use lazy_static::lazy_static;
 use rust_stemmers::{Algorithm, Stemmer};
 use serde::{Deserialize, Serialize};
@@ -66,6 +65,7 @@ pub enum HitSource {
     Bm25,
     DenseInteraction,
     DenseTopicChunk, // future-proofing for chunked topic retrieval
+    DenseSessionChunk,
 }
 
 /// A scored retrieval hit with metadata for fusion
@@ -115,9 +115,7 @@ pub fn tokenize(text: &str) -> Vec<String> {
         .filter(|word| word.chars().count() > 1) // Skip single-char tokens (handles multi-byte chars correctly)
         .map(|word| word.to_lowercase())
         .filter(|word| !STOPWORDS.contains(word))
-        .map(|word| {
-            STEMMER.with(|stemmer| stemmer.stem(&word).to_string())
-        })
+        .map(|word| STEMMER.with(|stemmer| stemmer.stem(&word).to_string()))
         .filter(|word| !word.is_empty())
         .collect()
 }
@@ -571,7 +569,11 @@ mod tests {
     fn test_tokenize_basic() {
         // Unambiguous stopwords should produce no tokens
         let tokens = tokenize("the and is a");
-        assert!(tokens.is_empty(), "Pure stopwords should produce empty output: {:?}", tokens);
+        assert!(
+            tokens.is_empty(),
+            "Pure stopwords should produce empty output: {:?}",
+            tokens
+        );
 
         // Content words survive filtering + stemming
         let tokens2 = tokenize("The quick brown foxes jumped lazily.");
@@ -602,9 +604,13 @@ mod tests {
         // CJK regression guard: at least one CJK-derived token should survive.
         // If unicode_words() splits 漢字 into single chars, the >1 char filter
         // drops them — that's a known limitation worth detecting.
-        let has_cjk = tokens.iter().any(|t| t.chars().any(|c| c > '\u{4E00}' && c < '\u{9FFF}'));
+        let has_cjk = tokens
+            .iter()
+            .any(|t| t.chars().any(|c| c > '\u{4E00}' && c < '\u{9FFF}'));
         if !has_cjk {
-            eprintln!("WARNING: CJK tokens dropped by tokenizer — retrieval for CJK text is degraded");
+            eprintln!(
+                "WARNING: CJK tokens dropped by tokenizer — retrieval for CJK text is degraded"
+            );
         }
     }
 
@@ -617,19 +623,22 @@ mod tests {
         assert!(
             tokens.contains(&expected_stem),
             "snake_case identifier should survive as single stemmed token, expected '{}', got {:?}",
-            expected_stem, tokens
+            expected_stem,
+            tokens
         );
 
         // camelCase identifiers are lowercased as a single token
         assert!(
             tokens.contains(&"camelcasetoken".to_string()),
-            "camelCase identifier should be lowercased as single token, got {:?}", tokens
+            "camelCase identifier should be lowercased as single token, got {:?}",
+            tokens
         );
 
         // Common programming keywords filtered as stopwords
         assert!(
             !tokens.contains(&"let".to_string()),
-            "'let' should be filtered (stopword), got {:?}", tokens
+            "'let' should be filtered (stopword), got {:?}",
+            tokens
         );
     }
 
@@ -640,7 +649,10 @@ mod tests {
         assert!(tokens.contains(&"main".to_string()));
         assert!(tokens.contains(&"println".to_string()));
         // "hello" is in the stop_words English list
-        assert!(!tokens.contains(&"hello".to_string()), "'hello' is a stopword");
+        assert!(
+            !tokens.contains(&"hello".to_string()),
+            "'hello' is a stopword"
+        );
     }
 
     #[test]
@@ -854,6 +866,29 @@ mod tests {
         assert_eq!(fused[0].doc_id, "A");
         // RRF contribution = 3 * (1/(60+1)) ≈ 0.049
         assert!(fused[0].score > 0.04);
+    }
+
+    #[test]
+    fn test_rrf_with_session_source() {
+        let now = chrono::Utc::now();
+        let list1 = vec![ScoredHit {
+            doc_id: "Session_1".to_string(),
+            score: 1.0,
+            source: HitSource::Bm25,
+            ts: Some(now),
+        }];
+        let list2 = vec![ScoredHit {
+            doc_id: "Session_1".to_string(),
+            score: 0.95,
+            source: HitSource::DenseSessionChunk,
+            ts: Some(now), // Assume Session matches via Dense
+        }];
+
+        let fused = fuse_rrf_multi(&[&list1, &list2], 60.0, 10);
+
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].doc_id, "Session_1");
+        assert!(fused[0].score > 0.03);
     }
 
     #[test]

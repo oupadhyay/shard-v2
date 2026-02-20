@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::agent::{
-        construct_gemini_messages, ChatMessage, GeminiPart, ImageAttachment, ToolCall, FunctionCall
+        construct_gemini_messages, ChatMessage, FunctionCall, GeminiPart, ImageAttachment, ToolCall,
     };
     use serde_json::json;
 
@@ -130,22 +130,18 @@ mod tests {
 
     #[test]
     fn test_construct_gemini_messages_with_images() {
-        let history = vec![
-            ChatMessage {
-                role: "user".to_string(),
-                content: Some("What is this?".to_string()),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                images: Some(vec![
-                    ImageAttachment {
-                        base64: "base64data".to_string(),
-                        mime_type: "image/png".to_string(),
-                        file_uri: Some("https://example.com/image.png".to_string()),
-                    }
-                ]),
-            },
-        ];
+        let history = vec![ChatMessage {
+            role: "user".to_string(),
+            content: Some("What is this?".to_string()),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            images: Some(vec![ImageAttachment {
+                base64: "base64data".to_string(),
+                mime_type: "image/png".to_string(),
+                file_uri: Some("https://example.com/image.png".to_string()),
+            }]),
+        }];
 
         let result = construct_gemini_messages(&history);
 
@@ -168,26 +164,22 @@ mod tests {
 
     #[test]
     fn test_construct_gemini_messages_with_tool_calls() {
-        let history = vec![
-            ChatMessage {
-                role: "assistant".to_string(),
-                content: Some("Let me check the weather.".to_string()),
-                reasoning: None,
-                tool_calls: Some(vec![
-                    ToolCall {
-                        id: "call_1".to_string(),
-                        tool_type: "function".to_string(),
-                        function: FunctionCall {
-                            name: "get_weather".to_string(),
-                            arguments: "{\"location\": \"London\"}".to_string(),
-                        },
-                        thought_signature: Some("sig123".to_string()),
-                    }
-                ]),
-                tool_call_id: None,
-                images: None,
-            },
-        ];
+        let history = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: Some("Let me check the weather.".to_string()),
+            reasoning: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_1".to_string(),
+                tool_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "get_weather".to_string(),
+                    arguments: "{\"location\": \"London\"}".to_string(),
+                },
+                thought_signature: Some("sig123".to_string()),
+            }]),
+            tool_call_id: None,
+            images: None,
+        }];
 
         let result = construct_gemini_messages(&history);
 
@@ -201,7 +193,11 @@ mod tests {
             panic!("Expected text part");
         }
 
-        if let GeminiPart::FunctionCall { function_call, thought_signature } = &result[0].parts[1] {
+        if let GeminiPart::FunctionCall {
+            function_call,
+            thought_signature,
+        } = &result[0].parts[1]
+        {
             assert_eq!(function_call.name, "get_weather");
             assert_eq!(function_call.args["location"], "London");
             assert_eq!(thought_signature.as_deref(), Some("sig123"));
@@ -217,17 +213,15 @@ mod tests {
                 role: "assistant".to_string(),
                 content: None,
                 reasoning: None,
-                tool_calls: Some(vec![
-                    ToolCall {
-                        id: "call_1".to_string(),
-                        tool_type: "function".to_string(),
-                        function: FunctionCall {
-                            name: "get_weather".to_string(),
-                            arguments: "{\"location\": \"London\"}".to_string(),
-                        },
-                        thought_signature: None,
-                    }
-                ]),
+                tool_calls: Some(vec![ToolCall {
+                    id: "call_1".to_string(),
+                    tool_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "get_weather".to_string(),
+                        arguments: "{\"location\": \"London\"}".to_string(),
+                    },
+                    thought_signature: None,
+                }]),
                 tool_call_id: None,
                 images: None,
             },
@@ -260,16 +254,14 @@ mod tests {
 
     #[test]
     fn test_construct_gemini_messages_tool_response_fallback() {
-        let history = vec![
-            ChatMessage {
-                role: "tool".to_string(),
-                content: Some("No context".to_string()),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: Some("missing_call_id".to_string()),
-                images: None,
-            },
-        ];
+        let history = vec![ChatMessage {
+            role: "tool".to_string(),
+            content: Some("No context".to_string()),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: Some("missing_call_id".to_string()),
+            images: None,
+        }];
 
         let result = construct_gemini_messages(&history);
 
@@ -290,18 +282,17 @@ mod tests {
                 { "text": "text" }
             ],
             "file_data": {} // Triggers the cleaning logic
-        }).to_string();
+        })
+        .to_string();
 
-        let history = vec![
-            ChatMessage {
-                role: "user".to_string(),
-                content: Some(json_content),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                images: None,
-            },
-        ];
+        let history = vec![ChatMessage {
+            role: "user".to_string(),
+            content: Some(json_content),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            images: None,
+        }];
 
         let result = construct_gemini_messages(&history);
 
@@ -315,16 +306,14 @@ mod tests {
 
     #[test]
     fn test_construct_gemini_messages_empty_content() {
-        let history = vec![
-            ChatMessage {
-                role: "user".to_string(),
-                content: None,
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                images: None,
-            },
-        ];
+        let history = vec![ChatMessage {
+            role: "user".to_string(),
+            content: None,
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            images: None,
+        }];
 
         let result = construct_gemini_messages(&history);
 

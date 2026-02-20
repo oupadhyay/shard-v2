@@ -4,7 +4,11 @@ pub fn get_default_system_prompt(
     memory_context: Option<&str>,
     rag_context: Option<&str>,
 ) -> String {
-    get_default_system_prompt_with_date(memory_context, rag_context, OffsetDateTime::now_utc().date())
+    get_default_system_prompt_with_date(
+        memory_context,
+        rag_context,
+        OffsetDateTime::now_utc().date(),
+    )
 }
 
 pub fn get_default_system_prompt_with_date(

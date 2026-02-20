@@ -23,14 +23,20 @@ fn bench_tokenize(c: &mut Criterion) {
                 Identifiers: snake_case, CamelCase, kebab-case; numbers 12345; unicode café 🚀.";
 
     let mut group = c.benchmark_group("tokenize");
+    group.noise_threshold(0.20); // Tokenization is heavily CPU-scheduler dependent in the microseconds
 
     group.bench_function("small_mixed", |b| b.iter(|| tokenize(black_box(text))));
 
-    let stopwords_text = "the is a and of in to with for on as at by an be this which or from had has have";
-    group.bench_function("stopwords_heavy", |b| b.iter(|| tokenize(black_box(stopwords_text))));
+    let stopwords_text =
+        "the is a and of in to with for on as at by an be this which or from had has have";
+    group.bench_function("stopwords_heavy", |b| {
+        b.iter(|| tokenize(black_box(stopwords_text)))
+    });
 
     let stemming_text = " Foxes are jumping and running while the dogs are barking and sleeping.";
-    group.bench_function("stemming_heavy", |b| b.iter(|| tokenize(black_box(stemming_text))));
+    group.bench_function("stemming_heavy", |b| {
+        b.iter(|| tokenize(black_box(stemming_text)))
+    });
 
     let code_text = "fn my_function_name() { let camelCaseVar = 10; let snake_case_var = 20; }";
     group.bench_function("code_tokens", |b| b.iter(|| tokenize(black_box(code_text))));
@@ -56,32 +62,36 @@ fn bench_bm25_search(c: &mut Criterion) {
     }
 
     // Fixed common query
-    c.bench_function("bm25_search/1k_docs_common", |b| {
+    let mut group = c.benchmark_group("bm25_search");
+    group.noise_threshold(0.15); // Fast memory lookups are highly variable
+    group.bench_function("1k_docs_common", |b| {
         b.iter(|| index.search(black_box("Rust programming lifetimes traits"), 10))
     });
 
     // Short query
-    c.bench_function("bm25_search/1k_docs_short", |b| {
+    group.bench_function("1k_docs_short", |b| {
         b.iter(|| index.search(black_box("Rust"), 10))
     });
 
     // OOV / rare terms to exercise IDF handling
-    c.bench_function("bm25_search/1k_docs_oov", |b| {
+    group.bench_function("1k_docs_oov", |b| {
         b.iter(|| index.search(black_box("nonexistenttoken123"), 10))
     });
 
     // Batched benchmark for per-query setup isolation
-    c.bench_function("bm25_search/batched_readonly", |b| {
+    group.bench_function("batched_readonly", |b| {
         b.iter_batched(
             || "traits ownership unicode",
             |q| index.search(black_box(q), 10),
             BatchSize::SmallInput,
         )
     });
+    group.finish();
 }
 
 fn bench_bm25_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("bm25_scaling");
+    group.noise_threshold(0.10); // Mixed ms and microsecond duration
 
     for size in [1_000, 10_000] {
         let docs = sample_docs(size);

@@ -19,6 +19,7 @@ fn bench_history_serialization(c: &mut Criterion) {
     }
 
     let mut group = c.benchmark_group("history_serialization");
+    group.noise_threshold(0.15); // Accommodate standard string allocation and Serde variance
 
     group.bench_function("serialize_100_messages", |b| {
         b.iter(|| {
@@ -30,5 +31,30 @@ fn bench_history_serialization(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_history_serialization);
+fn bench_session_transcript_formatting(c: &mut Criterion) {
+    use shard_lib::sessions::format_transcript;
+    let mut history = Vec::new();
+    for i in 0..100 {
+        history.push(ChatMessage {
+            role: if i % 2 == 0 { "user".to_string() } else { "model".to_string() },
+            content: Some(format!("Message content with some normal text {}", i)),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            images: None,
+        });
+    }
+
+    let mut group = c.benchmark_group("history_serialization_format");
+    group.noise_threshold(0.15);
+    group.bench_function("format_100_messages_transcript", |b| {
+        b.iter(|| {
+            let formatted = format_transcript(black_box(&history));
+            black_box(formatted);
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench_history_serialization, bench_session_transcript_formatting);
 criterion_main!(benches);

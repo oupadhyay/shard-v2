@@ -196,10 +196,12 @@ pub async fn call_background_llm(
         return Err(format!("Background LLM API error: {}", error_text));
     }
 
-    let body: serde_json::Value = res
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse {} response: {}", provider_config.provider_name, e))?;
+    let body: serde_json::Value = res.json().await.map_err(|e| {
+        format!(
+            "Failed to parse {} response: {}",
+            provider_config.provider_name, e
+        )
+    })?;
 
     // Extract text content from response
     if let Some(choices) = body.get("choices").and_then(|c| c.as_array()) {
@@ -214,7 +216,10 @@ pub async fn call_background_llm(
         }
     }
 
-    Err(format!("No content in {} response", provider_config.provider_name))
+    Err(format!(
+        "No content in {} response",
+        provider_config.provider_name
+    ))
 }
 
 /// Parse topic updates from LLM JSON response
@@ -298,14 +303,29 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                         last_run_info.summary_last_run = Some(now.clone());
                         save_last_run_info(&app_handle, &last_run_info);
 
-                        if !result.topics_updated.is_empty() || !result.insights_created.is_empty() {
-                            log::info!("[Background] Topics/insights changed, rebuilding chunk index...");
+                        if !result.topics_updated.is_empty() || !result.insights_created.is_empty()
+                        {
+                            log::info!(
+                                "[Background] Topics/insights changed, rebuilding chunk index..."
+                            );
                             if let Ok(config) = crate::config::load_config(&app_handle) {
                                 if let Some(api_key) = config.gemini_api_key {
                                     let http_client = reqwest::Client::new();
-                                    match crate::memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await {
-                                        Ok(count) => log::info!("[Background] Chunk index rebuilt with {} chunks", count),
-                                        Err(e) => log::warn!("[Background] Failed to rebuild chunk index: {}", e),
+                                    match crate::memories::rebuild_chunk_index(
+                                        &app_handle,
+                                        &http_client,
+                                        &api_key,
+                                    )
+                                    .await
+                                    {
+                                        Ok(count) => log::info!(
+                                            "[Background] Chunk index rebuilt with {} chunks",
+                                            count
+                                        ),
+                                        Err(e) => log::warn!(
+                                            "[Background] Failed to rebuild chunk index: {}",
+                                            e
+                                        ),
                                     }
                                 }
                             }
@@ -374,7 +394,11 @@ async fn run_summary_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summar
 
     // Gather interactions from lookback period
     let interactions_dir_clone = interactions_dir.clone();
-    let (interactions, stats) = tokio::task::spawn_blocking(move || gather_recent_interactions(&interactions_dir_clone, LOOKBACK_HOURS)).await.map_err(|e| e.to_string())??;
+    let (interactions, stats) = tokio::task::spawn_blocking(move || {
+        gather_recent_interactions(&interactions_dir_clone, LOOKBACK_HOURS)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     if interactions.is_empty() {
         log::info!("[Summary] No interactions in lookback period.");
@@ -392,31 +416,32 @@ async fn run_summary_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summar
 
     // Load context from disk (offload blocking I/O)
     let handle = app_handle.clone();
-    let (existing_topics, existing_insights, daily_logs, candidates_context) = tokio::task::spawn_blocking(move || {
-        let topics = load_topic_summaries_context_sync(&handle);
-        let insights = load_insight_summaries_context_sync(&handle);
+    let (existing_topics, existing_insights, daily_logs, candidates_context) =
+        tokio::task::spawn_blocking(move || {
+            let topics = load_topic_summaries_context_sync(&handle);
+            let insights = load_insight_summaries_context_sync(&handle);
 
-        // Get promotion candidates (insights with >= 3 updates)
-        let promotion_candidates =
-            crate::memories::get_promotion_candidates(&handle, 3).unwrap_or_default();
-        let mut candidates = String::new();
-        if !promotion_candidates.is_empty() {
-            candidates.push_str("CANDIDATES FOR PROMOTION TO TOPIC (Review these):\n");
-            for title in &promotion_candidates {
-                if let Ok(content) = crate::memories::read_insight(&handle, title) {
-                    candidates
-                        .push_str(&format!("- Title: {}\n  Content: {}\n", title, content));
+            // Get promotion candidates (insights with >= 3 updates)
+            let promotion_candidates =
+                crate::memories::get_promotion_candidates(&handle, 3).unwrap_or_default();
+            let mut candidates = String::new();
+            if !promotion_candidates.is_empty() {
+                candidates.push_str("CANDIDATES FOR PROMOTION TO TOPIC (Review these):\n");
+                for title in &promotion_candidates {
+                    if let Ok(content) = crate::memories::read_insight(&handle, title) {
+                        candidates
+                            .push_str(&format!("- Title: {}\n  Content: {}\n", title, content));
+                    }
                 }
             }
-        }
 
-        // Read daily logs from pre-compaction flushes (staging area for insights)
-        let logs = crate::memories::read_all_daily_logs(&handle).unwrap_or_default();
+            // Read daily logs from pre-compaction flushes (staging area for insights)
+            let logs = crate::memories::read_all_daily_logs(&handle).unwrap_or_default();
 
-        (topics, insights, logs, candidates)
-    })
-    .await
-    .map_err(|e| format!("Blocking context load failed: {}", e))?;
+            (topics, insights, logs, candidates)
+        })
+        .await
+        .map_err(|e| format!("Blocking context load failed: {}", e))?;
 
     let mut daily_logs_context = String::new();
     let logs_to_archive: Vec<String> = daily_logs.iter().map(|(date, _)| date.clone()).collect();
@@ -575,7 +600,8 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
                                 Err(e) => {
                                     log::warn!(
                                         "[Summary] Failed to delete promoted insight {}: {}",
-                                        promotion.insight_title, e
+                                        promotion.insight_title,
+                                        e
                                     );
                                 }
                             }
@@ -596,7 +622,9 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
                     }
                 }
                 (topics, insights, promoted)
-            }).await.map_err(|e| format!("Blocking save failed: {}", e))?;
+            })
+            .await
+            .map_err(|e| format!("Blocking save failed: {}", e))?;
 
             topics_updated = result.0;
             insights_created = result.1;
@@ -617,10 +645,16 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
             let h = handle.clone();
             match tokio::task::spawn_blocking(move || {
                 crate::memories::archive_daily_log(&h, &date_clone)
-            }).await {
+            })
+            .await
+            {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => log::warn!("[Summary] Failed to archive daily log {}: {}", date, e),
-                Err(e) => log::error!("[Summary] Archive daily log task panicked for {}: {}", date, e),
+                Err(e) => log::error!(
+                    "[Summary] Archive daily log task panicked for {}: {}",
+                    date,
+                    e
+                ),
             }
         }
         log::info!("[Summary] Archived {} daily logs", logs_to_archive.len());
@@ -659,17 +693,22 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
 
     // Verify we have the required API key
     if let Err(e) = config.get_model_provider_config(background_model, "background jobs") {
-        log::info!(
-            "[Cleanup] {}. Falling back to date-based cleanup.",
-            e
-        );
+        log::info!("[Cleanup] {}. Falling back to date-based cleanup.", e);
         let dir = interactions_dir.clone();
-        return tokio::task::spawn_blocking(move || cleanup_interactions_in_dir(&dir, LOG_RETENTION_DAYS)).await.map_err(|e| e.to_string())?;
+        return tokio::task::spawn_blocking(move || {
+            cleanup_interactions_in_dir(&dir, LOG_RETENTION_DAYS)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
     }
 
     // Gather same interactions as summary job
     let interactions_dir_clone = interactions_dir.clone();
-    let (interactions, _) = tokio::task::spawn_blocking(move || gather_recent_interactions(&interactions_dir_clone, LOOKBACK_HOURS)).await.map_err(|e| e.to_string())??;
+    let (interactions, _) = tokio::task::spawn_blocking(move || {
+        gather_recent_interactions(&interactions_dir_clone, LOOKBACK_HOURS)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     if interactions.is_empty() {
         return Ok(CleanupResult {
@@ -681,7 +720,10 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
 
     // Load existing topic summaries for context
     let handle = app_handle.clone();
-    let topics_context = tokio::task::spawn_blocking(move || load_topic_summaries_context_sync(&handle)).await.map_err(|e| e.to_string())?;
+    let topics_context =
+        tokio::task::spawn_blocking(move || load_topic_summaries_context_sync(&handle))
+            .await
+            .map_err(|e| e.to_string())?;
 
     // Call LLM to decide what to clean up
     let prompt = format!(
@@ -715,11 +757,11 @@ Interaction Entries:
                     if decision.to_remove.is_empty() {
                         // Also prune BM25 index
                         let h = app_handle.clone();
-                        match tokio::task::spawn_blocking(move || crate::retrieval::prune_bm25_index(
-                            &h,
-                            LOG_RETENTION_DAYS,
-                            10000,
-                        )).await {
+                        match tokio::task::spawn_blocking(move || {
+                            crate::retrieval::prune_bm25_index(&h, LOG_RETENTION_DAYS, 10000)
+                        })
+                        .await
+                        {
                             Ok(Ok(_)) => {}
                             Ok(Err(e)) => log::warn!("[Cleanup] BM25 prune failed: {}", e),
                             Err(e) => log::error!("[Cleanup] BM25 prune task panicked: {}", e),
@@ -734,15 +776,18 @@ Interaction Entries:
                     // Remove entries by timestamp
                     let dir = interactions_dir.clone();
                     let ts = decision.to_remove.clone();
-                    let (deleted, bytes) = tokio::task::spawn_blocking(move ||
-                        remove_entries_by_timestamp(&dir, &ts)
-                    ).await.map_err(|e| e.to_string())??;
+                    let (deleted, bytes) =
+                        tokio::task::spawn_blocking(move || remove_entries_by_timestamp(&dir, &ts))
+                            .await
+                            .map_err(|e| e.to_string())??;
 
                     // Also prune BM25 index
                     let h = app_handle.clone();
-                    match tokio::task::spawn_blocking(move ||
+                    match tokio::task::spawn_blocking(move || {
                         crate::retrieval::prune_bm25_index(&h, LOG_RETENTION_DAYS, 10000)
-                    ).await {
+                    })
+                    .await
+                    {
                         Ok(Ok(_)) => {}
                         Ok(Err(e)) => log::warn!("[Cleanup] BM25 prune failed: {}", e),
                         Err(e) => log::error!("[Cleanup] BM25 prune task panicked: {}", e),
@@ -760,14 +805,18 @@ Interaction Entries:
                         e
                     );
                     let dir = interactions_dir.clone();
-                    let result = tokio::task::spawn_blocking(move ||
+                    let result = tokio::task::spawn_blocking(move || {
                         cleanup_interactions_in_dir(&dir, LOG_RETENTION_DAYS)
-                    ).await.map_err(|e| e.to_string())??;
+                    })
+                    .await
+                    .map_err(|e| e.to_string())??;
                     // Also prune BM25 index
                     let h = app_handle.clone();
-                    match tokio::task::spawn_blocking(move ||
+                    match tokio::task::spawn_blocking(move || {
                         crate::retrieval::prune_bm25_index(&h, LOG_RETENTION_DAYS, 10000)
-                    ).await {
+                    })
+                    .await
+                    {
                         Ok(Ok(_)) => {}
                         Ok(Err(e)) => log::warn!("[Cleanup] BM25 prune failed: {}", e),
                         Err(e) => log::error!("[Cleanup] BM25 prune task panicked: {}", e),
@@ -782,12 +831,18 @@ Interaction Entries:
                 e
             );
             let dir = interactions_dir.clone();
-            let result = tokio::task::spawn_blocking(move || cleanup_interactions_in_dir(&dir, LOG_RETENTION_DAYS)).await.map_err(|e| e.to_string())??;
+            let result = tokio::task::spawn_blocking(move || {
+                cleanup_interactions_in_dir(&dir, LOG_RETENTION_DAYS)
+            })
+            .await
+            .map_err(|e| e.to_string())??;
             // Also prune BM25 index
             let h = app_handle.clone();
-            match tokio::task::spawn_blocking(move ||
+            match tokio::task::spawn_blocking(move || {
                 crate::retrieval::prune_bm25_index(&h, LOG_RETENTION_DAYS, 10000)
-            ).await {
+            })
+            .await
+            {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => log::warn!("[Cleanup] BM25 prune failed: {}", e),
                 Err(e) => log::error!("[Cleanup] BM25 prune task panicked: {}", e),

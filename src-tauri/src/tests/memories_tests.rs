@@ -386,3 +386,15 @@ fn test_insight_index_old_format_with_embedding_field() {
     let result: Result<InsightIndex, _> = serde_json::from_str(old_format);
     assert!(result.is_ok(), "InsightMeta with extra 'embedding' field should still parse (serde ignores unknown fields by default)");
 }
+
+#[test]
+fn test_source_type_session() {
+    let session_type = crate::memories::SourceType::Session;
+    // Basic enum sanity check to ensure it compiles and can be matched
+    let type_str = match session_type {
+        crate::memories::SourceType::Topic => "topic",
+        crate::memories::SourceType::Insight => "insight",
+        crate::memories::SourceType::Session => "session",
+    };
+    assert_eq!(type_str, "session");
+}

@@ -32,6 +32,7 @@ fn generate_test_image(width: u32, height: u32) -> DynamicImage {
 /// Note: This requires the bundled OCR models to be present
 fn bench_ocr_image_creation(c: &mut Criterion) {
     let mut group = c.benchmark_group("screen_context");
+    group.noise_threshold(0.10); // Spans from 170us to 1.6ms, moderate variance allowed
     group.sample_size(10);
 
     // Benchmark image generation at various resolutions
@@ -71,7 +72,8 @@ fn bench_image_encoding(c: &mut Criterion) {
             b.iter(|| {
                 let mut jpeg_data: Vec<u8> = Vec::new();
                 let mut cursor = std::io::Cursor::new(&mut jpeg_data);
-                let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 75);
+                let mut encoder =
+                    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 75);
                 encoder.encode_image(black_box(&rgb_img)).unwrap();
                 jpeg_data
             })
@@ -89,10 +91,7 @@ fn bench_image_resize(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(5));
 
     // Test resizing from various resolutions to 1280px width
-    let resolutions = [
-        ("1440p", 2560, 1440),
-        ("4K", 3840, 2160),
-    ];
+    let resolutions = [("1440p", 2560, 1440), ("4K", 3840, 2160)];
 
     let filters = [
         ("nearest", image::imageops::FilterType::Nearest),
@@ -109,16 +108,19 @@ fn bench_image_resize(c: &mut Criterion) {
         let new_height = (rgba_img.height() as f32 * scale) as u32;
 
         for (filter_name, filter_type) in &filters {
-            group.bench_function(format!("resize_{}_{}_to_1280w", res_name, filter_name), |b| {
-                b.iter(|| {
-                    image::imageops::resize(
-                        black_box(&rgba_img),
-                        max_width,
-                        new_height,
-                        *filter_type,
-                    )
-                })
-            });
+            group.bench_function(
+                format!("resize_{}_{}_to_1280w", res_name, filter_name),
+                |b| {
+                    b.iter(|| {
+                        image::imageops::resize(
+                            black_box(&rgba_img),
+                            max_width,
+                            new_height,
+                            *filter_type,
+                        )
+                    })
+                },
+            );
         }
     }
 
@@ -128,10 +130,12 @@ fn bench_image_resize(c: &mut Criterion) {
 /// Benchmark JSON parsing for analysis responses
 fn bench_json_parsing(c: &mut Criterion) {
     let mut group = c.benchmark_group("screen_context");
+    group.noise_threshold(0.20); // Very fast (~300ns), high variance allowed
     group.sample_size(100);
 
     let simple_json = r#"{"summary": "User browsing web", "suggestions": ["Summarize this page", "Extract key points"]}"#;
-    let markdown_wrapped = "```json\n{\"summary\": \"test\", \"suggestions\": [\"a\", \"b\", \"c\"]}\n```";
+    let markdown_wrapped =
+        "```json\n{\"summary\": \"test\", \"suggestions\": [\"a\", \"b\", \"c\"]}\n```";
     let complex_json = r#"{"summary": "User working in VS Code with multiple files open, appears to be debugging Rust code with terminal output visible", "suggestions": ["Help me understand this error message", "Suggest fixes for this code", "Explain the Rust ownership model"]}"#;
 
     group.bench_function("parse_json_simple", |b| {

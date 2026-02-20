@@ -49,7 +49,9 @@ fn benchmark_migration(c: &mut Criterion) {
     group.bench_function("migrate_from_json_1000", |b| {
         b.iter(|| {
             iter_count += 1;
-            let iter_db_path = bench_dir.path().join(format!("bench_{}.sqlite", iter_count));
+            let iter_db_path = bench_dir
+                .path()
+                .join(format!("bench_{}.sqlite", iter_count));
             let store = VectorStore::open(&iter_db_path).unwrap();
             store.migrate_from_json(black_box(&chunk_index)).unwrap();
         })

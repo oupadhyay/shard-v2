@@ -66,7 +66,8 @@ pub async fn generate_embedding(
     text: &str,
     api_key: &str,
 ) -> Result<Vec<f32>, String> {
-    let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent";
+    let url =
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent";
 
     let payload = EmbeddingRequest {
         content: EmbeddingContent {

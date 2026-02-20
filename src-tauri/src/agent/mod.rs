@@ -77,8 +77,42 @@ impl Agent {
         }
     }
 
-    pub async fn clear_history(&self, api_key: Option<String>) {
+    pub async fn rewind_history(&self) {
         let mut history = self.history.lock().await;
+        if history.is_empty() {
+            return;
+        }
+
+        while let Some(msg) = history.pop() {
+            if msg.role == "user" {
+                break;
+            }
+        }
+    }
+
+    pub async fn save_and_clear_history(&self, api_key: Option<String>) {
+        let mut history = self.history.lock().await;
+
+        // Spawn background task to archive session transcript
+        let history_clone = history.clone();
+        let app_handle_clone = self.app_handle.clone();
+        let http_client_clone = self.http_client.clone();
+
+        tauri::async_runtime::spawn(async move {
+            if let Ok(config) = crate::config::load_config(&app_handle_clone) {
+                if let Err(e) = crate::sessions::archive_session_transcript(
+                    &app_handle_clone,
+                    &http_client_clone,
+                    &config,
+                    history_clone,
+                ).await {
+                    log::warn!("[Agent] Failed to archive session: {}", e);
+                }
+            }
+        });
+
+        let mut backup = self.backup_history.lock().await;
+        *backup = Some(history.clone());
         history.clear();
 
         let mut uploaded_files = self.uploaded_files.lock().await;
@@ -100,29 +134,9 @@ impl Agent {
         }
 
         // Persist the cleared state
-        drop(history); // Release lock before persist
+        drop(history); // Release lock
         drop(uploaded_files);
         self.persist_history().await;
-    }
-
-    pub async fn rewind_history(&self) {
-        let mut history = self.history.lock().await;
-        if history.is_empty() {
-            return;
-        }
-
-        while let Some(msg) = history.pop() {
-            if msg.role == "user" {
-                break;
-            }
-        }
-    }
-
-    pub async fn save_and_clear_history(&self) {
-        let mut history = self.history.lock().await;
-        let mut backup = self.backup_history.lock().await;
-        *backup = Some(history.clone());
-        history.clear();
     }
 
     pub async fn restore_history(&self) -> Result<(), String> {
@@ -438,7 +452,9 @@ impl Agent {
             let embedding = emb.clone();
             let context_res = match tokio::task::spawn_blocking(move || {
                 crate::memories::find_relevant_context(&handle, &msg, &embedding)
-            }).await {
+            })
+            .await
+            {
                 Ok(res) => res,
                 Err(e) => {
                     log::error!("[Agent] Context lookup task panicked: {}", e);
@@ -1280,7 +1296,8 @@ impl Agent {
         let enable_tools = config.enable_tools.unwrap_or(true);
 
         // Detect provider from model name and configure accordingly
-        let (provider_config, api_key) = config.get_model_provider_config(&selected_model, "main chat")?;
+        let (provider_config, api_key) =
+            config.get_model_provider_config(&selected_model, "main chat")?;
         let is_cerebras = provider_config.provider_name == "Cerebras";
         let is_groq = provider_config.provider_name == "Groq";
 
