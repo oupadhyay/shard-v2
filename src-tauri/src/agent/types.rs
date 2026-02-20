@@ -61,6 +61,15 @@ pub struct ChatMessage {
     pub images: Option<Vec<ImageAttachment>>,
 }
 
+/// Wrapper for saving chat history to disk while retaining the session identity
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PersistedChatState {
+    pub session_id: String,
+    #[serde(default)]
+    pub last_archived_hash: u64,
+    pub history: Vec<ChatMessage>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ImageAttachment {
     pub base64: String,

@@ -187,9 +187,13 @@ pub fn get_config_path<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf,
 
 pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, String> {
     use crate::secrets::{self, ApiKeyType};
+    use std::sync::OnceLock;
 
-    // Migrate old separate keychain entries to consolidated format (one-time)
-    secrets::migrate_legacy_entries();
+    // Migrate old separate keychain entries to consolidated format.
+    // OnceLock ensures this only runs on the first call per process lifetime,
+    // regardless of how many times load_config is called.
+    static MIGRATION_DONE: OnceLock<()> = OnceLock::new();
+    MIGRATION_DONE.get_or_init(|| secrets::migrate_legacy_entries());
 
     let config_path = get_config_path(app_handle)?;
     let mut loaded = if !config_path.exists() {
@@ -201,47 +205,54 @@ pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, S
             .map_err(|e| format!("Failed to parse config file: {}", e))?
     };
 
-    // Migrate any existing TOML keys to keyring (one-time operation)
+    // Migrate any TOML-resident keys to keyring (one-time operation for upgrading users).
+    // Uses a second OnceLock so this also only happens once per process.
+    static TOML_MIGRATION_DONE: OnceLock<()> = OnceLock::new();
     let mut needs_resave = false;
-    let migrations = [
-        (&loaded.api_key, ApiKeyType::OpenAI),
-        (&loaded.gemini_api_key, ApiKeyType::Gemini),
-        (&loaded.openrouter_api_key, ApiKeyType::OpenRouter),
-        (&loaded.cerebras_api_key, ApiKeyType::Cerebras),
-        (&loaded.brave_api_key, ApiKeyType::Brave),
-        (&loaded.groq_api_key, ApiKeyType::Groq),
-    ];
+    TOML_MIGRATION_DONE.get_or_init(|| {
+        use std::collections::HashMap;
+        let mut updates = HashMap::new();
 
-    for (toml_key, key_type) in migrations {
-        if let Some(key) = toml_key {
-            if !key.is_empty() {
-                // Only migrate if keyring doesn't already have this key
-                if secrets::get_secret(key_type).unwrap_or(None).is_none() {
-                    if let Err(e) = secrets::store_secret(key_type, key) {
-                        log::warn!(
-                            "[Config] Failed to migrate {:?} to keyring: {}",
-                            key_type,
-                            e
-                        );
-                    } else {
-                        log::info!(
-                            "[Config] Migrated {:?} from config.toml to keyring",
-                            key_type
-                        );
+        let migrations = [
+            (&loaded.api_key, ApiKeyType::OpenAI),
+            (&loaded.gemini_api_key, ApiKeyType::Gemini),
+            (&loaded.openrouter_api_key, ApiKeyType::OpenRouter),
+            (&loaded.cerebras_api_key, ApiKeyType::Cerebras),
+            (&loaded.brave_api_key, ApiKeyType::Brave),
+            (&loaded.groq_api_key, ApiKeyType::Groq),
+        ];
+
+        for (toml_key, key_type) in migrations {
+            if let Some(key) = toml_key {
+                if !key.is_empty() {
+                    // Only migrate if keyring doesn't already have this key
+                    if secrets::get_secret(key_type).unwrap_or(None).is_none() {
+                        updates.insert(key_type, Some(key.clone()));
                     }
+                    needs_resave = true;
                 }
-                needs_resave = true;
             }
         }
-    }
 
-    // Load keys from keyring into config struct (for runtime use)
-    loaded.api_key = secrets::get_secret(ApiKeyType::OpenAI).unwrap_or(None);
-    loaded.gemini_api_key = secrets::get_secret(ApiKeyType::Gemini).unwrap_or(None);
-    loaded.openrouter_api_key = secrets::get_secret(ApiKeyType::OpenRouter).unwrap_or(None);
-    loaded.cerebras_api_key = secrets::get_secret(ApiKeyType::Cerebras).unwrap_or(None);
-    loaded.brave_api_key = secrets::get_secret(ApiKeyType::Brave).unwrap_or(None);
-    loaded.groq_api_key = secrets::get_secret(ApiKeyType::Groq).unwrap_or(None);
+        if !updates.is_empty() {
+            if let Err(e) = secrets::store_secrets_batch(updates) {
+                log::warn!("[Config] Failed to migrate keys from TOML: {}", e);
+            } else {
+                log::info!("[Config] Successfully migrated keys from TOML to keyring");
+            }
+        }
+    });
+
+    // Load all keys from keyring with a single cache-backed call.
+    // secrets::get_all_secrets() reads the keychain at most once per process;
+    // all subsequent calls serve from the in-memory cache.
+    let all_keys = secrets::get_all_secrets().unwrap_or_default();
+    loaded.api_key = all_keys.get(ApiKeyType::OpenAI.key_name()).cloned();
+    loaded.gemini_api_key = all_keys.get(ApiKeyType::Gemini.key_name()).cloned();
+    loaded.openrouter_api_key = all_keys.get(ApiKeyType::OpenRouter.key_name()).cloned();
+    loaded.cerebras_api_key = all_keys.get(ApiKeyType::Cerebras.key_name()).cloned();
+    loaded.brave_api_key = all_keys.get(ApiKeyType::Brave.key_name()).cloned();
+    loaded.groq_api_key = all_keys.get(ApiKeyType::Groq.key_name()).cloned();
 
     // Re-save to remove migrated keys from TOML file
     if needs_resave {
@@ -295,44 +306,18 @@ pub fn save_config<R: Runtime>(
 ) -> Result<(), String> {
     use crate::secrets::{self, ApiKeyType};
 
-    // Save API keys to keyring
-    // Only update keyring when explicitly provided:
-    // - Some(non-empty) -> store the key
-    // - Some("") -> delete the key (user cleared it)
-    // - None -> keep existing keyring value (field not provided in partial update)
-    let key_saves = [
-        (&config.api_key, ApiKeyType::OpenAI),
-        (&config.gemini_api_key, ApiKeyType::Gemini),
-        (&config.openrouter_api_key, ApiKeyType::OpenRouter),
-        (&config.cerebras_api_key, ApiKeyType::Cerebras),
-        (&config.brave_api_key, ApiKeyType::Brave),
-        (&config.groq_api_key, ApiKeyType::Groq),
-    ];
+    // Save API keys to keyring in a single batch operation
+    use std::collections::HashMap;
+    let mut updates = HashMap::new();
 
-    for (key_value, key_type) in key_saves {
-        match key_value {
-            Some(value) if !value.is_empty() => {
-                log::info!(
-                    "[Config] Storing {:?} to keyring (len={})",
-                    key_type,
-                    value.len()
-                );
-                secrets::store_secret(key_type, value)?;
-            }
-            Some(_) => {
-                // Empty string = explicit delete
-                log::info!(
-                    "[Config] Deleting {:?} from keyring (empty value)",
-                    key_type
-                );
-                secrets::delete_secret(key_type)?;
-            }
-            None => {
-                // None = not provided, keep existing keyring value
-                log::debug!("[Config] Keeping existing {:?} (not provided)", key_type);
-            }
-        }
-    }
+    updates.insert(ApiKeyType::OpenAI, config.api_key.clone());
+    updates.insert(ApiKeyType::Gemini, config.gemini_api_key.clone());
+    updates.insert(ApiKeyType::OpenRouter, config.openrouter_api_key.clone());
+    updates.insert(ApiKeyType::Cerebras, config.cerebras_api_key.clone());
+    updates.insert(ApiKeyType::Brave, config.brave_api_key.clone());
+    updates.insert(ApiKeyType::Groq, config.groq_api_key.clone());
+
+    secrets::store_secrets_batch(updates)?;
 
     // Save non-sensitive config to TOML (API keys cleared before serialization)
     let config_path = get_config_path(app_handle)?;

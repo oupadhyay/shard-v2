@@ -38,3 +38,41 @@ fn test_parse_llm_response() {
     assert_eq!(slug5, "test-summary");
     assert_eq!(summary5, "First line. Second line.");
 }
+
+#[test]
+fn test_deduplication_logic() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dir_path = temp_dir.path();
+
+    // Create dummy session files with random slugs but the same session_id
+    let session_id = "test-session-auth-12345";
+
+    // Old file with an older slug
+    let old_file_path = dir_path.join(format!("2026-02-20-greeting-{}.md", session_id));
+    std::fs::write(&old_file_path, "old content").unwrap();
+
+    // Another file with the SAME session id (should never happen, but test it sweeps all)
+    let alt_file_path = dir_path.join(format!("2026-02-20-another-{}.md", session_id));
+    std::fs::write(&alt_file_path, "alt content").unwrap();
+
+    // A completely unrelated session file
+    let unrelated_path = dir_path.join("2026-02-20-greeting-DIFFERENT-ID.md");
+    std::fs::write(&unrelated_path, "unrelated content").unwrap();
+
+    // Run the sweep code we use in archive_session_transcript
+    let session_suffix = format!("-{}.md", session_id);
+    if let Ok(entries) = std::fs::read_dir(dir_path) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.ends_with(&session_suffix) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+
+    // Verify sweeping worked
+    assert!(!old_file_path.exists());
+    assert!(!alt_file_path.exists());
+    assert!(unrelated_path.exists());
+}

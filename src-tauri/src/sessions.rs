@@ -21,10 +21,11 @@ pub async fn archive_session_transcript<R: Runtime>(
     app_handle: &AppHandle<R>,
     http_client: &Client,
     config: &AppConfig,
+    session_id: &str,
     history: Vec<ChatMessage>,
 ) -> Result<(), String> {
-    // Only archive if there's meaningful dialogue (e.g. at least 2 messages)
-    if history.len() < 2 {
+    // Only archive if there's meaningful dialogue (e.g. at least 4 messages: 2 user + 2 model turns)
+    if history.len() < 4 {
         log::info!("[Sessions] Skipping session archive (history too short)");
         return Ok(());
     }
@@ -83,13 +84,22 @@ pub async fn archive_session_transcript<R: Runtime>(
         slug
     };
 
-    let filename = format!("{}-{}.md", today, safe_slug);
-    let mut path = memory_dir.join(&filename);
-
-    if path.exists() {
-        let ts = Utc::now().format("%H%M").to_string();
-        path = memory_dir.join(format!("{}-{}-{}.md", today, safe_slug, ts));
+    // Before writing a new file, check if an older file for this same session ID exists and delete it
+    // This allows the slug to change while keeping the file cleanly overwritten
+    let session_suffix = format!("-{}.md", session_id);
+    if let Ok(entries) = std::fs::read_dir(&memory_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.ends_with(&session_suffix) {
+                    log::info!("[Sessions] Deleting old transcript for session {}: {}", session_id, name);
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
     }
+
+    let filename = format!("{}-{}{}", today, safe_slug, session_suffix);
+    let path = memory_dir.join(&filename);
 
     let mut file = OpenOptions::new()
         .create(true)

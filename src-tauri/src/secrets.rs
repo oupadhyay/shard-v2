@@ -7,9 +7,11 @@
 /// - Windows: Credential Manager
 ///
 /// All keys are stored in a single JSON entry to minimize password prompts.
+/// An in-memory cache prevents redundant keychain reads within a session.
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 /// Service name for all Shard secrets in the OS keyring
 const SERVICE_NAME: &str = "dev.shard.app";
@@ -36,7 +38,7 @@ pub enum ApiKeyType {
 
 impl ApiKeyType {
     /// Get the JSON key name for this key type
-    fn key_name(&self) -> &'static str {
+    pub(crate) fn key_name(&self) -> &'static str {
         match self {
             ApiKeyType::OpenAI => "api_key",
             ApiKeyType::Gemini => "gemini_api_key",
@@ -51,18 +53,63 @@ impl ApiKeyType {
 /// Internal storage structure for all API keys
 type ApiKeysStore = HashMap<String, String>;
 
-/// Load all API keys from keyring
+/// In-memory cache to avoid redundant keychain reads.
+///
+/// The Mutex wraps an Option so we can invalidate the cache on writes
+/// without replacing the lock itself. `None` means "not yet loaded."
+static KEYS_CACHE: OnceLock<Mutex<Option<ApiKeysStore>>> = OnceLock::new();
+
+fn cache() -> &'static Mutex<Option<ApiKeysStore>> {
+    KEYS_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+/// Load all API keys from keyring, using the in-memory cache when possible.
+///
+/// The first call pays the full keychain cost (one OS prompt on first launch).
+/// Subsequent calls return the cached map without touching the keyring.
 fn load_all_keys() -> Result<ApiKeysStore, String> {
+    let mut guard = cache().lock().unwrap();
+
+    if let Some(ref cached) = *guard {
+        return Ok(cached.clone());
+    }
+
+    // Cache miss: go to the keyring exactly once.
     let entry = Entry::new(SERVICE_NAME, ENTRY_NAME)
         .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
 
-    match entry.get_password() {
-        Ok(json) => {
-            serde_json::from_str(&json).map_err(|e| format!("Failed to parse keyring data: {}", e))
+    let store = match entry.get_password() {
+        Ok(json) => serde_json::from_str::<ApiKeysStore>(&json)
+            .map_err(|e| format!("Failed to parse keyring data: {}", e))?,
+        Err(keyring::Error::NoEntry) => HashMap::new(),
+        Err(e) => return Err(format!("Failed to read keyring: {}", e)),
+    };
+
+    *guard = Some(store.clone());
+    Ok(store)
+}
+
+/// Save all API keys to keyring and update the cache atomically.
+fn save_all_keys(keys: &ApiKeysStore) -> Result<(), String> {
+    let entry = Entry::new(SERVICE_NAME, ENTRY_NAME)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+
+    if keys.is_empty() {
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(e) => return Err(format!("Failed to delete keyring entry: {}", e)),
         }
-        Err(keyring::Error::NoEntry) => Ok(HashMap::new()),
-        Err(e) => Err(format!("Failed to read keyring: {}", e)),
+    } else {
+        let json =
+            serde_json::to_string(keys).map_err(|e| format!("Failed to serialize keys: {}", e))?;
+        entry
+            .set_password(&json)
+            .map_err(|e| format!("Failed to save keyring: {}", e))?;
     }
+
+    // Update cache to match the persisted state.
+    *cache().lock().unwrap() = Some(keys.clone());
+    Ok(())
 }
 
 /// Old entry names from the pre-consolidation format
@@ -76,8 +123,21 @@ const OLD_ENTRY_NAMES: &[(&str, ApiKeyType)] = &[
 ];
 
 /// Migrate old separate keychain entries to new consolidated format.
-/// Call this on app startup to handle users upgrading from old versions.
+///
+/// Should be called ONCE at startup via `ensure_migrated`. The migration
+/// reads individual legacy entries and merges them into the consolidated
+/// `api_keys` entry, then deletes the old entries.
 pub fn migrate_legacy_entries() {
+    // Optimization: If we already have ANY keys in the consolidated store,
+    // assume migration is either finished or not needed. This avoids the
+    // "legacy check prompts" on every startup once the user is set up.
+    if let Ok(existing) = load_all_keys() {
+        if !existing.is_empty() {
+            log::debug!("[Secrets] Consolidated store not empty, skipping legacy migration check");
+            return;
+        }
+    }
+
     let mut migrated_keys: ApiKeysStore = HashMap::new();
     let mut entries_to_delete: Vec<Entry> = Vec::new();
 
@@ -98,7 +158,7 @@ pub fn migrate_legacy_entries() {
         return; // No legacy entries to migrate
     }
 
-    // Merge with any existing consolidated keys
+    // Merge with any existing consolidated keys (already in cache from load_all_keys)
     if let Ok(existing) = load_all_keys() {
         for (k, v) in existing {
             migrated_keys.entry(k).or_insert(v);
@@ -133,39 +193,41 @@ pub fn migrate_legacy_entries() {
     }
 }
 
-/// Save all API keys to keyring
-fn save_all_keys(keys: &ApiKeysStore) -> Result<(), String> {
-    let entry = Entry::new(SERVICE_NAME, ENTRY_NAME)
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
-
-    if keys.is_empty() {
-        // Delete entry if no keys
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(format!("Failed to delete keyring entry: {}", e)),
-        }
-    } else {
-        let json =
-            serde_json::to_string(keys).map_err(|e| format!("Failed to serialize keys: {}", e))?;
-        entry
-            .set_password(&json)
-            .map_err(|e| format!("Failed to save keyring: {}", e))
-    }
-}
-
-/// Store a secret in the OS keyring
-pub fn store_secret(key_type: ApiKeyType, value: &str) -> Result<(), String> {
+/// Store multiple secrets in the OS keyring in a single operation.
+///
+/// Use this in batch operations (like migration or save_config) to avoid
+/// multiple OS-level password prompts.
+pub fn store_secrets_batch(
+    updates: HashMap<ApiKeyType, Option<String>>,
+) -> Result<(), String> {
     let mut keys = load_all_keys()?;
+    let mut changed = false;
 
-    if value.is_empty() {
-        keys.remove(key_type.key_name());
-        log::info!("[Secrets] Removed {:?} from keyring", key_type);
-    } else {
-        keys.insert(key_type.key_name().to_string(), value.to_string());
-        log::info!("[Secrets] Stored {:?} (len={})", key_type, value.len());
+    for (key_type, value_opt) in updates {
+        match value_opt {
+            Some(value) if !value.is_empty() => {
+                let name = key_type.key_name().to_string();
+                if keys.get(&name) != Some(&value) {
+                    keys.insert(name, value);
+                    changed = true;
+                }
+            }
+            Some(_) => {
+                // Some("") means delete
+                if keys.remove(key_type.key_name()).is_some() {
+                    changed = true;
+                }
+            }
+            None => {
+                // None means "no change" or "don't update"
+            }
+        }
     }
 
-    save_all_keys(&keys)
+    if changed {
+        save_all_keys(&keys)?;
+    }
+    Ok(())
 }
 
 /// Retrieve a secret from the OS keyring
@@ -180,9 +242,12 @@ pub fn get_secret(key_type: ApiKeyType) -> Result<Option<String>, String> {
     Ok(result)
 }
 
-/// Delete a secret from the OS keyring
-pub fn delete_secret(key_type: ApiKeyType) -> Result<(), String> {
-    store_secret(key_type, "")
+/// Retrieve all secrets at once, returning the full map.
+///
+/// Use this when you need multiple keys to avoid separate round-trips
+/// (the cache makes them cheap, but this is cleaner).
+pub fn get_all_secrets() -> Result<ApiKeysStore, String> {
+    load_all_keys()
 }
 
 #[cfg(test)]

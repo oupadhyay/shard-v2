@@ -26,7 +26,9 @@ pub struct Agent {
     history: Mutex<Vec<ChatMessage>>,
     http_client: Client,
     uploaded_files: Mutex<Vec<String>>,
-    backup_history: Mutex<Option<Vec<ChatMessage>>>,
+    backup_history: Mutex<Option<(Vec<ChatMessage>, String)>>,
+    pub session_id: Mutex<String>,
+    pub last_archived_hash: Mutex<u64>,
     data_dir: std::path::PathBuf,
     pub app_handle: tauri::AppHandle,
 }
@@ -46,25 +48,29 @@ impl Agent {
 
         // Load persisted history if it exists
         let history_path = app_data_dir.join("chat_history.json");
-        let history = if history_path.exists() {
+        let (history, session_id, last_archived_hash) = if history_path.exists() {
             match std::fs::read_to_string(&history_path) {
-                Ok(contents) => match serde_json::from_str::<Vec<ChatMessage>>(&contents) {
-                    Ok(msgs) => {
-                        log::info!("Loaded {} messages from persisted history", msgs.len());
-                        msgs
+                Ok(contents) => {
+                    // Try to parse the new PersistedChatState struct
+                    if let Ok(state) = serde_json::from_str::<PersistedChatState>(&contents) {
+                        log::info!("Loaded {} messages from persisted history with Session ID", state.history.len());
+                        (state.history, state.session_id, state.last_archived_hash)
+                    } else if let Ok(msgs) = serde_json::from_str::<Vec<ChatMessage>>(&contents) {
+                        // Fallback: It's an old file with just the raw array
+                        log::info!("Loaded {} messages from legacy persisted history", msgs.len());
+                        (msgs, uuid::Uuid::new_v4().to_string(), 0)
+                    } else {
+                        log::warn!("Failed to parse chat history");
+                        (Vec::new(), uuid::Uuid::new_v4().to_string(), 0)
                     }
-                    Err(e) => {
-                        log::warn!("Failed to parse chat history: {}", e);
-                        Vec::new()
-                    }
-                },
+                }
                 Err(e) => {
                     log::warn!("Failed to read chat history: {}", e);
-                    Vec::new()
+                    (Vec::new(), uuid::Uuid::new_v4().to_string(), 0)
                 }
             }
         } else {
-            Vec::new()
+            (Vec::new(), uuid::Uuid::new_v4().to_string(), 0)
         };
 
         Self {
@@ -72,6 +78,8 @@ impl Agent {
             http_client,
             uploaded_files: Mutex::new(Vec::new()),
             backup_history: Mutex::new(None),
+            session_id: Mutex::new(session_id),
+            last_archived_hash: Mutex::new(last_archived_hash),
             data_dir: app_data_dir,
             app_handle,
         }
@@ -88,37 +96,91 @@ impl Agent {
                 break;
             }
         }
+
+        // Release lock before persist
+        drop(history);
+        self.persist_history().await;
     }
 
     pub async fn save_and_clear_history(&self, api_key: Option<String>) {
-        let mut history = self.history.lock().await;
+        // Phase 1: Extract session data and decide whether to archive.
+        // Do all of this in a scoped block so we don't hold these guards
+        // while acquiring backup_history or uploaded_files below.
+        let (history_clone, current_session_id, should_archive) = {
+            let history = self.history.lock().await;
+            let session_id_guard = self.session_id.lock().await;
+            let last_hash_guard = self.last_archived_hash.lock().await;
 
-        // Spawn background task to archive session transcript
-        let history_clone = history.clone();
-        let app_handle_clone = self.app_handle.clone();
-        let http_client_clone = self.http_client.clone();
+            let history_clone = history.clone();
+            let current_hash = self.calculate_history_hash(&history_clone);
+            let should_archive = current_hash != *last_hash_guard;
+            let current_session_id = session_id_guard.clone();
 
-        tauri::async_runtime::spawn(async move {
-            if let Ok(config) = crate::config::load_config(&app_handle_clone) {
-                if let Err(e) = crate::sessions::archive_session_transcript(
-                    &app_handle_clone,
-                    &http_client_clone,
-                    &config,
-                    history_clone,
-                ).await {
-                    log::warn!("[Agent] Failed to archive session: {}", e);
+            (history_clone, current_session_id, should_archive)
+        };
+
+        // Phase 2: Spawn background archival task if history changed.
+        if should_archive {
+            let app_handle_clone = self.app_handle.clone();
+            let http_client_clone = self.http_client.clone();
+            let session_id_for_task = current_session_id.clone();
+            let history_for_task = history_clone.clone();
+
+            tauri::async_runtime::spawn(async move {
+                if let Ok(config) = crate::config::load_config(&app_handle_clone) {
+                    if let Err(e) = crate::sessions::archive_session_transcript(
+                        &app_handle_clone,
+                        &http_client_clone,
+                        &config,
+                        &session_id_for_task,
+                        history_for_task,
+                    ).await {
+                        log::warn!("[Agent] Failed to archive session: {}", e);
+                    }
                 }
-            }
-        });
+            });
+        } else {
+            log::info!("[Agent] Skipping session archive (no changes in chat history)");
+        }
 
-        let mut backup = self.backup_history.lock().await;
-        *backup = Some(history.clone());
-        history.clear();
+        // Phase 3: Update the hash, rotate session ID, clear history and backup.
+        // Each accessed under its own scope to prevent simultaneous holding.
+        {
+            let mut last_hash_guard = self.last_archived_hash.lock().await;
+            *last_hash_guard = if should_archive {
+                self.calculate_history_hash(&history_clone)
+            } else {
+                0
+            };
+        }
 
-        let mut uploaded_files = self.uploaded_files.lock().await;
-        if !uploaded_files.is_empty() {
+        let new_session_id = uuid::Uuid::new_v4().to_string();
+        {
+            let mut session_id_guard = self.session_id.lock().await;
+            *session_id_guard = new_session_id;
+        }
+
+        {
+            let mut backup = self.backup_history.lock().await;
+            *backup = Some((history_clone, current_session_id));
+        }
+
+        {
+            let mut history = self.history.lock().await;
+            history.clear();
+        }
+
+        // Phase 4: Delete uploaded Gemini files in the background.
+        let uris_to_delete: Vec<String> = {
+            let mut uploaded_files = self.uploaded_files.lock().await;
+            let uris = uploaded_files.clone();
+            uploaded_files.clear();
+            uris
+        };
+
+        if !uris_to_delete.is_empty() {
             if let Some(key) = api_key {
-                for uri in uploaded_files.iter() {
+                for uri in uris_to_delete.iter() {
                     if let Some(file_name) = uri.split('/').last() {
                         let delete_url = format!(
                             "https://generativelanguage.googleapis.com/v1beta/files/{}",
@@ -130,21 +192,37 @@ impl Agent {
                     }
                 }
             }
-            uploaded_files.clear();
         }
 
-        // Persist the cleared state
-        drop(history); // Release lock
-        drop(uploaded_files);
+        // Phase 5: Persist the final cleared state.
         self.persist_history().await;
     }
 
     pub async fn restore_history(&self) -> Result<(), String> {
-        let mut history = self.history.lock().await;
-        let mut backup = self.backup_history.lock().await;
+        // Extract the saved state, then immediately release both guards to avoid
+        // holding `history` + `backup` while acquiring `session_id` + `last_archived_hash`.
+        let saved = {
+            let mut backup = self.backup_history.lock().await;
+            backup.take()
+        };
 
-        if let Some(saved) = backup.take() {
-            *history = saved;
+        if let Some((saved_history, saved_session_id)) = saved {
+            let new_hash = self.calculate_history_hash(&saved_history);
+
+            {
+                let mut history = self.history.lock().await;
+                *history = saved_history;
+            }
+            {
+                let mut session_id_guard = self.session_id.lock().await;
+                *session_id_guard = saved_session_id;
+            }
+            {
+                let mut last_hash_guard = self.last_archived_hash.lock().await;
+                *last_hash_guard = new_hash;
+            }
+
+            self.persist_history().await;
             Ok(())
         } else {
             Err("No backup available".to_string())
@@ -164,6 +242,29 @@ impl Agent {
     pub async fn has_backup(&self) -> bool {
         let backup = self.backup_history.lock().await;
         backup.is_some()
+    }
+
+    /// Helper to compute a simple hash of the chat history to detect changes
+    fn calculate_history_hash(&self, history: &[ChatMessage]) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        for msg in history {
+            msg.role.hash(&mut hasher);
+            if let Some(content) = &msg.content {
+                content.hash(&mut hasher);
+            }
+            // Hash tool calls to catch edits there too
+            if let Some(calls) = &msg.tool_calls {
+                for call in calls {
+                    call.id.hash(&mut hasher);
+                    call.function.name.hash(&mut hasher);
+                    call.function.arguments.hash(&mut hasher);
+                }
+            }
+        }
+        hasher.finish()
     }
 
     /// Retry the last response with a hint about KaTeX errors
@@ -270,9 +371,17 @@ impl Agent {
     /// Persist current chat history to disk
     pub async fn persist_history(&self) {
         let history = self.history.lock().await;
+        let session_id = self.session_id.lock().await;
+        let last_archived_hash = self.last_archived_hash.lock().await;
         let history_path = self.data_dir.join("chat_history.json");
 
-        match serde_json::to_string_pretty(&*history) {
+        let state = PersistedChatState {
+            session_id: session_id.clone(),
+            last_archived_hash: *last_archived_hash,
+            history: history.clone(),
+        };
+
+        match serde_json::to_string_pretty(&state) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&history_path, json) {
                     log::error!("Failed to persist chat history: {}", e);
