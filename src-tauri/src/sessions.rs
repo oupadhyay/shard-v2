@@ -1,10 +1,7 @@
 use crate::agent::ChatMessage;
 use crate::config::AppConfig;
-use chrono::Utc;
 use regex::Regex;
 use reqwest::Client;
-use std::fs::OpenOptions;
-use std::io::Write;
 use tauri::{AppHandle, Runtime};
 
 /// System prompt for background LLM to generate a descriptive slug and summary for the session
@@ -71,55 +68,47 @@ pub async fn archive_session_transcript<R: Runtime>(
         }
     };
 
-    // 2. Format the transcript
-    let transcript = format_transcript(&history);
-
-    // 3. Write to the memory/sessions directory
-    let memory_dir = crate::memories::get_memory_transcripts_dir(app_handle)?;
-
-    let today = Utc::now().format("%Y-%m-%d").to_string();
+    // 2. Format title and update DB
     let safe_slug = if slug.is_empty() {
-        "session".to_string()
+        "Session".to_string()
     } else {
-        slug
+        slug.split('-')
+            .map(|word| {
+                let mut c = word.chars();
+                match c.next() {
+                    None => String::new(),
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                }
+            })
+            .collect::<Vec<String>>()
+            .join(" ")
     };
 
-    // Before writing a new file, check if an older file for this same session ID exists and delete it
-    // This allows the slug to change while keeping the file cleanly overwritten
-    let session_suffix = format!("-{}.md", session_id);
-    if let Ok(entries) = std::fs::read_dir(&memory_dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                if name.ends_with(&session_suffix) {
-                    log::info!("[Sessions] Deleting old transcript for session {}: {}", session_id, name);
-                    let _ = std::fs::remove_file(entry.path());
-                }
-            }
+    if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Try to preserve original created_at if modifying an existing session
+        let existing_created_at: Option<String> = store.conn.query_row(
+            "SELECT created_at FROM sessions WHERE id = ?1",
+            rusqlite::params![session_id],
+            |row| row.get(0),
+        ).ok();
+
+        let session_row = crate::db::sessions::SessionRow {
+            id: session_id.to_string(),
+            title: safe_slug.clone(),
+            summary: Some(summary.clone()),
+            created_at: existing_created_at.unwrap_or_else(|| now.clone()),
+            updated_at: now,
+        };
+
+        if let Err(e) = crate::db::sessions::insert_session(&store, &session_row) {
+            log::warn!("[Sessions] Failed to update session metadata: {}", e);
+        } else {
+            log::info!("[Sessions] Saved session metadata to SQLite DB (Title: {}, Summary: {})", safe_slug, summary);
         }
     }
 
-    let filename = format!("{}-{}{}", today, safe_slug, session_suffix);
-    let path = memory_dir.join(&filename);
-
-    let mut file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&path)
-        .map_err(|e| format!("Failed to create session file: {}", e))?;
-
-    let header = format!(
-        "# Session Transcript\n\n*Saved on: {}*\n\n## Summary\n\n{}\n\n---\n\n## Dialogue\n\n",
-        Utc::now().to_rfc2822(),
-        summary
-    );
-    file.write_all(header.as_bytes())
-        .map_err(|e| format!("Failed to write to session file: {}", e))?;
-
-    file.write_all(transcript.as_bytes())
-        .map_err(|e| format!("Failed to write transcript: {}", e))?;
-
-    log::info!("[Sessions] Saved session transcript to {}", path.display());
     Ok(())
 }
 

@@ -54,7 +54,7 @@ impl From<std::io::Error> for VectorStoreError {
 
 /// SQLite-backed vector store using sqlite-vec for KNN search
 pub struct VectorStore {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 /// Embedding dimension (Gemini text-embedding-004)

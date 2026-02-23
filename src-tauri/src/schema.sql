@@ -62,3 +62,25 @@ END;
 CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
   UPDATE chunks_fts SET heading = new.heading, text = new.text WHERE chunk_id = old.id;
 END;
+
+-- Unified Session Model (Conversations)
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    summary TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+-- Initialize migration flag to false
+INSERT OR IGNORE INTO metadata (key, value) VALUES ('session_migration_completed', 'false');

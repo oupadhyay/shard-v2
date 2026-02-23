@@ -298,6 +298,24 @@ body {
   background: rgba(255, 255, 255, 0.02);
 }
 
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--border-default);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
 .markdown-body a {
   color: var(--accent-link);
   text-decoration: none;
@@ -321,7 +339,6 @@ body {
    Tool Calls & Thinking
    ============================================ */
 
-/* Thinking Output */
 .thinking-output {
   background: linear-gradient(135deg, rgba(12, 12, 14, 0.9) 0%, rgba(6, 6, 8, 0.92) 100%);
   border: 1px solid var(--border-subtle);
@@ -1328,6 +1345,112 @@ body {
   border-color: var(--border-default);
   color: var(--text-primary);
 }
+
+/* Session Modal Overrides & Items */
+.sessions-content-override {
+  height: auto !important;
+  max-height: 600px !important;
+}
+
+.sessions-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-right: 4px;
+}
+
+.sessions-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sessions-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+
+.sessions-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+#new-session-modal-btn {
+  background: linear-gradient(135deg, rgba(35, 35, 38, 0.92) 0%, rgba(22, 22, 24, 0.94) 100%);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+}
+
+#new-session-modal-btn:hover {
+  background: linear-gradient(135deg, rgba(48, 48, 52, 0.92) 0%, rgba(32, 32, 35, 0.94) 100%);
+  border-color: var(--border-emphasis);
+}
+
+#close-sessions {
+  background: linear-gradient(135deg, rgba(22, 22, 24, 0.92) 0%, rgba(12, 12, 14, 0.94) 100%);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+#close-sessions:hover {
+  background: linear-gradient(135deg, rgba(32, 32, 35, 0.92) 0%, rgba(20, 20, 22, 0.94) 100%);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+
+.session-item {
+  padding: 12px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border: 1px solid transparent;
+}
+
+.session-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-subtle);
+}
+
+.session-item-title {
+  font-weight: 500;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.session-item-meta {
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.session-item-summary {
+  opacity: 0.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(255, 255, 255, 0.3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  font-style: italic;
+  line-height: 1.3;
+}
+
+.sessions-empty {
+  padding: 40px 20px;
+  color: var(--text-tertiary);
+  text-align: center;
+  font-size: 0.9rem;
+}
+
 
 /* ============================================
    Unfocused State (No Blur Fallback)

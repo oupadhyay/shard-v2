@@ -1,4 +1,5 @@
 pub mod arxiv;
+pub mod browser;
 pub mod finance;
 pub mod ocr;
 pub mod screen_context;

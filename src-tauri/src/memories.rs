@@ -1370,6 +1370,68 @@ pub fn find_relevant_chunks<R: Runtime>(
     Ok(results)
 }
 
+/// Search memory chunks with caller-specified min_score (for explicit memory_search tool).
+/// Unlike find_relevant_chunks which hard-codes 0.35, this lets the model tune precision.
+pub fn search_memory_chunks<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    query_text: &str,
+    query_embedding: &[f32],
+    limit: usize,
+    min_score: f32,
+) -> Result<Vec<Chunk>, String> {
+    let vector_store = get_vector_store(app_handle)?;
+    let results = vector_store
+        .hybrid_search(query_text, query_embedding, limit, min_score)
+        .map_err(|e| format!("Hybrid search failed: {}", e))?;
+    Ok(results)
+}
+
+/// Read specific lines from a memory file (topics, insights, or sessions).
+/// `relative_path` is relative to the memories directory (e.g. "topics/SHARD.md").
+/// Returns the requested line range as a string.
+pub fn read_memory_file_lines<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    relative_path: &str,
+    from_line: usize,
+    line_count: usize,
+) -> Result<String, String> {
+    let memories_dir = get_memories_dir(app_handle)?;
+    let requested = memories_dir.join(relative_path);
+
+    // Security: canonicalize and ensure the resolved path is inside memories_dir
+    let canonical_memories = memories_dir
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize memories dir: {}", e))?;
+    let canonical_requested = requested
+        .canonicalize()
+        .map_err(|_| format!("File not found: {}", relative_path))?;
+
+    if !canonical_requested.starts_with(&canonical_memories) {
+        return Err("Path traversal denied: path must be within the memories directory".to_string());
+    }
+
+    let content = fs::read_to_string(&canonical_requested)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    let lines: Vec<&str> = content.lines().collect();
+    let total_lines = lines.len();
+
+    // Clamp from_line to valid range (1-indexed input)
+    let start_idx = from_line.saturating_sub(1).min(total_lines);
+    let end_idx = (start_idx + line_count).min(total_lines);
+
+    let selected: Vec<&str> = lines[start_idx..end_idx].to_vec();
+    let header = format!(
+        "[Lines {}-{} of {} total in {}]\n",
+        start_idx + 1,
+        end_idx,
+        total_lines,
+        relative_path
+    );
+
+    Ok(format!("{}{}", header, selected.join("\n")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

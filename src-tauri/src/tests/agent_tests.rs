@@ -261,7 +261,12 @@ mod tests {
             tool_calls[0].thought_signature,
             Some("test_signature".to_string())
         );
-        assert_eq!(events.len(), 0);
+        assert_eq!(events.len(), 1);
+        if let AgentEvent::ToolCall(fc) = &events[0] {
+            assert_eq!(fc.function_call.name, "get_weather");
+        } else {
+            panic!("Expected ToolCall event");
+        }
     }
 
     // Note: execute_tool is async and requires Agent instance with HTTP client.

@@ -102,6 +102,22 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
+                name: "open_url".to_string(),
+                description: "Read the main text content of any URL/web page and provides clean, readable text. Use this to read specific articles or pages found via web_search or directly requested by the user.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "The full HTTPS URL of the web page to read." },
+                    },
+                    "required": ["url"],
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
                 name: "save_memory".to_string(),
                 description: "Save important user preferences, context, or facts to persistent memory. Use for genuinely persistent information. Call when: user explicitly requests you remember something, user states a strong preference (language, units, coding style), or user provides important project context for ongoing work.".to_string(),
                 parameters: json!({
@@ -162,6 +178,43 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                 parameters: json!({
                     "type": "object",
                     "properties": {},
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "memory_search".to_string(),
+                description: "Search your persistent memory (topics, insights, session transcripts) using semantic and keyword search. Returns ranked snippets with source paths and line ranges. Can use temporal filters for chats.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Natural language search query describing what to find in memory" },
+                        "max_results": { "type": "integer", "description": "Maximum number of results to return (default: 5)" },
+                        "min_score": { "type": "number", "description": "Minimum similarity score 0.0-1.0 (default: 0.3)." },
+                        "time_filter": { "type": "string", "description": "Optional: 'last_conversation', 'yesterday', 'last_week', or specific YYYY-MM-DD date" }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "memory_get".to_string(),
+                description: "Read specific lines from a memory file or full session transcript. Provide either 'path' (for topics/insights) or 'session_id' (for full chats).".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Relative path to the memory file (e.g. 'topics/SHARD.md')" },
+                        "session_id": { "type": "string", "description": "Session UUID to fetch the full transcript." },
+                        "from": { "type": "integer", "description": "Starting line number, 1-indexed (default: 1)" },
+                        "lines": { "type": "integer", "description": "Number of lines to read (default: 50, max: 200)" }
+                    },
                     "additionalProperties": false
                 }),
                 strict: Some(true),

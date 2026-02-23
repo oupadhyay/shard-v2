@@ -29,7 +29,6 @@ pub struct Agent {
     backup_history: Mutex<Option<(Vec<ChatMessage>, String)>>,
     pub session_id: Mutex<String>,
     pub last_archived_hash: Mutex<u64>,
-    data_dir: std::path::PathBuf,
     pub app_handle: tauri::AppHandle,
 }
 
@@ -46,32 +45,82 @@ impl Agent {
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        // Load persisted history if it exists
-        let history_path = app_data_dir.join("chat_history.json");
-        let (history, session_id, last_archived_hash) = if history_path.exists() {
-            match std::fs::read_to_string(&history_path) {
-                Ok(contents) => {
-                    // Try to parse the new PersistedChatState struct
-                    if let Ok(state) = serde_json::from_str::<PersistedChatState>(&contents) {
-                        log::info!("Loaded {} messages from persisted history with Session ID", state.history.len());
-                        (state.history, state.session_id, state.last_archived_hash)
-                    } else if let Ok(msgs) = serde_json::from_str::<Vec<ChatMessage>>(&contents) {
-                        // Fallback: It's an old file with just the raw array
-                        log::info!("Loaded {} messages from legacy persisted history", msgs.len());
-                        (msgs, uuid::Uuid::new_v4().to_string(), 0)
-                    } else {
-                        log::warn!("Failed to parse chat history");
-                        (Vec::new(), uuid::Uuid::new_v4().to_string(), 0)
+        // Restore active session history from SQLite
+        let mut session_id = uuid::Uuid::new_v4().to_string();
+        let last_archived_hash = 0;
+        let mut history = Vec::new();
+
+        if let Ok(store) = crate::memories::get_vector_store(&app_handle) {
+            use rusqlite::OptionalExtension;
+            // Fetch the most recently updated session ID
+            if let Ok(Some(latest_session_id)) = store
+                .conn
+                .query_row(
+                    "SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+            {
+                session_id = latest_session_id;
+                // Fetch messages for this session
+                if let Ok(mut stmt) = store.conn.prepare(
+                    "SELECT content FROM messages WHERE session_id = ? ORDER BY created_at ASC",
+                ) {
+                    if let Ok(msg_iter) = stmt.query_map([&session_id], |row| {
+                        let content: String = row.get(0)?;
+                        Ok(serde_json::from_str::<PersistedChatState>(&content)
+                            .map(|s| s.history)
+                            .unwrap_or_else(|_| {
+                                if let Ok(m) = serde_json::from_str::<ChatMessage>(&content) {
+                                    vec![m]
+                                } else {
+                                    Vec::new()
+                                }
+                            }))
+                    }) {
+                        for msg_res in msg_iter.flatten() {
+                            history.extend(msg_res);
+                        }
                     }
                 }
-                Err(e) => {
-                    log::warn!("Failed to read chat history: {}", e);
-                    (Vec::new(), uuid::Uuid::new_v4().to_string(), 0)
+
+                // Dynamic fallback for legacy markdown migrations
+                if history.len() == 1 {
+                    let first_msg = &history[0];
+                    if first_msg.role == "assistant"
+                        && first_msg
+                            .content
+                            .as_deref()
+                            .unwrap_or("")
+                            .starts_with("# Session Transcript")
+                    {
+                        let parsed = crate::db::sessions::parse_legacy_markdown_transcript(
+                            first_msg.content.as_deref().unwrap(),
+                        );
+                        if !parsed.is_empty() {
+                            history = parsed;
+                        }
+                    }
                 }
+
+                log::info!(
+                    "Loaded {} messages from SQLite for session {}",
+                    history.len(),
+                    session_id
+                );
+            } else {
+                let now = chrono::Utc::now().to_rfc3339();
+                let session = crate::db::sessions::SessionRow {
+                    id: session_id.clone(),
+                    title: "Active Session".to_string(),
+                    summary: None,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                };
+                let _ = crate::db::sessions::insert_session(&store, &session);
             }
-        } else {
-            (Vec::new(), uuid::Uuid::new_v4().to_string(), 0)
-        };
+        }
 
         Self {
             history: Mutex::new(history),
@@ -80,7 +129,6 @@ impl Agent {
             backup_history: Mutex::new(None),
             session_id: Mutex::new(session_id),
             last_archived_hash: Mutex::new(last_archived_hash),
-            data_dir: app_data_dir,
             app_handle,
         }
     }
@@ -134,7 +182,9 @@ impl Agent {
                         &config,
                         &session_id_for_task,
                         history_for_task,
-                    ).await {
+                    )
+                    .await
+                    {
                         log::warn!("[Agent] Failed to archive session: {}", e);
                     }
                 }
@@ -157,7 +207,20 @@ impl Agent {
         let new_session_id = uuid::Uuid::new_v4().to_string();
         {
             let mut session_id_guard = self.session_id.lock().await;
-            *session_id_guard = new_session_id;
+            *session_id_guard = new_session_id.clone();
+        }
+
+        // Initialize the new session in the DB immediately so FK constraints pass
+        if let Ok(store) = crate::memories::get_vector_store(&self.app_handle) {
+            let now = chrono::Utc::now().to_rfc3339();
+            let session = crate::db::sessions::SessionRow {
+                id: new_session_id.clone(),
+                title: "Active Session".to_string(),
+                summary: None,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            };
+            let _ = crate::db::sessions::insert_session(&store, &session);
         }
 
         {
@@ -186,15 +249,18 @@ impl Agent {
                             "https://generativelanguage.googleapis.com/v1beta/files/{}",
                             file_name
                         );
-                        let _ = self.http_client.delete(&delete_url)
+                        let _ = self
+                            .http_client
+                            .delete(&delete_url)
                             .header("X-Goog-Api-Key", key.as_str())
-                            .send().await;
+                            .send()
+                            .await;
                     }
                 }
             }
         }
 
-        // Phase 5: Persist the final cleared state.
+        // Phase 5: Persist the final cleared state to SQLite.
         self.persist_history().await;
     }
 
@@ -232,6 +298,76 @@ impl Agent {
     pub async fn get_history(&self) -> Vec<ChatMessage> {
         let history = self.history.lock().await;
         history.clone()
+    }
+
+    pub async fn load_session_from_db<R: Runtime>(
+        &self,
+        app_handle: &AppHandle<R>,
+        session_id: &str,
+    ) -> Result<(), String> {
+        let new_history = {
+            if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+                let mut stmt = store
+                    .conn
+                    .prepare(
+                        "SELECT content FROM messages WHERE session_id = ? ORDER BY created_at ASC",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let mut history = Vec::new();
+                if let Ok(msg_iter) = stmt.query_map([session_id], |row| {
+                    let content: String = row.get(0)?;
+                    Ok(
+                        serde_json::from_str::<ChatMessage>(&content).unwrap_or_else(|_| {
+                            ChatMessage {
+                                role: "system".to_string(),
+                                content: Some("Failed to parse message".to_string()),
+                                reasoning: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                                images: None,
+                            }
+                        }),
+                    )
+                }) {
+                    for msg_res in msg_iter {
+                        if let Ok(msg) = msg_res {
+                            history.push(msg);
+                        }
+                    }
+                }
+
+                // Dynamic fallback for legacy markdown migrations
+                if history.len() == 1 {
+                    let first_msg = &history[0];
+                    if first_msg.role == "assistant"
+                        && first_msg
+                            .content
+                            .as_deref()
+                            .unwrap_or("")
+                            .starts_with("# Session Transcript")
+                    {
+                        let parsed = crate::db::sessions::parse_legacy_markdown_transcript(
+                            first_msg.content.as_deref().unwrap(),
+                        );
+                        if !parsed.is_empty() {
+                            history = parsed;
+                        }
+                    }
+                }
+
+                history
+            } else {
+                return Err("Failed to open database".to_string());
+            }
+        };
+
+        let hash = self.calculate_history_hash(&new_history);
+        *self.history.lock().await = new_history;
+        *self.session_id.lock().await = session_id.to_string();
+        *self.last_archived_hash.lock().await = hash;
+        *self.backup_history.lock().await = None;
+
+        Ok(())
     }
 
     pub async fn get_message_count(&self) -> usize {
@@ -292,14 +428,16 @@ impl Agent {
                     errors: katex_errors,
                 }
                 .get_hint();
-                history.push(ChatMessage {
+                let msg = ChatMessage {
                     role: "user".to_string(),
                     content: Some(hint),
                     reasoning: None,
                     tool_calls: None,
                     tool_call_id: None,
                     images: None,
-                });
+                };
+                history.push(msg.clone());
+                self.insert_single_message_to_db(app_handle, &msg).await;
 
                 // Emit retry event
                 let retry_event = serde_json::json!({
@@ -368,28 +506,56 @@ impl Agent {
         Ok(())
     }
 
-    /// Persist current chat history to disk
     pub async fn persist_history(&self) {
         let history = self.history.lock().await;
         let session_id = self.session_id.lock().await;
-        let last_archived_hash = self.last_archived_hash.lock().await;
-        let history_path = self.data_dir.join("chat_history.json");
 
-        let state = PersistedChatState {
-            session_id: session_id.clone(),
-            last_archived_hash: *last_archived_hash,
-            history: history.clone(),
-        };
+        if let Ok(store) = crate::memories::get_vector_store(&self.app_handle) {
+            // Delete existing messages for session
+            let _ = store.conn.execute(
+                "DELETE FROM messages WHERE session_id = ?",
+                rusqlite::params![*session_id],
+            );
 
-        match serde_json::to_string_pretty(&state) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(&history_path, json) {
-                    log::error!("Failed to persist chat history: {}", e);
-                }
+            // Insert current history
+            for msg in history.iter() {
+                let msg_row = crate::db::sessions::MessageRow {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    session_id: session_id.clone(),
+                    role: msg.role.clone(),
+                    content: serde_json::to_string(msg).unwrap_or_else(|_| "{}".to_string()),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                };
+                let _ = crate::db::sessions::insert_message(&store, &msg_row);
             }
-            Err(e) => {
-                log::error!("Failed to serialize chat history: {}", e);
-            }
+
+            // Update session updated_at
+            let _ = store.conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                rusqlite::params![chrono::Utc::now().to_rfc3339(), *session_id],
+            );
+        }
+    }
+
+    async fn insert_single_message_to_db<R: Runtime>(
+        &self,
+        app_handle: &AppHandle<R>,
+        msg: &ChatMessage,
+    ) {
+        if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+            let session_id = self.session_id.lock().await;
+            let msg_row = crate::db::sessions::MessageRow {
+                id: uuid::Uuid::new_v4().to_string(),
+                session_id: session_id.clone(),
+                role: msg.role.clone(),
+                content: serde_json::to_string(msg).unwrap_or_else(|_| "{}".to_string()),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            let _ = crate::db::sessions::insert_message(&store, &msg_row);
+            let _ = store.conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                rusqlite::params![chrono::Utc::now().to_rfc3339(), *session_id],
+            );
         }
     }
 
@@ -503,14 +669,16 @@ impl Agent {
             message.clone()
         };
 
-        history.push(ChatMessage {
+        let msg = ChatMessage {
             role: "user".to_string(),
             content: Some(augmented_message),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
             images: uploaded_images,
-        });
+        };
+        history.push(msg.clone());
+        self.insert_single_message_to_db(app_handle, &msg).await;
 
         // Incognito mode: skip all RAG/memory retrieval and storage
         let incognito = config.incognito_mode.unwrap_or(false);
@@ -752,14 +920,16 @@ impl Agent {
 
             // Inject retry hint if pending (from previous failed attempt)
             if let Some(hint) = pending_retry_hint.take() {
-                history.push(ChatMessage {
+                let msg = ChatMessage {
                     role: "user".to_string(),
                     content: Some(hint),
                     reasoning: None,
                     tool_calls: None,
                     tool_call_id: None,
                     images: None,
-                });
+                };
+                history.push(msg.clone());
+                self.insert_single_message_to_db(app_handle, &msg).await;
             }
 
             let continue_turn = if is_gemini {
@@ -869,11 +1039,11 @@ impl Agent {
                     .ok();
                 }
             }
-
-            // Persist history to disk after each message exchange
-            drop(history); // Release lock before persist
-            self.persist_history().await;
         }
+
+        // Persist history to disk after each message exchange (always, regardless of incognito RAG)
+        drop(history); // Release lock before persist
+        self.persist_history().await;
 
         Ok(())
     }
@@ -984,6 +1154,15 @@ impl Agent {
                     Err(e) => format!("Error: {}", e),
                 }
             }
+            "open_url" => {
+                let url = args["url"].as_str().unwrap_or_default();
+                match crate::integrations::browser::read_url(&self.http_client, url).await {
+                    Ok(markdown) => {
+                        format!("Read URL Results for {}:\n\n{}", url, markdown)
+                    }
+                    Err(e) => format!("Error reading URL: {}", e),
+                }
+            }
             "save_memory" => {
                 // Block in incognito mode
                 if config.incognito_mode.unwrap_or(false) {
@@ -1057,6 +1236,134 @@ impl Agent {
                         msg
                     }
                     Err(e) => format!("Memory refresh failed: {}", e),
+                }
+            }
+            "memory_search" => {
+                let query = args["query"].as_str().unwrap_or_default();
+                let max_results = args["max_results"].as_u64().unwrap_or(5) as usize;
+                let min_score = args["min_score"].as_f64().unwrap_or(0.3) as f32;
+                let time_filter = args["time_filter"].as_str();
+
+                if let Some(tf) = time_filter {
+                    if !tf.is_empty() {
+                        let handle = app_handle.clone();
+                        let query_str = query.to_string();
+                        let tf_str = tf.to_string();
+                        return tokio::task::spawn_blocking(move || {
+                            if let Ok(store) = crate::memories::get_vector_store(&handle) {
+                                crate::db::sessions::search_sessions_by_time(
+                                    &store,
+                                    &query_str,
+                                    &tf_str,
+                                    max_results,
+                                )
+                                .unwrap_or_else(|e| format!("Error searching sessions: {}", e))
+                            } else {
+                                "Error: Failed to open database".to_string()
+                            }
+                        })
+                        .await
+                        .unwrap_or_else(|e| e.to_string());
+                    }
+                }
+
+                if query.is_empty() {
+                    return "Error: query parameter is required".to_string();
+                }
+
+                // Generate embedding for the query
+                let api_key = match config.gemini_api_key.as_ref() {
+                    Some(key) => key.clone(),
+                    None => return "Error: memory_search requires a Gemini API key for embedding generation".to_string(),
+                };
+
+                let embedding = match crate::interactions::generate_embedding(
+                    &self.http_client,
+                    query,
+                    &api_key,
+                )
+                .await
+                {
+                    Ok(emb) => emb,
+                    Err(e) => return format!("Error generating query embedding: {}", e),
+                };
+
+                // Run hybrid search on a blocking thread (SQLite is sync)
+                let handle = app_handle.clone();
+                let query_text = query.to_string();
+                let search_result = match tokio::task::spawn_blocking(move || {
+                    crate::memories::search_memory_chunks(
+                        &handle,
+                        &query_text,
+                        &embedding,
+                        max_results,
+                        min_score,
+                    )
+                })
+                .await
+                {
+                    Ok(res) => res,
+                    Err(e) => return format!("Error: search task panicked: {}", e),
+                };
+
+                match search_result {
+                    Ok(chunks) => {
+                        if chunks.is_empty() {
+                            return "No matching memories found.".to_string();
+                        }
+                        let results: Vec<serde_json::Value> = chunks
+                            .iter()
+                            .map(|c| {
+                                let source_dir = match c.source_type {
+                                    crate::memories::SourceType::Topic => "topics",
+                                    crate::memories::SourceType::Insight => "insights",
+                                    crate::memories::SourceType::Session => "sessions",
+                                };
+                                serde_json::json!({
+                                    "source": format!("{:?}", c.source_type).to_lowercase(),
+                                    "path": format!("{}/{}.md", source_dir, c.source_name),
+                                    "heading": c.heading,
+                                    "start_line": c.start_line,
+                                    "end_line": c.end_line,
+                                    "snippet": c.text.chars().take(500).collect::<String>(),
+                                })
+                            })
+                            .collect();
+                        serde_json::to_string_pretty(&results)
+                            .unwrap_or_else(|_| "Error formatting results".to_string())
+                    }
+                    Err(e) => format!("Memory search failed: {}", e),
+                }
+            }
+            "memory_get" => {
+                let session_id = args["session_id"].as_str();
+                if let Some(sid) = session_id {
+                    let handle = app_handle.clone();
+                    let sid_str = sid.to_string();
+                    return tokio::task::spawn_blocking(move || {
+                        if let Ok(store) = crate::memories::get_vector_store(&handle) {
+                            crate::db::sessions::get_session_transcript(&store, &sid_str)
+                                .map(|t| format!("Session {} transcript:\n{}", sid_str, t))
+                                .unwrap_or_else(|e| format!("Error getting transcript: {}", e))
+                        } else {
+                            "Error: Failed to open database".to_string()
+                        }
+                    })
+                    .await
+                    .unwrap_or_else(|e| e.to_string());
+                }
+
+                let path = args["path"].as_str().unwrap_or_default();
+                let from = args["from"].as_u64().unwrap_or(1) as usize;
+                let lines = args["lines"].as_u64().unwrap_or(50).min(200) as usize;
+
+                if path.is_empty() {
+                    return "Error: path parameter is required".to_string();
+                }
+
+                match crate::memories::read_memory_file_lines(app_handle, path, from, lines) {
+                    Ok(content) => content,
+                    Err(e) => format!("Error: {}", e),
                 }
             }
             _ => format!("Unknown tool: {}", function_name),
@@ -1137,13 +1444,20 @@ impl Agent {
                 .filter(|s| !s.is_empty())
         };
 
+        let active_skills = crate::skills::load_active_skills();
+        let active_skills_opt = if active_skills.is_empty() { None } else { Some(active_skills.as_str()) };
+
         let system_prompt_content = if incognito_mode {
-            crate::prompts::get_jailbreak_prompt(&selected_model)
+            crate::prompts::get_default_system_prompt(None, None, active_skills_opt)
         } else if is_research_mode {
-            crate::prompts::get_research_system_prompt()
+            crate::prompts::get_research_system_prompt(active_skills_opt)
         } else {
             config.system_prompt.clone().unwrap_or_else(|| {
-                crate::prompts::get_default_system_prompt(memory_context.as_deref(), rag_context)
+                crate::prompts::get_default_system_prompt(
+                    memory_context.as_deref(),
+                    rag_context,
+                    active_skills_opt,
+                )
             })
         };
 
@@ -1274,6 +1588,17 @@ impl Agent {
                                                                 .emit("agent-reasoning-chunk", text)
                                                                 .ok();
                                                         }
+                                                        AgentEvent::ToolCall(fc) => {
+                                                            let tool_call_event = serde_json::json!({
+                                                                "name": fc.function_call.name,
+                                                                "args": fc.function_call.args,
+                                                                "rawArgs": serde_json::to_string(&fc.function_call.args).unwrap_or_default(),
+                                                                "id": format!("call_{}", fc.function_call.name)
+                                                            });
+                                                            app_handle
+                                                                .emit("agent-tool-call", tool_call_event.to_string())
+                                                                .ok();
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1302,7 +1627,7 @@ impl Agent {
         }
 
         if !tool_calls.is_empty() {
-            history.push(ChatMessage {
+            let msg = ChatMessage {
                 role: "assistant".to_string(),
                 content: if full_text.is_empty() {
                     None
@@ -1332,7 +1657,9 @@ impl Agent {
                 ),
                 tool_call_id: None,
                 images: None,
-            });
+            };
+            history.push(msg.clone());
+            self.insert_single_message_to_db(app_handle, &msg).await;
 
             for (idx, fc) in tool_calls.into_iter().enumerate() {
                 let function_name = &fc.function_call.name;
@@ -1358,18 +1685,20 @@ impl Agent {
                     .emit("agent-tool-result", result_payload.to_string())
                     .ok();
 
-                history.push(ChatMessage {
+                let msg = ChatMessage {
                     role: "tool".to_string(),
                     content: Some(tool_result),
                     reasoning: None,
                     tool_calls: None,
                     tool_call_id: Some(format!("call_{}_{}", fc.function_call.name, idx)),
                     images: None,
-                });
+                };
+                history.push(msg.clone());
+                self.insert_single_message_to_db(app_handle, &msg).await;
             }
             Ok(true) // Continue loop so model can respond to tool results
         } else {
-            history.push(ChatMessage {
+            let msg = ChatMessage {
                 role: "assistant".to_string(),
                 content: if full_text.is_empty() {
                     None
@@ -1384,7 +1713,9 @@ impl Agent {
                 tool_calls: None,
                 tool_call_id: None,
                 images: None,
-            });
+            };
+            history.push(msg.clone());
+            self.insert_single_message_to_db(app_handle, &msg).await;
             Ok(false) // No tool calls = final response, stop the loop
         }
     }
@@ -1425,13 +1756,20 @@ impl Agent {
                 .filter(|s| !s.is_empty())
         };
 
+        let active_skills = crate::skills::load_active_skills();
+        let active_skills_opt = if active_skills.is_empty() { None } else { Some(active_skills.as_str()) };
+
         let system_prompt_content = if incognito_mode {
-            crate::prompts::get_jailbreak_prompt(&model)
+            crate::prompts::get_default_system_prompt(None, None, active_skills_opt)
         } else if is_research_mode {
-            crate::prompts::get_research_system_prompt()
+            crate::prompts::get_research_system_prompt(active_skills_opt)
         } else {
             config.system_prompt.clone().unwrap_or_else(|| {
-                crate::prompts::get_default_system_prompt(memory_context.as_deref(), rag_context)
+                crate::prompts::get_default_system_prompt(
+                    memory_context.as_deref(),
+                    rag_context,
+                    active_skills_opt,
+                )
             })
         };
 
@@ -1668,43 +2006,55 @@ impl Agent {
                                         app_handle.emit("agent-response-chunk", content).ok();
                                     }
 
-                                    if let Some(delta_tool_calls) =
-                                        choice["delta"].get("tool_calls")
-                                    {
-                                        if let Some(tool_calls_arr) = delta_tool_calls.as_array() {
-                                            for tool_call_json in tool_calls_arr {
-                                                let index =
-                                                    tool_call_json["index"].as_u64().unwrap_or(0)
-                                                        as usize;
-                                                if index >= tool_calls_buffer.len() {
-                                                    tool_calls_buffer.resize(
-                                                        index + 1,
-                                                        ToolCall {
-                                                            id: String::new(),
-                                                            tool_type: "function".to_string(),
-                                                            function: FunctionCall {
-                                                                name: String::new(),
-                                                                arguments: String::new(),
-                                                            },
-                                                            thought_signature: None,
-                                                        },
-                                                    );
-                                                }
-                                                let target = &mut tool_calls_buffer[index];
-                                                if let Some(id) = tool_call_json["id"].as_str() {
-                                                    target.id = id.to_string();
-                                                }
-                                                if let Some(func) = tool_call_json.get("function") {
-                                                    if let Some(name) = func["name"].as_str() {
-                                                        target.function.name.push_str(name);
+                                                if let Some(delta_tool_calls) =
+                                                    choice["delta"].get("tool_calls")
+                                                {
+                                                    if let Some(tool_calls_arr) = delta_tool_calls.as_array() {
+                                                        for tool_call_json in tool_calls_arr {
+                                                            let index =
+                                                                tool_call_json["index"].as_u64().unwrap_or(0)
+                                                                    as usize;
+                                                            if index >= tool_calls_buffer.len() {
+                                                                tool_calls_buffer.resize(
+                                                                    index + 1,
+                                                                    ToolCall {
+                                                                        id: String::new(),
+                                                                        tool_type: "function".to_string(),
+                                                                        function: FunctionCall {
+                                                                            name: String::new(),
+                                                                            arguments: String::new(),
+                                                                        },
+                                                                        thought_signature: None,
+                                                                    },
+                                                                );
+                                                            }
+                                                            let target = &mut tool_calls_buffer[index];
+                                                            if let Some(id) = tool_call_json["id"].as_str() {
+                                                                target.id = id.to_string();
+                                                            }
+                                                            if let Some(func) = tool_call_json.get("function") {
+                                                                if let Some(name) = func["name"].as_str() {
+                                                                    target.function.name.push_str(name);
+                                                                }
+                                                                if let Some(args) = func["arguments"].as_str() {
+                                                                    target.function.arguments.push_str(args);
+                                                                }
+                                                            }
+
+                                                            // Emit tool call update for real-time UI mapping
+                                                            if !target.function.name.is_empty() {
+                                                                let args_json: serde_json::Value = serde_json::from_str(&target.function.arguments).unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                                                                let event_payload = serde_json::json!({
+                                                                    "name": target.function.name,
+                                                                    "args": args_json,
+                                                                    "rawArgs": target.function.arguments,
+                                                                    "id": target.id
+                                                                });
+                                                                app_handle.emit("agent-tool-call", event_payload.to_string()).ok();
+                                                            }
+                                                        }
                                                     }
-                                                    if let Some(args) = func["arguments"].as_str() {
-                                                        target.function.arguments.push_str(args);
-                                                    }
                                                 }
-                                            }
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -1719,7 +2069,7 @@ impl Agent {
         }
 
         if !full_content.is_empty() || !tool_calls_buffer.is_empty() || !full_reasoning.is_empty() {
-            history.push(ChatMessage {
+            let msg = ChatMessage {
                 role: "assistant".to_string(),
                 content: if full_content.is_empty() {
                     None
@@ -1738,7 +2088,9 @@ impl Agent {
                 },
                 tool_call_id: None,
                 images: None,
-            });
+            };
+            history.push(msg.clone());
+            self.insert_single_message_to_db(app_handle, &msg).await;
 
             if !tool_calls_buffer.is_empty() {
                 for tool_call in &tool_calls_buffer {
@@ -1746,9 +2098,16 @@ impl Agent {
                     let arguments = &tool_call.function.arguments;
                     let args: Value = serde_json::from_str(arguments).unwrap_or(json!({}));
 
+                    let tool_call_id = if tool_call.id.is_empty() {
+                        format!("call_{}", function_name)
+                    } else {
+                        tool_call.id.clone()
+                    };
+
                     let tool_call_event = json!({
                         "name": function_name,
-                        "args": args
+                        "args": args,
+                        "id": tool_call_id
                     });
                     app_handle
                         .emit("agent-tool-call", tool_call_event.to_string())
@@ -1766,14 +2125,16 @@ impl Agent {
                         .emit("agent-tool-result", result_payload.to_string())
                         .ok();
 
-                    history.push(ChatMessage {
+                    let msg = ChatMessage {
                         role: "tool".to_string(),
                         content: Some(tool_result),
                         reasoning: None,
                         tool_calls: None,
                         tool_call_id: Some(tool_call.id.clone()),
                         images: None,
-                    });
+                    };
+                    history.push(msg.clone());
+                    self.insert_single_message_to_db(app_handle, &msg).await;
                 }
                 Ok(true) // Continue loop so model can respond to tool results
             } else {

@@ -18,17 +18,44 @@ export function createThinkingElement(content: string, isComplete: boolean = tru
   thinkingMsg.setAttribute('data-complete', isComplete ? 'true' : 'false');
   thinkingMsg.setAttribute("data-thinking", content);
 
+  updateThinkingElement(thinkingMsg, content, isComplete);
+  return thinkingMsg;
+}
+
+/**
+ * Update an existing thinking block with new content
+ */
+export function updateThinkingElement(el: HTMLElement, content: string, isComplete: boolean) {
+  el.setAttribute('data-complete', isComplete ? 'true' : 'false');
+  el.setAttribute("data-thinking", content);
+
   const trimmedThinking = content.trimEnd();
   const summaryText = isComplete ? "Thought" : "Thinking...";
   const openAttr = isComplete ? "" : "open";
 
-  thinkingMsg.innerHTML = `
-    <details class="thought-block" ${openAttr}>
-      <summary>${summaryText}</summary>
-      <div class="thought-content markdown-body">${DOMPurify.sanitize(md.render(preprocessMarkdown(trimmedThinking)))}</div>
-    </details>
-  `;
-  return thinkingMsg;
+  // Use details/summary structure
+  let details = el.querySelector("details");
+  if (!details) {
+    el.innerHTML = `
+      <details class="thought-block" ${openAttr}>
+        <summary>${summaryText}</summary>
+        <div class="thought-content markdown-body">${DOMPurify.sanitize(md.render(preprocessMarkdown(trimmedThinking)))}</div>
+      </details>
+    `;
+    details = el.querySelector("details");
+  } else {
+    // Update summary and open state
+    const summary = details.querySelector("summary");
+    if (summary) summary.innerHTML = summaryText;
+    if (!isComplete) details.setAttribute("open", "");
+    else details.removeAttribute("open");
+  }
+
+  // Update content
+  const contentDiv = details?.querySelector(".thought-content");
+  if (contentDiv) {
+    contentDiv.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(trimmedThinking)));
+  }
 }
 
 /**
@@ -89,10 +116,15 @@ export function createToolCallElement(name: string, argsStr: string, id?: string
     argsObj = { raw: argsStr };
   }
 
-  const argsPretty = JSON.stringify(argsObj, null, 2);
-  const summaryArgs = Object.entries(argsObj)
+  let argsPretty = JSON.stringify(argsObj, null, 2);
+  let summaryArgs = Object.entries(argsObj)
     .map(([k, v]) => `${md.utils.escapeHtml(k)}="${md.utils.escapeHtml(String(v))}"`)
     .join(" ");
+
+  if (Object.keys(argsObj).length === 0) {
+    argsPretty = "[No arguments supplied]";
+    summaryArgs = "";
+  }
 
   const openAttr = isOpen ? "open" : "";
 
@@ -125,7 +157,7 @@ export function createWebSearchQueryElement(query: string, id?: string): HTMLEle
   queryDiv.innerHTML = `
     <details>
       <summary>
-        <span class="query-text">"${md.utils.escapeHtml(query)}"</span>
+        <span class="query-text">"${md.utils.escapeHtml(query || 'Legacy Search')}"</span>
       </summary>
       <div class="tool-result" style="display: none;">
         <div class="tool-result-content markdown-body"></div>

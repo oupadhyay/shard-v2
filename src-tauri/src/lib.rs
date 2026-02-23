@@ -13,6 +13,7 @@ mod background;
 mod cache;
 pub mod compaction;
 mod config;
+pub mod db;
 mod gemini_files;
 mod integrations;
 mod interactions;
@@ -22,6 +23,7 @@ mod prompts;
 pub mod retrieval;
 mod secrets;
 pub mod sessions;
+pub mod skills;
 mod tools;
 pub mod vector_store;
 
@@ -267,6 +269,27 @@ async fn rewind_history(state: tauri::State<'_, AppState>) -> Result<(), String>
     Ok(())
 }
 
+#[tauri::command]
+async fn get_recent_sessions(
+    app_handle: AppHandle,
+    limit: Option<usize>,
+) -> Result<String, String> {
+    if let Ok(store) = crate::memories::get_vector_store(&app_handle) {
+        crate::db::sessions::search_sessions_by_time(&store, "", "all_time", limit.unwrap_or(15))
+    } else {
+        Err("Failed to open database".to_string())
+    }
+}
+
+#[tauri::command]
+async fn load_session(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    state.agent.load_session_from_db(&app_handle, &session_id).await
+}
+
 /// Retry the last response with a hint about KaTeX rendering errors
 /// Called by frontend when KaTeX parsing fails
 #[tauri::command]
@@ -415,6 +438,12 @@ pub fn run() {
 
             // Start background jobs
             background::start_background_jobs(app.handle().clone());
+
+            if let Ok(store) = memories::get_vector_store(&app.handle().clone()) {
+                if let Err(e) = crate::db::sessions::run_migration(&app.handle().clone(), &store) {
+                    log::warn!("[Startup] Session migration failed: {}", e);
+                }
+            }
 
             let agent = Arc::new(Agent::new(app.handle().clone()));
             // Initialize memory store cache
@@ -575,6 +604,8 @@ pub fn run() {
             get_message_count,
             has_backup,
             get_chat_history,
+            get_recent_sessions,
+            load_session,
             cancel_current_stream,
             rewind_history,
             hide_window,

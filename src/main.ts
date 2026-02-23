@@ -14,6 +14,7 @@ import {
   detectUnrenderedLatex,
   preprocessMarkdown,
   createThinkingElement,
+  updateThinkingElement,
   createToolCallElement,
   updateToolResult,
   addMessage as addMessageToChat,
@@ -30,6 +31,7 @@ import {
   COPY_ICON,
   CHECK_ICON,
   SETTINGS_MODAL_HTML,
+  SESSIONS_MODAL_HTML,
   initSettingsTabs,
   resizeImage,
 } from "./ui";
@@ -872,12 +874,7 @@ listen<string>("agent-response-chunk", (event) => {
   if (rawText.length > 10) {
     const openThinking = chatArea.querySelector('.thinking-output:not([data-complete="true"])');
     if (openThinking) {
-      openThinking.setAttribute("data-complete", "true");
-      // Change summary to "Thought" and close it
-      const summary = openThinking.querySelector("summary");
-      if (summary) summary.textContent = "Thought";
-      const details = openThinking.querySelector("details");
-      if (details) details.removeAttribute("open");
+      updateThinkingElement(openThinking as HTMLElement, openThinking.getAttribute("data-thinking") || "", true);
     }
   }
 
@@ -942,42 +939,50 @@ listen<string>("agent-reasoning-chunk", (event) => {
 
   // Use the session thinking block, or create one if needed
   if (!state.currentThinkingBlock || !chatArea.contains(state.currentThinkingBlock)) {
-    state.currentThinkingBlock = document.createElement("div");
-    state.currentThinkingBlock.className = "message thinking-output";
+    state.currentThinkingBlock = createThinkingElement(content, false);
     chatArea.appendChild(state.currentThinkingBlock);
+  } else {
+    // Append content to the session block
+    let thinkingText = state.currentThinkingBlock.getAttribute("data-thinking") || "";
+    thinkingText += content;
+    updateThinkingElement(state.currentThinkingBlock, thinkingText, false);
   }
 
-  // Append content to the session block
-  let thinkingText = state.currentThinkingBlock.getAttribute("data-thinking") || "";
-  thinkingText += content;
-  state.currentThinkingBlock.setAttribute("data-thinking", thinkingText);
-
-  // Render as collapsible thinking block with Markdown (CLOSED by default to avoid flashing)
-  // Summary shows "Thinking..." during streaming, completion handlers change to "Thought"
-  const trimmedThinking = thinkingText.trimEnd();
-
-  state.currentThinkingBlock.innerHTML = `
-        <details class="thought-block">
-          <summary>Thinking...</summary>
-          <div class="thought-content markdown-body">${DOMPurify.sanitize(md.render(preprocessMarkdown(trimmedThinking)))}</div>
-        </details>
-    `;
+  chatArea.scrollTop = chatArea.scrollHeight;
 
   chatArea.scrollTop = chatArea.scrollHeight;
 });
 
 listen<string>("agent-tool-call", (event) => {
   const payload = JSON.parse(event.payload);
-  console.log("Received tool call:", payload.name, payload.args);
 
-  // Complete any open thinking blocks before showing tool call
+  // Idempotent update: find existing block by ID
+  let toolDiv = payload.id ? chatArea.querySelector(`[data-tool-id="${payload.id}"]`) as HTMLElement : null;
+
+  if (toolDiv) {
+    // Update existing tool call (e.g. arguments streaming)
+    const summaryArgs = toolDiv.querySelector(".tool-summary-args");
+    if (summaryArgs) {
+      const argsText = Object.entries(payload.args || {})
+        .map(([k, v]) => `${md.utils.escapeHtml(k)}="${md.utils.escapeHtml(String(v))}"`)
+        .join(" ");
+      summaryArgs.textContent = argsText;
+    }
+    const toolArgs = toolDiv.querySelector(".tool-args");
+    if (toolArgs) {
+      if (payload.rawArgs) {
+        toolArgs.textContent = payload.rawArgs;
+      } else {
+        toolArgs.textContent = JSON.stringify(payload.args, null, 2);
+      }
+    }
+    return;
+  }
+
+  // Complete any open thinking blocks before showing new tool call
   const openThinking = chatArea.querySelector('.thinking-output:not([data-complete="true"])');
   if (openThinking) {
-    openThinking.setAttribute("data-complete", "true");
-    const summary = openThinking.querySelector("summary");
-    if (summary) summary.textContent = "Thought";
-    const details = openThinking.querySelector("details");
-    if (details) details.removeAttribute("open");
+    updateThinkingElement(openThinking as HTMLElement, openThinking.getAttribute("data-thinking") || "", true);
   }
 
   if (isWebSearchTool(payload.name)) {
@@ -998,9 +1003,9 @@ listen<string>("agent-tool-call", (event) => {
       updateWebSearchCount(container);
     }
   } else {
-  // Regular tool call - render as accordion
-    const toolDiv = createToolCallElement(payload.name, JSON.stringify(payload.args), payload.id);
-    chatArea.appendChild(toolDiv);
+    // Regular tool call - render as accordion
+    const newToolDiv = createToolCallElement(payload.name, JSON.stringify(payload.args), payload.id);
+    chatArea.appendChild(newToolDiv);
   }
 
   chatArea.scrollTop = chatArea.scrollHeight;
@@ -1569,6 +1574,73 @@ saveSettingsBtn.addEventListener("click", async () => {
   } catch (e) {
     alert(`Failed to save settings: ${e}`);
   }
+});
+
+// Sessions Modal Logic
+const sessionsBtn = document.getElementById("sessions-btn") as HTMLButtonElement;
+const sessionsModal = document.createElement("div");
+sessionsModal.className = "settings-modal hidden"; // reuse settings modal positioning
+sessionsModal.innerHTML = SESSIONS_MODAL_HTML;
+document.body.appendChild(sessionsModal);
+
+const closeSessionsBtn = document.getElementById("close-sessions") as HTMLButtonElement;
+const newChatBtn = document.getElementById("new-session-modal-btn") as HTMLButtonElement;
+const sessionsListContainer = document.getElementById("sessions-list-container") as HTMLDivElement;
+
+sessionsBtn.addEventListener("click", async () => {
+  sessionsModal.classList.remove("hidden");
+
+  sessionsListContainer.innerHTML = '<div class="loading-spinner">Loading sessions...</div>';
+  try {
+    const resultString = await invoke<string>("get_recent_sessions", { limit: 20 });
+    if (resultString === "No matching sessions found.") {
+      sessionsListContainer.innerHTML = '<div class="sessions-empty">No recent sessions found.</div>';
+      return;
+    }
+
+    const sessions = JSON.parse(resultString);
+    sessionsListContainer.innerHTML = sessions.map((s: any) => `
+      <div class="session-item" data-id="${s.session_id}">
+        <div class="session-item-title">${s.title}</div>
+        <div class="session-item-meta">
+            <span>${new Date(s.date).toLocaleDateString()}</span>
+            <span class="session-item-summary">${s.summary !== "No summary available" ? s.summary.substring(0, 120) + (s.summary.length > 120 ? "..." : "") : ""}</span>
+        </div>
+      </div>
+    `).join("");
+
+
+    // Add click listeners
+    sessionsListContainer.querySelectorAll('.session-item').forEach(el => {
+      el.addEventListener('click', async (e) => {
+        const id = (e.currentTarget as HTMLElement).dataset.id;
+        if (id) {
+          sessionsModal.classList.add("hidden");
+          await invoke("load_session", { sessionId: id });
+          chatArea.innerHTML = "";
+          await loadChatHistory();
+          await updateButtonStates();
+          inputField.focus();
+        }
+      });
+    });
+
+  } catch (e) {
+    sessionsListContainer.innerHTML = `<div style="color: #ff4444; padding: 20px;">Failed to load sessions: ${e}</div>`;
+  }
+});
+
+closeSessionsBtn.addEventListener("click", () => {
+  sessionsModal.classList.add("hidden");
+  inputField.focus();
+});
+
+newChatBtn.addEventListener("click", async () => {
+  sessionsModal.classList.add("hidden");
+  await invoke("save_and_clear_chat");
+  chatArea.innerHTML = "";
+  await updateButtonStates();
+  inputField.focus();
 });
 
 // Development-only benchmark helper

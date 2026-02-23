@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 pub enum AgentEvent {
     ResponseChunk(String),
     ReasoningChunk(String),
+    ToolCall(GeminiFunctionCallWithSignature),
 }
 
 /// Convert chat history to Gemini API format
@@ -157,10 +158,12 @@ pub fn parse_gemini_chunk(
             function_call,
             thought_signature,
         } => {
-            tool_calls.push(GeminiFunctionCallWithSignature {
+            let fc = GeminiFunctionCallWithSignature {
                 function_call,
                 thought_signature,
-            });
+            };
+            tool_calls.push(fc.clone());
+            events.push(AgentEvent::ToolCall(fc));
         }
         _ => {
             log::debug!("Gemini other part type");

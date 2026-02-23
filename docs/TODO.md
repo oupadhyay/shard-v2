@@ -10,6 +10,14 @@
 
 ---
 
+## P0: OpenClaw Gaps
+
+- [x] **Unified Session Model** - Isolate chat contexts instead of a single global append-only history.
+- [x] **Skills Engine & Pi Runtime** - Dynamic tools and prompts loaded from `~/Library/Application Support/dev.ojasw.shard/skills/`.
+- [ ] **Automation (Cronjobs, Webhooks, Gmail)** - Background tasks and event-driven agent runs.
+
+---
+
 ## P0: Clawdbot Memory Learnings
 
 ### 1. Compaction + Pre-Compaction Memory Flush
@@ -36,22 +44,22 @@
 
 ### 4. Session Memory Hooks + Descriptive Slugs
 
-- [ ] On conversation clear/new session: extract last N messages
-- [ ] Generate descriptive slug via LLM (e.g., "api-design-discussion")
-- [ ] Save to `memory/YYYY-MM-DD-\<slug\>.md` for searchable session transcripts
+- [x] On conversation clear/new session: extract last N messages
+- [x] Generate descriptive slug via LLM (e.g., "api-design-discussion")
+- [x] Save to `memory/YYYY-MM-DD-\<slug\>.md` for searchable session transcripts
 
 ### 5. Explicit Memory Search Tools
 
-- [ ] Add `memory_search` tool: semantic search across all memory tiers
+- [x] Add `memory_search` tool: semantic search across all memory tiers
   - Params: `query`, `max_results`, `min_score`
   - Returns: `{path, start_line, end_line, score, snippet, source}`
-- [ ] Add `memory_get` tool: read specific lines from a memory file
+- [x] Add `memory_get` tool: read specific lines from a memory file
   - Params: `path`, `from`, `lines`
-- [ ] Keep existing silent RAG injection for baseline context
+- [x] Keep existing silent RAG injection for baseline context
 
 ## P0: Read Page via Browser Tool
 
-- [ ] Add `open_url` tool to allow Shard to read any URL (HTML/browser/DOM?)
+- [x] Add `open_url` tool to allow Shard to read any URL (HTML/browser/DOM?)
 
 ## P1: Better Screen Context Experience
 
@@ -68,6 +76,10 @@
 - [ ] **Switch main Agent logic to multimodal format** - Once `to_multimodal_messages` tests are passing (from Jules PR), integrate it into the main chat loop to support native images via OpenRouter/OpenAI.
 - Code Tool: Run Python Code in Sandbox (one option: WASI via Wasmtime plus a small Rust mediator in a Tauri app?)
 - YouTube Tool: Get Transcript & Summarize
+
+## P1: Improve Tool UX
+
+- [ ] Improve weather, stock, and web_search tool output UX. weather should get a full forecast as text for model (show as diagram in UI), stock should give price percentage changes and price history as text for model (show as graph in UI), web_search should show the full results as links and summary for model (show as list of websites visited in UI).
 
 ## P2: Light Mode Theme Support
 

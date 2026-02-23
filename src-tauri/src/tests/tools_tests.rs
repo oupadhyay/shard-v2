@@ -6,7 +6,7 @@ mod tests {
     fn test_get_all_tools() {
         let tools = get_all_tools();
         assert!(!tools.is_empty());
-        assert!(tools.len() >= 5);
+        assert!(tools.len() >= 7);
 
         let tool_names: Vec<String> = tools.iter().map(|t| t.function.name.clone()).collect();
         assert!(tool_names.contains(&"get_weather".to_string()));
@@ -15,6 +15,8 @@ mod tests {
         assert!(tool_names.contains(&"search_arxiv".to_string()));
         assert!(tool_names.contains(&"web_search".to_string()));
         assert!(tool_names.contains(&"refresh_memories".to_string()));
+        assert!(tool_names.contains(&"memory_search".to_string()));
+        assert!(tool_names.contains(&"memory_get".to_string()));
     }
 
     #[test]

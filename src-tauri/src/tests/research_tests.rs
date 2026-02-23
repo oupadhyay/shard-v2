@@ -2,7 +2,7 @@ use crate::prompts::get_research_system_prompt;
 
 #[test]
 fn test_research_prompt_integrity() {
-    let prompt = get_research_system_prompt();
+    let prompt = get_research_system_prompt(None);
     assert!(prompt.contains("Deep Research agent"));
     assert!(prompt.contains("Produce an initial research plan"));
     assert!(prompt.contains("Execute iteratively"));
