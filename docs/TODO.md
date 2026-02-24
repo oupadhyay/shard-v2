@@ -13,7 +13,7 @@
 ## P0: OpenClaw Gaps
 
 - [x] **Unified Session Model** - Isolate chat contexts instead of a single global append-only history.
-- [x] **Skills Engine & Pi Runtime** - Dynamic tools and prompts loaded from `~/Library/Application Support/dev.ojasw.shard/skills/`.
+- [ ] **Skills Engine & Pi Runtime** - Expose skills as discoverable "tools" (e.g., `list_skills`, `load_skill`) so the agent can temporarily assume personas or load instructions on-demand, rather than forcing them into the global system prompt.
 - [ ] **Automation (Cronjobs, Webhooks, Gmail)** - Background tasks and event-driven agent runs.
 
 ---
@@ -112,6 +112,26 @@
 - [ ] Set up GitHub Actions for cross-platform builds
   - macOS: Uses existing `build-macos.sh` script
   - Auto-create releases with `.dmg`, `.msi`, `.AppImage`
+
+## P2: Future Horizons (Documentation & Stubs)
+
+### 1. Full Browser Control
+
+- [ ] Investigate Playwright/Puppeteer Rust bindings for headful browsing.
+- [ ] Implement a real DOM-interaction agent loop (click, type, scroll).
+- [ ] Add visual reasoning (screenshots to VLM) to handle complex web apps.
+
+### 2. Mobile App (iOS/Android)
+
+- [ ] Evaluate Tauri Mobile vs React Native for the client view.
+- [ ] Implement remote connection to the desktop "Shard Hub" (since the local app runs the heavy vector DB/models).
+- [ ] Add share sheet extensions to quickly pipe links/text into Shard Mobile.
+
+### 3. Nodes (Device Sync & Distributed Shard)
+
+- [ ] Design a peer-to-peer sync protocol (e.g., libp2p or simple WebSockets) to keep `memories.sqlite` consistent across multiple devices.
+- [ ] Allow one powerful desktop node to run embedded inference for weaker mobile nodes.
+- [ ] Create a "Nodes" UI panel to manage connected devices and sync status.
 
 ## P3: Hybrid Retrieval Enhancements
 

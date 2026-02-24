@@ -13,6 +13,7 @@ pub struct SessionRow {
     pub summary: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub active_skills: Option<String>, // JSON array of skill names
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -29,14 +30,46 @@ pub fn insert_session(store: &VectorStore, session: &SessionRow) -> Result<(), S
     store
         .conn
         .execute(
-            "INSERT INTO sessions (id, title, summary, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(id) DO UPDATE SET title = excluded.title, summary = excluded.summary, updated_at = excluded.updated_at",
+            "INSERT INTO sessions (id, title, summary, created_at, updated_at, active_skills) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(id) DO UPDATE SET title = excluded.title, summary = excluded.summary, updated_at = excluded.updated_at, active_skills = excluded.active_skills",
             params![
                 session.id,
                 session.title,
                 session.summary,
                 session.created_at,
-                session.updated_at
+                session.updated_at,
+                session.active_skills.clone().unwrap_or_else(|| "[]".to_string())
             ],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Get active skills for a session
+pub fn get_active_skills(store: &VectorStore, session_id: &str) -> Result<Vec<String>, String> {
+    let result: Option<String> = store
+        .conn
+        .query_row(
+            "SELECT active_skills FROM sessions WHERE id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    if let Some(skills_json) = result {
+        Ok(serde_json::from_str(&skills_json).unwrap_or_else(|_| Vec::new()))
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+/// Update active skills for a session (expects a JSON array string)
+pub fn update_active_skills(store: &VectorStore, session_id: &str, skills_json: &str) -> Result<(), String> {
+    store
+        .conn
+        .execute(
+            "UPDATE sessions SET active_skills = ?1, updated_at = ?2 WHERE id = ?3",
+            params![skills_json, Utc::now().to_rfc3339(), session_id],
         )
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -126,6 +159,7 @@ pub fn run_migration(app_handle: &AppHandle, store: &VectorStore) -> Result<(), 
                     summary: None,
                     created_at: now.clone(),
                     updated_at: now.clone(),
+                    active_skills: Some("[]".to_string()),
                 };
 
                 if let Err(e) = insert_session(store, &session) {
@@ -207,6 +241,7 @@ pub fn run_migration(app_handle: &AppHandle, store: &VectorStore) -> Result<(), 
                             summary,
                             created_at: modified_time.clone(),
                             updated_at: modified_time.clone(),
+                            active_skills: Some("[]".to_string()),
                         };
 
                         if insert_session(store, &session).is_ok() {

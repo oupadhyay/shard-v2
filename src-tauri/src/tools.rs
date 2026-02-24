@@ -220,5 +220,37 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                 strict: Some(true),
             },
         },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "load_skill".to_string(),
+                description: "Load a specific dynamic skill into your session context. This adds specialized instructions to your system prompt. You should ONLY load a skill if it is strictly necessary to answer the user's current prompt. You MUST unload the skill when the specific mini-task is complete to avoid context pollution. Please check the 'Available Skills' section in your system prompt to see what skills you can load.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "The exact name of the skill to load" },
+                    },
+                    "required": ["name"],
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "unload_skill".to_string(),
+                description: "Unload a specific dynamic skill from your session context. You MUST do this immediately after you have finished the specific mini-task that required the skill.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "The name of the skill to unload" },
+                    },
+                    "required": ["name"],
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
     ]
 }

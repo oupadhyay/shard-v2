@@ -117,6 +117,7 @@ impl Agent {
                     summary: None,
                     created_at: now.clone(),
                     updated_at: now.clone(),
+                    active_skills: Some("[]".to_string()),
                 };
                 let _ = crate::db::sessions::insert_session(&store, &session);
             }
@@ -219,6 +220,7 @@ impl Agent {
                 summary: None,
                 created_at: now.clone(),
                 updated_at: now.clone(),
+                active_skills: Some("[]".to_string()),
             };
             let _ = crate::db::sessions::insert_session(&store, &session);
         }
@@ -1366,6 +1368,58 @@ impl Agent {
                     Err(e) => format!("Error: {}", e),
                 }
             }
+            "list_skills" => {
+                let skills = crate::skills::list_available_skills();
+                if skills.is_empty() {
+                    "No dynamic skills are currently available in the workspace.".to_string()
+                } else {
+                    format!("Available skills:\n{}", skills.join("\n"))
+                }
+            }
+            "load_skill" => {
+                let name = args["name"].as_str().unwrap_or_default();
+                if let Some(_content) = crate::skills::get_skill_content(name) {
+                    let session_id = self.session_id.lock().await.clone();
+                    if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+                        if let Ok(mut active_skills) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                            if !active_skills.contains(&name.to_string()) {
+                                active_skills.push(name.to_string());
+                                let skills_json = serde_json::to_string(&active_skills).unwrap_or_else(|_| "[]".to_string());
+                                let _ = crate::db::sessions::update_active_skills(&store, &session_id, &skills_json);
+                                format!("Successfully loaded skill '{}'. The instructions will be active for the rest of this session.", name)
+                            } else {
+                                format!("Skill '{}' is already active.", name)
+                            }
+                        } else {
+                            "Failed to retrieve active session skills.".to_string()
+                        }
+                    } else {
+                        "Failed to access database.".to_string()
+                    }
+                } else {
+                    format!("Skill '{}' not found. Use `list_skills` to see what is available.", name)
+                }
+            }
+            "unload_skill" => {
+                let name = args["name"].as_str().unwrap_or_default();
+                let session_id = self.session_id.lock().await.clone();
+                if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+                    if let Ok(mut active_skills) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                        if active_skills.contains(&name.to_string()) {
+                            active_skills.retain(|s| s != name);
+                            let skills_json = serde_json::to_string(&active_skills).unwrap_or_else(|_| "[]".to_string());
+                            let _ = crate::db::sessions::update_active_skills(&store, &session_id, &skills_json);
+                            format!("Successfully unloaded skill '{}'.", name)
+                        } else {
+                            format!("Skill '{}' is not currently active.", name)
+                        }
+                    } else {
+                        "Failed to retrieve active session skills.".to_string()
+                    }
+                } else {
+                    "Failed to access database.".to_string()
+                }
+            }
             _ => format!("Unknown tool: {}", function_name),
         }
     }
@@ -1444,19 +1498,39 @@ impl Agent {
                 .filter(|s| !s.is_empty())
         };
 
-        let active_skills = crate::skills::load_active_skills();
-        let active_skills_opt = if active_skills.is_empty() { None } else { Some(active_skills.as_str()) };
+        let available_skills = crate::skills::list_available_skills();
+        let available_skills_str = if available_skills.is_empty() { None } else { Some(available_skills.join("\n")) };
+        let available_skills_opt = available_skills_str.as_deref();
+
+        let session_id = self.session_id.lock().await.clone();
+        let mut active_skills_opt: Option<String> = None;
+        if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+            if let Ok(active_skills) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                if !active_skills.is_empty() {
+                    let mut active_skills_content = String::new();
+                    for skill in active_skills {
+                        if let Some(content) = crate::skills::get_skill_content(&skill) {
+                            active_skills_content.push_str(&format!("--- SKILL: {} ---\n{}\n\n", skill, content));
+                        }
+                    }
+                    if !active_skills_content.is_empty() {
+                        active_skills_opt = Some(active_skills_content);
+                    }
+                }
+            }
+        }
 
         let system_prompt_content = if incognito_mode {
-            crate::prompts::get_default_system_prompt(None, None, active_skills_opt)
+            crate::prompts::get_default_system_prompt(None, None, available_skills_opt, active_skills_opt.as_deref())
         } else if is_research_mode {
-            crate::prompts::get_research_system_prompt(active_skills_opt)
+            crate::prompts::get_research_system_prompt(available_skills_opt, active_skills_opt.as_deref())
         } else {
             config.system_prompt.clone().unwrap_or_else(|| {
                 crate::prompts::get_default_system_prompt(
                     memory_context.as_deref(),
                     rag_context,
-                    active_skills_opt,
+                    available_skills_opt,
+                    active_skills_opt.as_deref(),
                 )
             })
         };
@@ -1756,19 +1830,39 @@ impl Agent {
                 .filter(|s| !s.is_empty())
         };
 
-        let active_skills = crate::skills::load_active_skills();
-        let active_skills_opt = if active_skills.is_empty() { None } else { Some(active_skills.as_str()) };
+        let available_skills = crate::skills::list_available_skills();
+        let available_skills_str = if available_skills.is_empty() { None } else { Some(available_skills.join("\n")) };
+        let available_skills_opt = available_skills_str.as_deref();
+
+        let session_id = self.session_id.lock().await.clone();
+        let mut active_skills_opt: Option<String> = None;
+        if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+            if let Ok(active_skills) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                if !active_skills.is_empty() {
+                    let mut active_skills_content = String::new();
+                    for skill in active_skills {
+                        if let Some(content) = crate::skills::get_skill_content(&skill) {
+                            active_skills_content.push_str(&format!("--- SKILL: {} ---\n{}\n\n", skill, content));
+                        }
+                    }
+                    if !active_skills_content.is_empty() {
+                        active_skills_opt = Some(active_skills_content);
+                    }
+                }
+            }
+        }
 
         let system_prompt_content = if incognito_mode {
-            crate::prompts::get_default_system_prompt(None, None, active_skills_opt)
+            crate::prompts::get_default_system_prompt(None, None, available_skills_opt, active_skills_opt.as_deref())
         } else if is_research_mode {
-            crate::prompts::get_research_system_prompt(active_skills_opt)
+            crate::prompts::get_research_system_prompt(available_skills_opt, active_skills_opt.as_deref())
         } else {
             config.system_prompt.clone().unwrap_or_else(|| {
                 crate::prompts::get_default_system_prompt(
                     memory_context.as_deref(),
                     rag_context,
-                    active_skills_opt,
+                    available_skills_opt,
+                    active_skills_opt.as_deref(),
                 )
             })
         };

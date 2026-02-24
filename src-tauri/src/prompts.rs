@@ -3,11 +3,13 @@ use time::OffsetDateTime;
 pub fn get_default_system_prompt(
     memory_context: Option<&str>,
     rag_context: Option<&str>,
+    available_skills: Option<&str>,
     active_skills: Option<&str>,
 ) -> String {
     get_default_system_prompt_with_date(
         memory_context,
         rag_context,
+        available_skills,
         active_skills,
         OffsetDateTime::now_utc().date(),
     )
@@ -16,12 +18,14 @@ pub fn get_default_system_prompt(
 pub fn get_default_system_prompt_with_date(
     memory_context: Option<&str>,
     rag_context: Option<&str>,
+    available_skills: Option<&str>,
     active_skills: Option<&str>,
     date: time::Date,
 ) -> String {
     let memories_section = memory_context.unwrap_or("");
     let rag_section = rag_context.unwrap_or("");
-    let skills_section = active_skills.unwrap_or("");
+    let available_skills_section = available_skills.unwrap_or("None");
+    let active_skills_section = active_skills.unwrap_or("");
     format!(
         r#"SYSTEM: Today is {}. You are Shard, an AI assistant.
 
@@ -44,19 +48,25 @@ You have access to persistent memory. Memory Tools:
 - update_topic_summary: For detailed info about specific topics (projects, travel, etc.). Read first with read_topic_summary.
 NEVER re-save information already in your context above.
 
+You can dynamically assume new personas or domain expertise by loading "skills".
+Available Skills to Load (via `load_skill`):
+{}
+
+Active Workspace Skills:
 {}
 
 "#,
-        date, memories_section, rag_section, skills_section
+        date, memories_section, rag_section, available_skills_section, active_skills_section
     )
 }
 
-pub fn get_research_system_prompt(active_skills: Option<&str>) -> String {
-    get_research_system_prompt_with_date(active_skills, OffsetDateTime::now_utc().date())
+pub fn get_research_system_prompt(available_skills: Option<&str>, active_skills: Option<&str>) -> String {
+    get_research_system_prompt_with_date(available_skills, active_skills, OffsetDateTime::now_utc().date())
 }
 
-pub fn get_research_system_prompt_with_date(active_skills: Option<&str>, date: time::Date) -> String {
-    let skills_section = active_skills.unwrap_or("");
+pub fn get_research_system_prompt_with_date(available_skills: Option<&str>, active_skills: Option<&str>, date: time::Date) -> String {
+    let available_skills_section = available_skills.unwrap_or("None");
+    let active_skills_section = active_skills.unwrap_or("");
     format!(
         r#"SYSTEM: Today is {}. You are a Deep Research agent that conducts multi-step, tool-driven investigations. You plan, browse, analyze, verify, and synthesize high‑quality insights. The only user-facing deliverable inpms a concise executive summary; do not include citations, links, quotes, appendices, or artifacts in the final output.
 
@@ -100,9 +110,14 @@ Failure modes:
 - If authoritative evidence is unavailable, clearly state scope limits.
 - If a claim cannot be substantiated, exclude it or mark it as uncertain.
 
+You can dynamically assume new personas or domain expertise by loading "skills".
+Available Skills to Load (via `load_skill`):
+{}
+
+Active Workspace Skills:
 {}
 "#,
-        date, skills_section
+        date, available_skills_section, active_skills_section
     )
 }
 

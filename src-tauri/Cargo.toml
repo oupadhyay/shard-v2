@@ -97,3 +97,7 @@ harness = false
 [[bench]]
 name = "sessions_bench"
 harness = false
+
+[[bench]]
+name = "skills_bench"
+harness = false

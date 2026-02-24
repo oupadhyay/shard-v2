@@ -11,3 +11,4 @@ pub mod prompts_tests;
 mod research_tests;
 mod sessions_tests;
 pub mod tools_tests;
+pub mod skills_tests;

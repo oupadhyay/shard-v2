@@ -19,30 +19,40 @@ pub fn get_skills_dir() -> Result<PathBuf, String> {
     }
 }
 
-/// Helper function to perform a recursive walk for .md files
-#[allow(dead_code)]
-fn walk_dir_for_skills(dir: &PathBuf, max_depth: usize, current_depth: usize) -> Vec<PathBuf> {
-    let mut matching_files = Vec::new();
-    if current_depth > max_depth {
-        return matching_files;
-    }
-
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                matching_files.extend(walk_dir_for_skills(&path, max_depth, current_depth + 1));
-            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                matching_files.push(path);
+/// Returns a list of base filenames (skills) found in the skills directory.
+pub fn list_available_skills() -> Vec<String> {
+    let mut skills = Vec::new();
+    if let Ok(dir) = get_skills_dir() {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        skills.push(stem.to_string());
+                    }
+                }
             }
         }
     }
-    matching_files
+    skills
 }
 
-/// Loads all active skills (.md files) from the skills directory.
-/// Does not watch them live yet—loads them on demand.
-pub fn load_active_skills() -> String {
-    // Disabled as per user request until model-selectable
-    String::new()
+/// Reads the content of a specific skill by its name.
+pub fn get_skill_content(name: &str) -> Option<String> {
+    if name.is_empty() {
+        return None;
+    }
+
+    // Prevent path traversal
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return None;
+    }
+
+    if let Ok(mut path) = get_skills_dir() {
+        path.push(format!("{}.md", name));
+        if path.exists() && path.is_file() {
+            return fs::read_to_string(path).ok();
+        }
+    }
+    None
 }

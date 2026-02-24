@@ -87,19 +87,20 @@ pub async fn archive_session_transcript<R: Runtime>(
     if let Ok(store) = crate::memories::get_vector_store(app_handle) {
         let now = chrono::Utc::now().to_rfc3339();
 
-        // Try to preserve original created_at if modifying an existing session
-        let existing_created_at: Option<String> = store.conn.query_row(
-            "SELECT created_at FROM sessions WHERE id = ?1",
+        // Try to preserve original created_at and active_skills if modifying an existing session
+        let existing = store.conn.query_row(
+            "SELECT created_at, active_skills FROM sessions WHERE id = ?1",
             rusqlite::params![session_id],
-            |row| row.get(0),
-        ).ok();
+            |row| Ok((row.get::<_, String>(0).ok(), row.get::<_, String>(1).ok())),
+        ).unwrap_or((None, None));
 
         let session_row = crate::db::sessions::SessionRow {
             id: session_id.to_string(),
             title: safe_slug.clone(),
             summary: Some(summary.clone()),
-            created_at: existing_created_at.unwrap_or_else(|| now.clone()),
+            created_at: existing.0.unwrap_or_else(|| now.clone()),
             updated_at: now,
+            active_skills: existing.1.or(Some("[]".to_string())),
         };
 
         if let Err(e) = crate::db::sessions::insert_session(&store, &session_row) {

@@ -8,6 +8,7 @@ Shard is a high-performance, privacy-focused AI assistant built with **Tauri**, 
 * **Autonomous Tools**: Weather, Wikipedia, Stocks, ArXiv (enhanced HTML parsing), Web Search.
 * **Multimodal Intelligence**: Take screenshots to chat about them. Gemini models use native Files API; OpenRouter models use Gemma 3 27B for contextual visual understanding.
 * **Deep Research**: Capable of conducting in-depth research by synthesizing information from multiple sources (ArXiv, Wikipedia, Web) to answer complex queries.
+* **Tool-Based Skills Engine**: Load and unload specialized personas and capability instructions on-demand via the `load_skill` tool without polluting the persistent context window.
 * **Privacy First**: Your API keys are stored locally. No middleman servers.
 
 ## 🔄 Feature: Background Jobs

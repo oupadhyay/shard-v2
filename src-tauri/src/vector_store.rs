@@ -92,6 +92,12 @@ impl VectorStore {
         // Initialize schema
         conn.execute_batch(include_str!("schema.sql"))?;
 
+        // Auto-migrate schema for existing databases (add active_skills)
+        let _ = conn.execute(
+            "ALTER TABLE sessions ADD COLUMN active_skills TEXT DEFAULT '[]';",
+            [],
+        );
+
         log::info!("[VectorStore] Opened database at {:?}", db_path);
 
         Ok(Self { conn })
