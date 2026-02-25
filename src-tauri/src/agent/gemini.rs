@@ -2,6 +2,7 @@
 
 use super::types::*;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 /// Events emitted during streaming responses
 pub enum AgentEvent {
@@ -12,6 +13,16 @@ pub enum AgentEvent {
 
 /// Convert chat history to Gemini API format
 pub fn construct_gemini_messages(history: &[ChatMessage]) -> Vec<GeminiContent> {
+    // Build a map of tool call IDs to function names for O(1) lookup
+    let mut tool_call_names = HashMap::new();
+    for msg in history {
+        if let Some(tcs) = &msg.tool_calls {
+            for tc in tcs {
+                tool_call_names.insert(tc.id.clone(), tc.function.name.clone());
+            }
+        }
+    }
+
     let mut contents: Vec<GeminiContent> = Vec::new();
     let mut i = 0;
     while i < history.len() {
@@ -23,22 +34,12 @@ pub fn construct_gemini_messages(history: &[ChatMessage]) -> Vec<GeminiContent> 
         };
 
         if msg.role == "tool" {
-            let mut func_name = "unknown".to_string();
-            for j in (0..i).rev() {
-                if history[j].role == "assistant" {
-                    if let Some(tcs) = &history[j].tool_calls {
-                        for tc in tcs {
-                            if Some(&tc.id) == msg.tool_call_id.as_ref() {
-                                func_name = tc.function.name.clone();
-                                break;
-                            }
-                        }
-                    }
-                }
-                if func_name != "unknown" {
-                    break;
-                }
-            }
+            let func_name = msg
+                .tool_call_id
+                .as_ref()
+                .and_then(|id| tool_call_names.get(id))
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
 
             let response_json: Value = json!({ "result": msg.content });
 
