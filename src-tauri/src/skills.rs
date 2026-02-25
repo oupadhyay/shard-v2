@@ -19,30 +19,85 @@ pub fn get_skills_dir() -> Result<PathBuf, String> {
     }
 }
 
-/// Helper function to perform a recursive walk for .md files
-#[allow(dead_code)]
-fn walk_dir_for_skills(dir: &PathBuf, max_depth: usize, current_depth: usize) -> Vec<PathBuf> {
-    let mut matching_files = Vec::new();
-    if current_depth > max_depth {
-        return matching_files;
-    }
-
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                matching_files.extend(walk_dir_for_skills(&path, max_depth, current_depth + 1));
-            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                matching_files.push(path);
+/// Returns a list of base filenames (skills) found in the skills directory.
+pub fn list_available_skills() -> Vec<String> {
+    let mut skills = Vec::new();
+    if let Ok(dir) = get_skills_dir() {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        skills.push(stem.to_string());
+                    }
+                }
             }
         }
     }
-    matching_files
+    skills.sort();
+    skills
 }
 
-/// Loads all active skills (.md files) from the skills directory.
-/// Does not watch them live yet—loads them on demand.
-pub fn load_active_skills() -> String {
-    // Disabled as per user request until model-selectable
-    String::new()
+/// Reads the content of a specific skill by its name.
+pub fn get_skill_content(name: &str) -> Option<String> {
+    if name.is_empty() {
+        return None;
+    }
+
+    // Prevent path traversal
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return None;
+    }
+
+    if let Ok(mut path) = get_skills_dir() {
+        path.push(format!("{}.md", name));
+        if path.exists() && path.is_file() {
+            return fs::read_to_string(path).ok();
+        }
+    }
+    None
+}
+
+/// Parses a skill's Markdown file and extracts the "required_tools" list from its YAML frontmatter.
+/// Example frontmatter:
+/// ---
+/// required_tools:
+///   - search_arxiv
+///   - get_weather
+/// ---
+pub fn get_skill_required_tools(name: &str) -> Vec<String> {
+    let mut required = Vec::new();
+
+    if let Some(content) = get_skill_content(name) {
+        if content.starts_with("---\n") || content.starts_with("---\r\n") {
+            let prefix_len = if content.starts_with("---\r\n") { 5 } else { 4 };
+            // Find the end of the frontmatter
+            let end_index = content[prefix_len..].find("\n---").map(|i| i + prefix_len);
+            if let Some(end) = end_index {
+                let frontmatter = &content[prefix_len..end];
+                let mut in_required_tools = false;
+
+                for line in frontmatter.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("required_tools:") {
+                        in_required_tools = true;
+                    } else if in_required_tools {
+                        if trimmed.starts_with('-') {
+                            let tool = trimmed[1..].trim();
+                            // If it's wrapped in quotes, strip them
+                            let tool = tool.trim_matches(|c| c == '\'' || c == '"');
+                            if !tool.is_empty() {
+                                required.push(tool.to_string());
+                            }
+                        } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                            // Reached the next key in the YAML or something that breaks the list
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    required
 }

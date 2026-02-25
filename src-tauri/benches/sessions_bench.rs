@@ -44,6 +44,7 @@ fn bench_format_transcript(c: &mut Criterion) {
             tool_calls: None,
             tool_call_id: None,
             images: None,
+            is_cron: None,
         },
         ChatMessage {
             role: "model".to_string(),
@@ -52,6 +53,7 @@ fn bench_format_transcript(c: &mut Criterion) {
             tool_calls: None,
             tool_call_id: None,
             images: None,
+            is_cron: None,
         },
         ChatMessage {
             role: "user".to_string(),
@@ -60,6 +62,7 @@ fn bench_format_transcript(c: &mut Criterion) {
             tool_calls: None,
             tool_call_id: None,
             images: None,
+            is_cron: None,
         },
     ];
 

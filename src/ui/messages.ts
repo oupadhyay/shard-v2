@@ -215,12 +215,13 @@ function copyToClipboard(text: string, button: HTMLElement) {
  */
 export function addMessage(
   chatArea: HTMLElement | DocumentFragment,
-  role: "user" | "assistant",
+  role: "user" | "assistant" | "cron",
   content: string,
   images?: ImageAttachment[]
 ) {
   const msgDiv = document.createElement("div");
-  msgDiv.className = `message ${role}`;
+  const isCron = role === "cron";
+  msgDiv.className = `message ${isCron ? "user cron-message" : role}`;
 
   // Render all images if present
   if (images && images.length > 0) {
@@ -268,7 +269,11 @@ export function addMessage(
 
     // Render markdown for user messages too with preprocessing for KaTeX
     const rawHtml = md.render(preprocessMarkdown(textContent));
-    textDiv.innerHTML = DOMPurify.sanitize(rawHtml);
+    if (isCron) {
+      textDiv.innerHTML = `<span class="cron-label">🤖 Scheduled Task</span> ` + DOMPurify.sanitize(rawHtml);
+    } else {
+      textDiv.innerHTML = DOMPurify.sanitize(rawHtml);
+    }
     textDiv.classList.add("markdown-body");
   }
 

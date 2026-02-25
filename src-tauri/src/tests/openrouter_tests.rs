@@ -14,6 +14,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             images: None,
+            is_cron: None,
         }];
 
         let result = to_multimodal_messages(&messages);
@@ -36,6 +37,7 @@ mod tests {
                     mime_type: "image/png".to_string(),
                     file_uri: None,
                 }]),
+                is_cron: None,
             },
         ];
 
@@ -75,6 +77,7 @@ mod tests {
                     file_uri: None,
                 },
             ]),
+            is_cron: None,
         }];
 
         let result = to_multimodal_messages(&messages);
@@ -104,6 +107,7 @@ mod tests {
                 mime_type: "image/webp".to_string(),
                 file_uri: None,
             }]),
+            is_cron: None,
         }];
 
         let result = to_multimodal_messages(&messages);
@@ -137,6 +141,7 @@ mod tests {
             }]),
             tool_call_id: None,
             images: None,
+            is_cron: None,
         }];
 
         let result = to_multimodal_messages(&messages);
@@ -161,6 +166,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: Some("call_123".to_string()),
             images: None,
+            is_cron: None,
         }];
 
         let result = to_multimodal_messages(&messages);
@@ -183,6 +189,7 @@ mod tests {
                 mime_type: "image/png".to_string(),
                 file_uri: None,
             }]),
+            is_cron: None,
         }];
 
         let result = to_multimodal_messages(&messages);
@@ -201,6 +208,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             images: Some(vec![]),
+            is_cron: None,
         }];
 
         let result = to_multimodal_messages(&messages);
@@ -217,6 +225,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             images: None,
+            is_cron: None,
         }];
         assert!(!has_images(&messages_no_images));
 
@@ -231,6 +240,7 @@ mod tests {
                 mime_type: "image/png".to_string(),
                 file_uri: None,
             }]),
+            is_cron: None,
         }];
         assert!(has_images(&messages_with_images));
 
@@ -241,6 +251,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             images: Some(vec![]),
+            is_cron: None,
         }];
         assert!(!has_images(&messages_with_empty_images));
     }

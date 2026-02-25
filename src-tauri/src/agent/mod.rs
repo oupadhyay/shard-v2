@@ -117,6 +117,7 @@ impl Agent {
                     summary: None,
                     created_at: now.clone(),
                     updated_at: now.clone(),
+                    active_skills: Some("[]".to_string()),
                 };
                 let _ = crate::db::sessions::insert_session(&store, &session);
             }
@@ -219,6 +220,7 @@ impl Agent {
                 summary: None,
                 created_at: now.clone(),
                 updated_at: now.clone(),
+                active_skills: Some("[]".to_string()),
             };
             let _ = crate::db::sessions::insert_session(&store, &session);
         }
@@ -325,6 +327,7 @@ impl Agent {
                                 tool_calls: None,
                                 tool_call_id: None,
                                 images: None,
+                                is_cron: None,
                             }
                         }),
                     )
@@ -435,6 +438,7 @@ impl Agent {
                     tool_calls: None,
                     tool_call_id: None,
                     images: None,
+                    is_cron: None,
                 };
                 history.push(msg.clone());
                 self.insert_single_message_to_db(app_handle, &msg).await;
@@ -566,6 +570,7 @@ impl Agent {
         images_base64: Option<Vec<String>>,
         images_mime_types: Option<Vec<String>>,
         config: &crate::config::AppConfig,
+        is_cron: bool,
     ) -> Result<(), String> {
         println!("process_message called. Message len: {}", message.len());
 
@@ -676,9 +681,15 @@ impl Agent {
             tool_calls: None,
             tool_call_id: None,
             images: uploaded_images,
+            is_cron: if is_cron { Some(true) } else { None },
         };
         history.push(msg.clone());
         self.insert_single_message_to_db(app_handle, &msg).await;
+
+        if !is_cron {
+            let json_msg = serde_json::to_string(&msg).unwrap_or_default();
+            app_handle.emit("user-message", json_msg).ok();
+        }
 
         // Incognito mode: skip all RAG/memory retrieval and storage
         let incognito = config.incognito_mode.unwrap_or(false);
@@ -927,6 +938,7 @@ impl Agent {
                     tool_calls: None,
                     tool_call_id: None,
                     images: None,
+                    is_cron: None,
                 };
                 history.push(msg.clone());
                 self.insert_single_message_to_db(app_handle, &msg).await;
@@ -1366,6 +1378,58 @@ impl Agent {
                     Err(e) => format!("Error: {}", e),
                 }
             }
+            "list_skills" => {
+                let skills = crate::skills::list_available_skills();
+                if skills.is_empty() {
+                    "No dynamic skills are currently available in the workspace.".to_string()
+                } else {
+                    format!("Available skills:\n{}", skills.join("\n"))
+                }
+            }
+            "load_skill" => {
+                let name = args["name"].as_str().unwrap_or_default();
+                if let Some(_content) = crate::skills::get_skill_content(name) {
+                    let session_id = self.session_id.lock().await.clone();
+                    if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+                        if let Ok(mut active_skills) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                            if !active_skills.contains(&name.to_string()) {
+                                active_skills.push(name.to_string());
+                                let skills_json = serde_json::to_string(&active_skills).unwrap_or_else(|_| "[]".to_string());
+                                let _ = crate::db::sessions::update_active_skills(&store, &session_id, &skills_json);
+                                format!("Successfully loaded skill '{}'. The instructions will be active for the rest of this session.", name)
+                            } else {
+                                format!("Skill '{}' is already active.", name)
+                            }
+                        } else {
+                            "Failed to retrieve active session skills.".to_string()
+                        }
+                    } else {
+                        "Failed to access database.".to_string()
+                    }
+                } else {
+                    format!("Skill '{}' not found. Use `list_skills` to see what is available.", name)
+                }
+            }
+            "unload_skill" => {
+                let name = args["name"].as_str().unwrap_or_default();
+                let session_id = self.session_id.lock().await.clone();
+                if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+                    if let Ok(mut active_skills) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                        if active_skills.contains(&name.to_string()) {
+                            active_skills.retain(|s| s != name);
+                            let skills_json = serde_json::to_string(&active_skills).unwrap_or_else(|_| "[]".to_string());
+                            let _ = crate::db::sessions::update_active_skills(&store, &session_id, &skills_json);
+                            format!("Successfully unloaded skill '{}'.", name)
+                        } else {
+                            format!("Skill '{}' is not currently active.", name)
+                        }
+                    } else {
+                        "Failed to retrieve active session skills.".to_string()
+                    }
+                } else {
+                    "Failed to access database.".to_string()
+                }
+            }
             _ => format!("Unknown tool: {}", function_name),
         }
     }
@@ -1444,19 +1508,39 @@ impl Agent {
                 .filter(|s| !s.is_empty())
         };
 
-        let active_skills = crate::skills::load_active_skills();
-        let active_skills_opt = if active_skills.is_empty() { None } else { Some(active_skills.as_str()) };
+        let available_skills = crate::skills::list_available_skills();
+        let available_skills_str = if available_skills.is_empty() { None } else { Some(available_skills.join("\n")) };
+        let available_skills_opt = available_skills_str.as_deref();
+
+        let session_id = self.session_id.lock().await.clone();
+        let mut active_skills_opt: Option<String> = None;
+        if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+            if let Ok(active_skills) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                if !active_skills.is_empty() {
+                    let mut active_skills_content = String::new();
+                    for skill in active_skills {
+                        if let Some(content) = crate::skills::get_skill_content(&skill) {
+                            active_skills_content.push_str(&format!("--- SKILL: {} ---\n{}\n\n", skill, content));
+                        }
+                    }
+                    if !active_skills_content.is_empty() {
+                        active_skills_opt = Some(active_skills_content);
+                    }
+                }
+            }
+        }
 
         let system_prompt_content = if incognito_mode {
-            crate::prompts::get_default_system_prompt(None, None, active_skills_opt)
+            crate::prompts::get_default_system_prompt(None, None, available_skills_opt, active_skills_opt.as_deref())
         } else if is_research_mode {
-            crate::prompts::get_research_system_prompt(active_skills_opt)
+            crate::prompts::get_research_system_prompt(available_skills_opt, active_skills_opt.as_deref())
         } else {
             config.system_prompt.clone().unwrap_or_else(|| {
                 crate::prompts::get_default_system_prompt(
                     memory_context.as_deref(),
                     rag_context,
-                    active_skills_opt,
+                    available_skills_opt,
+                    active_skills_opt.as_deref(),
                 )
             })
         };
@@ -1469,9 +1553,14 @@ impl Agent {
             }],
         });
 
+        let session_id_str = self.session_id.lock().await.clone();
+        let active_skills_list = crate::memories::get_vector_store(app_handle)
+            .and_then(|store| crate::db::sessions::get_active_skills(&store, &session_id_str))
+            .unwrap_or_default();
+
         let gemini_tools = if enable_tools {
             Some(vec![GeminiTool {
-                function_declarations: crate::tools::get_all_tools()
+                function_declarations: crate::tools::get_all_tools(&active_skills_list)
                     .iter()
                     .map(|t| {
                         // Strip OpenAI-specific fields from parameters
@@ -1657,6 +1746,7 @@ impl Agent {
                 ),
                 tool_call_id: None,
                 images: None,
+                is_cron: None,
             };
             history.push(msg.clone());
             self.insert_single_message_to_db(app_handle, &msg).await;
@@ -1692,6 +1782,7 @@ impl Agent {
                     tool_calls: None,
                     tool_call_id: Some(format!("call_{}_{}", fc.function_call.name, idx)),
                     images: None,
+                    is_cron: None,
                 };
                 history.push(msg.clone());
                 self.insert_single_message_to_db(app_handle, &msg).await;
@@ -1713,6 +1804,7 @@ impl Agent {
                 tool_calls: None,
                 tool_call_id: None,
                 images: None,
+                is_cron: None,
             };
             history.push(msg.clone());
             self.insert_single_message_to_db(app_handle, &msg).await;
@@ -1756,19 +1848,39 @@ impl Agent {
                 .filter(|s| !s.is_empty())
         };
 
-        let active_skills = crate::skills::load_active_skills();
-        let active_skills_opt = if active_skills.is_empty() { None } else { Some(active_skills.as_str()) };
+        let available_skills = crate::skills::list_available_skills();
+        let available_skills_str = if available_skills.is_empty() { None } else { Some(available_skills.join("\n")) };
+        let available_skills_opt = available_skills_str.as_deref();
+
+        let session_id = self.session_id.lock().await.clone();
+        let mut active_skills_opt: Option<String> = None;
+        if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+            if let Ok(active_skills) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                if !active_skills.is_empty() {
+                    let mut active_skills_content = String::new();
+                    for skill in active_skills {
+                        if let Some(content) = crate::skills::get_skill_content(&skill) {
+                            active_skills_content.push_str(&format!("--- SKILL: {} ---\n{}\n\n", skill, content));
+                        }
+                    }
+                    if !active_skills_content.is_empty() {
+                        active_skills_opt = Some(active_skills_content);
+                    }
+                }
+            }
+        }
 
         let system_prompt_content = if incognito_mode {
-            crate::prompts::get_default_system_prompt(None, None, active_skills_opt)
+            crate::prompts::get_default_system_prompt(None, None, available_skills_opt, active_skills_opt.as_deref())
         } else if is_research_mode {
-            crate::prompts::get_research_system_prompt(active_skills_opt)
+            crate::prompts::get_research_system_prompt(available_skills_opt, active_skills_opt.as_deref())
         } else {
             config.system_prompt.clone().unwrap_or_else(|| {
                 crate::prompts::get_default_system_prompt(
                     memory_context.as_deref(),
                     rag_context,
-                    active_skills_opt,
+                    available_skills_opt,
+                    active_skills_opt.as_deref(),
                 )
             })
         };
@@ -1780,16 +1892,62 @@ impl Agent {
             tool_calls: None,
             tool_call_id: None,
             images: None,
+            is_cron: None,
         }];
-        messages_with_system.extend(history.clone());
 
+        // 1. Filter out past cron messages from the LLM's context window ONLY during a cron run,
+        // so the active cron job focuses on the user's actual conversation. Regular users still see them.
+        let is_cron = history.last().and_then(|m| m.is_cron).unwrap_or(false);
+        let visible_history: Vec<ChatMessage> = if is_cron {
+            let len = history.len();
+            let mut visible: Vec<ChatMessage> = Vec::with_capacity(len);
+            let mut in_past_cron_segment = false;
+            for (i, m) in history.iter().enumerate() {
+                // Always keep the very last message (the current cron prompt) in the history.
+                if i == len.saturating_sub(1) {
+                    visible.push(m.clone());
+                    break;
+                }
+                // A message explicitly marked as cron starts a cron segment (typically a cron user prompt).
+                if m.is_cron.unwrap_or(false) {
+                    in_past_cron_segment = true;
+                    continue;
+                }
+                // A normal user message (without cron flag) ends any prior cron segment.
+                if m.role == "user" {
+                    in_past_cron_segment = false;
+                }
+                if !in_past_cron_segment {
+                    visible.push(m.clone());
+                }
+            }
+            visible
+        } else {
+            history.clone()
+        };
+
+        messages_with_system.extend(visible_history);
+
+        let last_idx = messages_with_system.len().saturating_sub(1);
         let api_messages: Vec<ApiChatMessage> = messages_with_system
-            .iter()
-            .map(|msg| ApiChatMessage {
-                role: msg.role.clone(),
-                content: msg.content.clone(),
-                tool_calls: msg.tool_calls.clone(),
-                tool_call_id: msg.tool_call_id.clone(),
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut msg)| {
+                // If this is a cron job, structurally isolate the current cron prompt from the "chat history"
+                if is_cron && i == last_idx {
+                    if let Some(ref mut c) = msg.content {
+                        let sanitized = c
+                            .replace("<system_directive>", "&lt;system_directive&gt;")
+                            .replace("</system_directive>", "&lt;/system_directive&gt;");
+                        *c = format!("<system_directive>\nYou are executing a scheduled background task. Please evaluate the user's task instruction strictly against the conversation history preceding this message. Do not consider this directive itself as part of the chat history or summarize it.\nTask: {}\n</system_directive>", sanitized);
+                    }
+                }
+                ApiChatMessage {
+                    role: msg.role,
+                    content: msg.content,
+                    tool_calls: msg.tool_calls,
+                    tool_call_id: msg.tool_call_id,
+                }
             })
             .collect();
 
@@ -1833,10 +1991,17 @@ impl Agent {
             }
         };
 
+        let session_id_str = self.session_id.lock().await.clone();
+        let active_skills_list = crate::memories::get_vector_store(app_handle)
+            .and_then(|store| crate::db::sessions::get_active_skills(&store, &session_id_str))
+            .unwrap_or_default();
+
         let is_olmo_think = model.contains("olmo-3.1-32b-think");
+        let is_strict_blacklisted = model.to_lowercase().contains("upstage");
+
         let current_tools = if enable_tools && !is_olmo_think {
             Some(
-                crate::tools::get_all_tools()
+                crate::tools::get_all_tools(&active_skills_list)
                     .iter()
                     .map(|t| ToolDefinition {
                         tool_type: t.tool_type.clone(),
@@ -1844,7 +2009,7 @@ impl Agent {
                             name: t.function.name.clone(),
                             description: t.function.description.clone(),
                             parameters: t.function.parameters.clone(),
-                            strict: t.function.strict, // Required by Cerebras
+                            strict: if is_strict_blacklisted { None } else { t.function.strict },
                         },
                     })
                     .collect(),
@@ -2088,6 +2253,7 @@ impl Agent {
                 },
                 tool_call_id: None,
                 images: None,
+                is_cron: None,
             };
             history.push(msg.clone());
             self.insert_single_message_to_db(app_handle, &msg).await;
@@ -2132,6 +2298,7 @@ impl Agent {
                         tool_calls: None,
                         tool_call_id: Some(tool_call.id.clone()),
                         images: None,
+                        is_cron: None,
                     };
                     history.push(msg.clone());
                     self.insert_single_message_to_db(app_handle, &msg).await;

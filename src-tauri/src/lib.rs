@@ -26,6 +26,7 @@ pub mod sessions;
 pub mod skills;
 mod tools;
 pub mod vector_store;
+mod webhook;
 
 #[cfg(test)]
 mod tests;
@@ -227,6 +228,7 @@ async fn chat(
             images_base64,
             images_mime_types,
             &config,
+            false,
         )
         .await
 }
@@ -438,6 +440,11 @@ pub fn run() {
 
             // Start background jobs
             background::start_background_jobs(app.handle().clone());
+
+            let webhook_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                crate::webhook::start_webhook_server(webhook_handle).await;
+            });
 
             if let Ok(store) = memories::get_vector_store(&app.handle().clone()) {
                 if let Err(e) = crate::db::sessions::run_migration(&app.handle().clone(), &store) {
