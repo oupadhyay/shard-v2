@@ -34,6 +34,7 @@ pub fn list_available_skills() -> Vec<String> {
             }
         }
     }
+    skills.sort();
     skills
 }
 

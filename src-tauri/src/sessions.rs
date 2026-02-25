@@ -92,7 +92,13 @@ pub async fn archive_session_transcript<R: Runtime>(
             "SELECT created_at, active_skills FROM sessions WHERE id = ?1",
             rusqlite::params![session_id],
             |row| Ok((row.get::<_, String>(0).ok(), row.get::<_, String>(1).ok())),
-        ).unwrap_or((None, None));
+        ).or_else(|_| {
+            store.conn.query_row(
+                "SELECT created_at FROM sessions WHERE id = ?1",
+                rusqlite::params![session_id],
+                |row| Ok((row.get::<_, String>(0).ok(), None)),
+            )
+        }).unwrap_or((None, None));
 
         let session_row = crate::db::sessions::SessionRow {
             id: session_id.to_string(),

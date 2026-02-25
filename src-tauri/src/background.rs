@@ -421,6 +421,7 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                                 log::error!("[Cron] Failed to start scheduler: {}", e);
                             } else {
                                 log::info!("[Cron] Scheduler started successfully");
+                                std::future::pending::<()>().await;
                             }
                         }
                         Err(e) => log::error!("[Cron] Failed to create JobScheduler: {}", e),

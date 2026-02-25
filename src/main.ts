@@ -486,9 +486,11 @@ ocrBtn.addEventListener("click", async () => {
     errorDiv.innerHTML = DOMPurify.sanitize(`
       <details class="error-accordion">
         <summary class="error-summary">OCR Error</summary>
-        <div class="error-details">${String(error)}</div>
+        <div class="error-details"></div>
       </details>
     `);
+    const detailsEl = errorDiv.querySelector('.error-details');
+    if (detailsEl) detailsEl.textContent = String(error);
     chatArea.appendChild(errorDiv);
     chatArea.scrollTop = chatArea.scrollHeight;
     inputField.focus();
@@ -587,9 +589,11 @@ trashBtn.addEventListener("click", async () => {
       errorDiv.innerHTML = DOMPurify.sanitize(`
         <details class="error-accordion">
           <summary class="error-summary">Restore Error</summary>
-          <div class="error-details">${String(error)}</div>
+          <div class="error-details"></div>
         </details>
       `);
+      const detailsEl = errorDiv.querySelector('.error-details');
+      if (detailsEl) detailsEl.textContent = String(error);
       chatArea.appendChild(errorDiv);
       chatArea.scrollTop = chatArea.scrollHeight;
     }
@@ -609,9 +613,11 @@ trashBtn.addEventListener("click", async () => {
       errorDiv.innerHTML = DOMPurify.sanitize(`
         <details class="error-accordion">
           <summary class="error-summary">Delete Error</summary>
-          <div class="error-details">${String(error)}</div>
+          <div class="error-details"></div>
         </details>
       `);
+      const detailsEl = errorDiv.querySelector('.error-details');
+      if (detailsEl) detailsEl.textContent = String(error);
       chatArea.appendChild(errorDiv);
       chatArea.scrollTop = chatArea.scrollHeight;
     }
@@ -1096,13 +1102,15 @@ listen<string>("agent-error", (event) => {
   errorDiv.innerHTML = DOMPurify.sanitize(`
     <details class="error-accordion">
       <summary class="error-summary">API Error</summary>
-      <div class="error-details">${errorText}</div>
+      <div class="error-details"></div>
     </details>
     <button class="retry-btn" title="Retry request">
       ${RETRY_ICON}
       <span>Retry</span>
     </button>
   `);
+  const detailsEl = errorDiv.querySelector('.error-details');
+  if (detailsEl) detailsEl.textContent = errorText;
 
   // Wire retry button
   const retryBtn = errorDiv.querySelector(".retry-btn");
@@ -1154,10 +1162,14 @@ listen<string>("agent-fallback", (event) => {
     fallbackDiv.className = "message fallback-message";
     fallbackDiv.innerHTML = DOMPurify.sanitize(`
       <details class="fallback-accordion">
-        <summary class="fallback-summary">${title}</summary>
-        <div class="fallback-details">${details}</div>
+        <summary class="fallback-summary"></summary>
+        <div class="fallback-details"></div>
       </details>
     `);
+    const summaryEl = fallbackDiv.querySelector('.fallback-summary');
+    if (summaryEl) summaryEl.textContent = title;
+    const detailsEl = fallbackDiv.querySelector('.fallback-details');
+    if (detailsEl) detailsEl.textContent = details;
 
     chatArea.appendChild(fallbackDiv);
     chatArea.scrollTop = chatArea.scrollHeight;
@@ -1607,16 +1619,35 @@ sessionsBtn.addEventListener("click", async () => {
       return;
     }
 
+    sessionsListContainer.innerHTML = '';
     const sessions = JSON.parse(resultString);
-    sessionsListContainer.innerHTML = DOMPurify.sanitize(sessions.map((s: any) => `
-      <div class="session-item" data-id="${s.session_id}">
-        <div class="session-item-title">${s.title}</div>
-        <div class="session-item-meta">
-            <span>${new Date(s.date).toLocaleDateString()}</span>
-            <span class="session-item-summary">${s.summary !== "No summary available" ? s.summary.substring(0, 120) + (s.summary.length > 120 ? "..." : "") : ""}</span>
-        </div>
-      </div>
-    `).join(""));
+    sessions.forEach((s: any) => {
+      const item = document.createElement("div");
+      item.className = "session-item";
+      item.dataset.id = s.session_id;
+
+      const titleEl = document.createElement("div");
+      titleEl.className = "session-item-title";
+      titleEl.textContent = s.title;
+
+      const metaEl = document.createElement("div");
+      metaEl.className = "session-item-meta";
+
+      const dateSpan = document.createElement("span");
+      dateSpan.textContent = new Date(s.date).toLocaleDateString();
+
+      const summarySpan = document.createElement("span");
+      summarySpan.className = "session-item-summary";
+      summarySpan.textContent = s.summary !== "No summary available" ? s.summary.substring(0, 120) + (s.summary.length > 120 ? "..." : "") : "";
+
+      metaEl.appendChild(dateSpan);
+      metaEl.appendChild(summarySpan);
+
+      item.appendChild(titleEl);
+      item.appendChild(metaEl);
+
+      sessionsListContainer.appendChild(item);
+    });
 
 
     // Add click listeners
@@ -1635,7 +1666,9 @@ sessionsBtn.addEventListener("click", async () => {
     });
 
   } catch (e) {
-    sessionsListContainer.innerHTML = DOMPurify.sanitize(`<div class="sessions-error">Failed to load sessions: ${e}</div>`);
+    sessionsListContainer.innerHTML = `<div class="sessions-error">Failed to load sessions: <span class="sessions-error-details"></span></div>`;
+    const detailsSpan = sessionsListContainer.querySelector('.sessions-error-details');
+    if (detailsSpan) detailsSpan.textContent = String(e);
   }
 });
 
