@@ -1575,8 +1575,8 @@ body {
 
 /* Cron Job Styles */
 .message.user.cron-message {
-  background-color: rgba(var(--accent-rgb), 0.15);
-  border: 1px dashed rgba(var(--accent-rgb), 0.4);
+  background-color: rgba(200, 200, 205, 0.15);
+  border: 1px dashed rgba(200, 200, 205, 0.4);
   opacity: 0.9;
 }
 .message.user.cron-message .message-content {
@@ -1585,7 +1585,7 @@ body {
 .cron-label {
   font-size: 0.75rem;
   font-weight: 600;
-  color: var(--accent-light);
+  color: var(--accent-link);
   text-transform: uppercase;
   margin-right: 0.5rem;
   letter-spacing: 0.05em;

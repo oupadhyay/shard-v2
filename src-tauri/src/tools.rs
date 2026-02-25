@@ -22,6 +22,7 @@ pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
         "update_topic_summary",
         "load_skill",
         "unload_skill",
+        "list_skills",
         "search_wikipedia",
     ];
 
@@ -270,6 +271,19 @@ pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
                         "name": { "type": "string", "description": "The name of the skill to unload" },
                     },
                     "required": ["name"],
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "list_skills".to_string(),
+                description: "List all dynamically loadable skills available in the workspace. Use this to discover expertise you can adopt.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {},
                     "additionalProperties": false
                 }),
                 strict: Some(true),

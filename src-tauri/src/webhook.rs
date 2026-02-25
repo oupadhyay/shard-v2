@@ -29,27 +29,19 @@ pub async fn start_webhook_server<R: Runtime>(app_handle: AppHandle<R>) {
         .route("/webhook/callback/{id}", post(handle_callback))
         .with_state(state);
 
-    let port = 1420; // Default local port for Shard
+    let port = 0; // Use random port to prevent conflicts with Vite dev server
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
-    log::info!("[Webhook] Starting local webhook server on {}", addr);
+    log::info!("[Webhook] Attempting to start local webhook server");
 
     let listener = match tokio::net::TcpListener::bind(&addr).await {
-        Ok(l) => l,
+        Ok(l) => {
+            log::info!("[Webhook] Successfully bound to port {}", l.local_addr().unwrap());
+            l
+        },
         Err(e) => {
-            log::error!("[Webhook] Failed to bind to {}: {}", addr, e);
-            // Fallback to random port if 1420 is taken
-            let random_addr = SocketAddr::from(([127, 0, 0, 1], 0));
-            match tokio::net::TcpListener::bind(&random_addr).await {
-                Ok(l) => {
-                    log::info!("[Webhook] Fallback: Bound to random port {}", l.local_addr().unwrap());
-                    l
-                },
-                Err(e) => {
-                    log::error!("[Webhook] Failed to bind to fallback port: {}", e);
-                    return;
-                }
-            }
+            log::error!("[Webhook] Failed to bind: {}", e);
+            return;
         }
     };
 
@@ -68,12 +60,27 @@ pub struct WebhookPayload {
     pub result: serde_json::Value,
 }
 
+fn sanitize_log_field(input: &str) -> String {
+    input.replace(&['\n', '\r'][..], " ")
+}
+
 async fn handle_callback<R: Runtime>(
     Path(id): Path<String>,
     State(state): State<WebhookState<R>>,
     Json(payload): Json<WebhookPayload>,
 ) -> &'static str {
-    log::info!("[Webhook] Received callback for request {}: {:?}", id, payload);
+    let sanitized_id = sanitize_log_field(&id);
+    let sanitized_status = sanitize_log_field(&payload.status);
+    let result_compact = match serde_json::to_string(&payload.result) {
+        Ok(s) => s,
+        Err(_) => String::from("<invalid json>"),
+    };
+    log::info!(
+        "[Webhook] Received callback for request id={} status={} result={}",
+        sanitized_id,
+        sanitized_status,
+        result_compact
+    );
 
     // In the future, we will route this payload back into the active Shard context (UI or Agent)
     // using the id to look up the pending transaction.

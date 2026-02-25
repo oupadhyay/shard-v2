@@ -69,10 +69,11 @@ pub fn get_skill_required_tools(name: &str) -> Vec<String> {
 
     if let Some(content) = get_skill_content(name) {
         if content.starts_with("---\n") || content.starts_with("---\r\n") {
+            let prefix_len = if content.starts_with("---\r\n") { 5 } else { 4 };
             // Find the end of the frontmatter
-            let end_index = content[4..].find("\n---").map(|i| i + 4);
+            let end_index = content[prefix_len..].find("\n---").map(|i| i + prefix_len);
             if let Some(end) = end_index {
-                let frontmatter = &content[4..end];
+                let frontmatter = &content[prefix_len..end];
                 let mut in_required_tools = false;
 
                 for line in frontmatter.lines() {

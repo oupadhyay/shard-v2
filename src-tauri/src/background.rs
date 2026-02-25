@@ -387,7 +387,8 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                                     let app_h2 = app_h.clone();
                                     let prompt2 = prompt.clone();
                                     Box::pin(async move {
-                                        log::info!("[Cron] Triggering background task: {}", prompt2);
+                                        let sanitized_prompt = prompt2.replace(&['\n', '\r'][..], " ");
+                                        log::info!("[Cron] Triggering background task: {}", sanitized_prompt);
                                         let state = app_h2.state::<crate::AppState>();
                                         if let Ok(cfg) = crate::config::load_config(&app_h2) {
                                             app_h2.emit("agent-cron-started", &prompt2).ok();

@@ -629,12 +629,14 @@ async function loadChatHistory() {
 
     // Process messages sequentially
     for (const msg of history) {
-      if (msg.role === "user" || msg.role === "cron") {
+      const displayRole = msg.is_cron ? "cron" : msg.role;
+
+      if (displayRole === "user" || displayRole === "cron") {
         // Reset web search container for each user message (new turn)
         resetWebSearchContainer();
         // Pass all images if present in history
-        addMessage(msg.role as "user" | "assistant" | "cron", msg.content || "", msg.images, fragment);
-      } else if (msg.role === "assistant") {
+        addMessage(displayRole as "user" | "assistant" | "cron", msg.content || "", msg.images, fragment);
+      } else if (displayRole === "assistant") {
         // 1. Render Reasoning (if present)
         if (msg.reasoning) {
           const thinkingMsg = createThinkingElement(msg.reasoning, true);

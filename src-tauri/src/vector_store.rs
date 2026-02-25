@@ -93,10 +93,27 @@ impl VectorStore {
         conn.execute_batch(include_str!("schema.sql"))?;
 
         // Auto-migrate schema for existing databases (add active_skills)
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "ALTER TABLE sessions ADD COLUMN active_skills TEXT DEFAULT '[]';",
             [],
-        );
+        ) {
+            match &e {
+                rusqlite::Error::SqliteFailure(_, Some(msg))
+                    if msg.contains("duplicate column name") =>
+                {
+                    log::debug!(
+                        "[VectorStore] sessions.active_skills column already exists: {}",
+                        msg
+                    );
+                }
+                _ => {
+                    log::warn!(
+                        "[VectorStore] Failed to auto-migrate sessions.active_skills column: {}",
+                        e
+                    );
+                }
+            }
+        }
 
         log::info!("[VectorStore] Opened database at {:?}", db_path);
 

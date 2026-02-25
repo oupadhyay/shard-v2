@@ -46,4 +46,27 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_skill_required_tools_extraction() {
+        if let Ok(dir) = get_skills_dir() {
+            // LF test
+            let test_skill_path_lf = dir.join("test_tools_skill_lf.md");
+            let test_content_lf = "---\nrequired_tools:\n  - tool_a\n  - tool_b\n---\nSkill content Here.";
+            if fs::write(&test_skill_path_lf, test_content_lf).is_ok() {
+                let tools = crate::skills::get_skill_required_tools("test_tools_skill_lf");
+                assert_eq!(tools, vec!["tool_a".to_string(), "tool_b".to_string()]);
+                let _ = fs::remove_file(&test_skill_path_lf);
+            }
+
+            // CRLF test
+            let test_skill_path_crlf = dir.join("test_tools_skill_crlf.md");
+            let test_content_crlf = "---\r\nrequired_tools:\r\n  - tool_c\r\n  - tool_d\r\n---\r\nSkill content Here.";
+            if fs::write(&test_skill_path_crlf, test_content_crlf).is_ok() {
+                let tools = crate::skills::get_skill_required_tools("test_tools_skill_crlf");
+                assert_eq!(tools, vec!["tool_c".to_string(), "tool_d".to_string()]);
+                let _ = fs::remove_file(&test_skill_path_crlf);
+            }
+        }
+    }
 }
