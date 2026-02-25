@@ -34,6 +34,7 @@ import {
   SESSIONS_MODAL_HTML,
   initSettingsTabs,
   resizeImage,
+  renderSessionList,
 } from "./ui";
 
 // DOM Elements
@@ -1599,15 +1600,7 @@ sessionsBtn.addEventListener("click", async () => {
     }
 
     const sessions = JSON.parse(resultString);
-    sessionsListContainer.innerHTML = sessions.map((s: any) => `
-      <div class="session-item" data-id="${s.session_id}">
-        <div class="session-item-title">${s.title}</div>
-        <div class="session-item-meta">
-            <span>${new Date(s.date).toLocaleDateString()}</span>
-            <span class="session-item-summary">${s.summary !== "No summary available" ? s.summary.substring(0, 120) + (s.summary.length > 120 ? "..." : "") : ""}</span>
-        </div>
-      </div>
-    `).join("");
+    sessionsListContainer.innerHTML = renderSessionList(sessions);
 
 
     // Add click listeners
