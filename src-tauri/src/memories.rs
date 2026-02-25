@@ -1169,7 +1169,7 @@ pub async fn rebuild_chunk_index<R: Runtime>(
         for (s_type, s_name, idx, raw) in tasks {
             // Cache key: use sha256(chunk.text) to match what upsert_chunk stores
             // This ensures cache consistency between rebuild and upsert
-            let content_hash = VectorStore::content_hash(&raw.text);
+            let content_hash = crate::vector_store::compute_content_hash(&raw.text);
 
             // Try cache
             let cached = match vector_store.get_cached_embedding(&content_hash) {
