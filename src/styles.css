@@ -1590,3 +1590,9 @@ body {
   margin-right: 0.5rem;
   letter-spacing: 0.05em;
 }
+
+.sessions-error {
+  color: #ff4444;
+  padding: 20px;
+}
+

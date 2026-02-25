@@ -801,7 +801,7 @@ listen<string>("agent-retry", (event) => {
 
 // Listen for background cron jobs starting
 listen<string>("agent-cron-started", (event) => {
-  const prompt = event.payload;
+  const prompt = DOMPurify.sanitize(event.payload);
   resetWebSearchContainer();
   addMessage("cron", prompt, undefined);
 });
@@ -1633,7 +1633,7 @@ sessionsBtn.addEventListener("click", async () => {
     });
 
   } catch (e) {
-    sessionsListContainer.innerHTML = DOMPurify.sanitize(`<div style="color: #ff4444; padding: 20px;">Failed to load sessions: ${e}</div>`);
+    sessionsListContainer.innerHTML = DOMPurify.sanitize(`<div class="sessions-error">Failed to load sessions: ${e}</div>`);
   }
 });
 
