@@ -56,3 +56,46 @@ pub fn get_skill_content(name: &str) -> Option<String> {
     }
     None
 }
+
+/// Parses a skill's Markdown file and extracts the "required_tools" list from its YAML frontmatter.
+/// Example frontmatter:
+/// ---
+/// required_tools:
+///   - search_arxiv
+///   - get_weather
+/// ---
+pub fn get_skill_required_tools(name: &str) -> Vec<String> {
+    let mut required = Vec::new();
+
+    if let Some(content) = get_skill_content(name) {
+        if content.starts_with("---\n") || content.starts_with("---\r\n") {
+            // Find the end of the frontmatter
+            let end_index = content[4..].find("\n---").map(|i| i + 4);
+            if let Some(end) = end_index {
+                let frontmatter = &content[4..end];
+                let mut in_required_tools = false;
+
+                for line in frontmatter.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("required_tools:") {
+                        in_required_tools = true;
+                    } else if in_required_tools {
+                        if trimmed.starts_with('-') {
+                            let tool = trimmed[1..].trim();
+                            // If it's wrapped in quotes, strip them
+                            let tool = tool.trim_matches(|c| c == '\'' || c == '"');
+                            if !tool.is_empty() {
+                                required.push(tool.to_string());
+                            }
+                        } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                            // Reached the next key in the YAML or something that breaks the list
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    required
+}

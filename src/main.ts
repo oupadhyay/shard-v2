@@ -58,7 +58,7 @@ document.addEventListener("click", (e) => {
 });
 
 function addMessage(
-  role: "user" | "assistant",
+  role: "user" | "assistant" | "cron",
   content: string,
   images?: { base64: string; mimeType: string }[],
   container: HTMLElement | DocumentFragment = chatArea,
@@ -483,12 +483,12 @@ ocrBtn.addEventListener("click", async () => {
     console.error("OCR error:", error);
     const errorDiv = document.createElement("div");
     errorDiv.className = "message error-message";
-    errorDiv.innerHTML = `
+    errorDiv.innerHTML = DOMPurify.sanitize(`
       <details class="error-accordion">
         <summary class="error-summary">OCR Error</summary>
-        <div class="error-details">${DOMPurify.sanitize(String(error))}</div>
+        <div class="error-details">${String(error)}</div>
       </details>
-    `;
+    `);
     chatArea.appendChild(errorDiv);
     chatArea.scrollTop = chatArea.scrollHeight;
     inputField.focus();
@@ -584,12 +584,12 @@ trashBtn.addEventListener("click", async () => {
       console.error("Restore error:", error);
       const errorDiv = document.createElement("div");
       errorDiv.className = "message error-message";
-      errorDiv.innerHTML = `
+      errorDiv.innerHTML = DOMPurify.sanitize(`
         <details class="error-accordion">
           <summary class="error-summary">Restore Error</summary>
-          <div class="error-details">${DOMPurify.sanitize(String(error))}</div>
+          <div class="error-details">${String(error)}</div>
         </details>
-      `;
+      `);
       chatArea.appendChild(errorDiv);
       chatArea.scrollTop = chatArea.scrollHeight;
     }
@@ -606,12 +606,12 @@ trashBtn.addEventListener("click", async () => {
       console.error("Delete error:", error);
       const errorDiv = document.createElement("div");
       errorDiv.className = "message error-message";
-      errorDiv.innerHTML = `
+      errorDiv.innerHTML = DOMPurify.sanitize(`
         <details class="error-accordion">
           <summary class="error-summary">Delete Error</summary>
-          <div class="error-details">${DOMPurify.sanitize(String(error))}</div>
+          <div class="error-details">${String(error)}</div>
         </details>
-      `;
+      `);
       chatArea.appendChild(errorDiv);
       chatArea.scrollTop = chatArea.scrollHeight;
     }
@@ -629,11 +629,11 @@ async function loadChatHistory() {
 
     // Process messages sequentially
     for (const msg of history) {
-      if (msg.role === "user") {
+      if (msg.role === "user" || msg.role === "cron") {
         // Reset web search container for each user message (new turn)
         resetWebSearchContainer();
         // Pass all images if present in history
-        addMessage("user", msg.content || "", msg.images, fragment);
+        addMessage(msg.role as "user" | "assistant" | "cron", msg.content || "", msg.images, fragment);
       } else if (msg.role === "assistant") {
         // 1. Render Reasoning (if present)
         if (msg.reasoning) {
@@ -797,6 +797,13 @@ listen<string>("agent-retry", (event) => {
   } catch (e) {
     console.error("[Agent Retry] Failed to parse retry event:", e);
   }
+});
+
+// Listen for background cron jobs starting
+listen<string>("agent-cron-started", (event) => {
+  const prompt = event.payload;
+  resetWebSearchContainer();
+  addMessage("cron", prompt, undefined);
 });
 
 // Listen for agent streaming response chunks
@@ -1084,16 +1091,16 @@ listen<string>("agent-error", (event) => {
   // Create error message with accordion and retry button below
   const errorDiv = document.createElement("div");
   errorDiv.className = "message error-message";
-  errorDiv.innerHTML = `
+  errorDiv.innerHTML = DOMPurify.sanitize(`
     <details class="error-accordion">
       <summary class="error-summary">API Error</summary>
-      <div class="error-details">${DOMPurify.sanitize(errorText)}</div>
+      <div class="error-details">${errorText}</div>
     </details>
     <button class="retry-btn" title="Retry request">
       ${RETRY_ICON}
       <span>Retry</span>
     </button>
-  `;
+  `);
 
   // Wire retry button
   const retryBtn = errorDiv.querySelector(".retry-btn");
@@ -1143,12 +1150,12 @@ listen<string>("agent-fallback", (event) => {
     // Create a non-blocking notification accordion in chat
     const fallbackDiv = document.createElement("div");
     fallbackDiv.className = "message fallback-message";
-    fallbackDiv.innerHTML = `
+    fallbackDiv.innerHTML = DOMPurify.sanitize(`
       <details class="fallback-accordion">
-        <summary class="fallback-summary">${DOMPurify.sanitize(title)}</summary>
-        <div class="fallback-details">${DOMPurify.sanitize(details)}</div>
+        <summary class="fallback-summary">${title}</summary>
+        <div class="fallback-details">${details}</div>
       </details>
-    `;
+    `);
 
     chatArea.appendChild(fallbackDiv);
     chatArea.scrollTop = chatArea.scrollHeight;
@@ -1599,7 +1606,7 @@ sessionsBtn.addEventListener("click", async () => {
     }
 
     const sessions = JSON.parse(resultString);
-    sessionsListContainer.innerHTML = sessions.map((s: any) => `
+    sessionsListContainer.innerHTML = DOMPurify.sanitize(sessions.map((s: any) => `
       <div class="session-item" data-id="${s.session_id}">
         <div class="session-item-title">${s.title}</div>
         <div class="session-item-meta">
@@ -1607,7 +1614,7 @@ sessionsBtn.addEventListener("click", async () => {
             <span class="session-item-summary">${s.summary !== "No summary available" ? s.summary.substring(0, 120) + (s.summary.length > 120 ? "..." : "") : ""}</span>
         </div>
       </div>
-    `).join("");
+    `).join(""));
 
 
     // Add click listeners
@@ -1626,7 +1633,7 @@ sessionsBtn.addEventListener("click", async () => {
     });
 
   } catch (e) {
-    sessionsListContainer.innerHTML = `<div style="color: #ff4444; padding: 20px;">Failed to load sessions: ${e}</div>`;
+    sessionsListContainer.innerHTML = DOMPurify.sanitize(`<div style="color: #ff4444; padding: 20px;">Failed to load sessions: ${e}</div>`);
   }
 });
 

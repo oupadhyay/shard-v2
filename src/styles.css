@@ -1572,3 +1572,21 @@ body {
 .app-unfocused .app-ui {
   opacity: 0.97;
 }
+
+/* Cron Job Styles */
+.message.user.cron-message {
+  background-color: rgba(var(--accent-rgb), 0.15);
+  border: 1px dashed rgba(var(--accent-rgb), 0.4);
+  opacity: 0.9;
+}
+.message.user.cron-message .message-content {
+  font-style: italic;
+}
+.cron-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent-light);
+  text-transform: uppercase;
+  margin-right: 0.5rem;
+  letter-spacing: 0.05em;
+}

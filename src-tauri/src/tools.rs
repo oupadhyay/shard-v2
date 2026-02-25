@@ -1,8 +1,31 @@
 use crate::agent::{FunctionDefinition, ToolDefinition};
 use serde_json::json;
 
-pub fn get_all_tools() -> Vec<ToolDefinition> {
-    vec![
+pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
+    // Collect all required tools from the active skills
+    let mut required_tools = std::collections::HashSet::new();
+    for skill in active_skills {
+        for tool in crate::skills::get_skill_required_tools(skill) {
+            required_tools.insert(tool);
+        }
+    }
+
+    // Global tools always available to the agent
+    let global_tools = [
+        "web_search",
+        "open_url",
+        "memory_search",
+        "memory_get",
+        "save_memory",
+        "refresh_memories",
+        "read_topic_summary",
+        "update_topic_summary",
+        "load_skill",
+        "unload_skill",
+        "search_wikipedia",
+    ];
+
+    let all_tools = vec![
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
@@ -11,7 +34,7 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "location": { "type": "string", "description": "City name (e.g. 'Paris', 'London') or Zip code (e.g. '94102')" },
+                        "location": { "type": "string", "description": "City name ONLY (e.g. 'Paris', 'London', 'Tracy'). Do NOT include state abbreviations, country codes, or commas." },
                     },
                     "required": ["location"],
                     "additionalProperties": false
@@ -252,5 +275,9 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                 strict: Some(true),
             },
         },
-    ]
+    ];
+
+    all_tools.into_iter().filter(|t| {
+        global_tools.contains(&t.function.name.as_str()) || required_tools.contains(&t.function.name)
+    }).collect()
 }

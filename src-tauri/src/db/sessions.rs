@@ -253,6 +253,7 @@ pub fn run_migration(app_handle: &AppHandle, store: &VectorStore) -> Result<(), 
                                 tool_calls: None,
                                 tool_call_id: None,
                                 images: None,
+                                is_cron: None,
                             };
 
                             let msg_row = MessageRow {
@@ -392,6 +393,7 @@ pub fn parse_legacy_markdown_transcript(content: &str) -> Vec<ChatMessage> {
                     tool_calls: if current_tool_calls.is_empty() { None } else { Some(current_tool_calls.clone()) },
                     tool_call_id: None,
                     images: None,
+                    is_cron: None,
                 });
                 current_text.clear();
                 current_reasoning.clear();
@@ -502,6 +504,7 @@ pub fn parse_legacy_markdown_transcript(content: &str) -> Vec<ChatMessage> {
             tool_calls: if current_tool_calls.is_empty() { None } else { Some(current_tool_calls) },
             tool_call_id: None,
             images: None,
+            is_cron: None,
         });
     }
 

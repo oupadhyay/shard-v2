@@ -327,6 +327,7 @@ impl Agent {
                                 tool_calls: None,
                                 tool_call_id: None,
                                 images: None,
+                                is_cron: None,
                             }
                         }),
                     )
@@ -437,6 +438,7 @@ impl Agent {
                     tool_calls: None,
                     tool_call_id: None,
                     images: None,
+                    is_cron: None,
                 };
                 history.push(msg.clone());
                 self.insert_single_message_to_db(app_handle, &msg).await;
@@ -568,6 +570,7 @@ impl Agent {
         images_base64: Option<Vec<String>>,
         images_mime_types: Option<Vec<String>>,
         config: &crate::config::AppConfig,
+        is_cron: bool,
     ) -> Result<(), String> {
         println!("process_message called. Message len: {}", message.len());
 
@@ -678,9 +681,15 @@ impl Agent {
             tool_calls: None,
             tool_call_id: None,
             images: uploaded_images,
+            is_cron: if is_cron { Some(true) } else { None },
         };
         history.push(msg.clone());
         self.insert_single_message_to_db(app_handle, &msg).await;
+
+        if !is_cron {
+            let json_msg = serde_json::to_string(&msg).unwrap_or_default();
+            app_handle.emit("user-message", json_msg).ok();
+        }
 
         // Incognito mode: skip all RAG/memory retrieval and storage
         let incognito = config.incognito_mode.unwrap_or(false);
@@ -929,6 +938,7 @@ impl Agent {
                     tool_calls: None,
                     tool_call_id: None,
                     images: None,
+                    is_cron: None,
                 };
                 history.push(msg.clone());
                 self.insert_single_message_to_db(app_handle, &msg).await;
@@ -1543,9 +1553,14 @@ impl Agent {
             }],
         });
 
+        let session_id_str = self.session_id.lock().await.clone();
+        let active_skills_list = crate::memories::get_vector_store(app_handle)
+            .and_then(|store| crate::db::sessions::get_active_skills(&store, &session_id_str))
+            .unwrap_or_default();
+
         let gemini_tools = if enable_tools {
             Some(vec![GeminiTool {
-                function_declarations: crate::tools::get_all_tools()
+                function_declarations: crate::tools::get_all_tools(&active_skills_list)
                     .iter()
                     .map(|t| {
                         // Strip OpenAI-specific fields from parameters
@@ -1731,6 +1746,7 @@ impl Agent {
                 ),
                 tool_call_id: None,
                 images: None,
+                is_cron: None,
             };
             history.push(msg.clone());
             self.insert_single_message_to_db(app_handle, &msg).await;
@@ -1766,6 +1782,7 @@ impl Agent {
                     tool_calls: None,
                     tool_call_id: Some(format!("call_{}_{}", fc.function_call.name, idx)),
                     images: None,
+                    is_cron: None,
                 };
                 history.push(msg.clone());
                 self.insert_single_message_to_db(app_handle, &msg).await;
@@ -1787,6 +1804,7 @@ impl Agent {
                 tool_calls: None,
                 tool_call_id: None,
                 images: None,
+                is_cron: None,
             };
             history.push(msg.clone());
             self.insert_single_message_to_db(app_handle, &msg).await;
@@ -1874,16 +1892,43 @@ impl Agent {
             tool_calls: None,
             tool_call_id: None,
             images: None,
+            is_cron: None,
         }];
-        messages_with_system.extend(history.clone());
 
+        // 1. Filter out past cron messages from the LLM's context window ONLY during a cron run,
+        // so the active cron job focuses on the user's actual conversation. Regular users still see them.
+        let is_cron = history.last().and_then(|m| m.is_cron).unwrap_or(false);
+        let visible_history: Vec<ChatMessage> = if is_cron {
+            let len = history.len();
+            history
+                .iter()
+                .enumerate()
+                .filter(|(i, m)| !m.is_cron.unwrap_or(false) || *i == len - 1)
+                .map(|(_, m)| m.clone())
+                .collect()
+        } else {
+            history.clone()
+        };
+
+        messages_with_system.extend(visible_history);
+
+        let last_idx = messages_with_system.len().saturating_sub(1);
         let api_messages: Vec<ApiChatMessage> = messages_with_system
-            .iter()
-            .map(|msg| ApiChatMessage {
-                role: msg.role.clone(),
-                content: msg.content.clone(),
-                tool_calls: msg.tool_calls.clone(),
-                tool_call_id: msg.tool_call_id.clone(),
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut msg)| {
+                // If this is a cron job, structurally isolate the current cron prompt from the "chat history"
+                if is_cron && i == last_idx {
+                    if let Some(ref mut c) = msg.content {
+                        *c = format!("<system_directive>\nYou are executing a scheduled background task. Please evaluate the user's task instruction strictly against the conversation history preceding this message. Do not consider this directive itself as part of the chat history or summarize it.\nTask: {}\n</system_directive>", c);
+                    }
+                }
+                ApiChatMessage {
+                    role: msg.role,
+                    content: msg.content,
+                    tool_calls: msg.tool_calls,
+                    tool_call_id: msg.tool_call_id,
+                }
             })
             .collect();
 
@@ -1927,10 +1972,17 @@ impl Agent {
             }
         };
 
+        let session_id_str = self.session_id.lock().await.clone();
+        let active_skills_list = crate::memories::get_vector_store(app_handle)
+            .and_then(|store| crate::db::sessions::get_active_skills(&store, &session_id_str))
+            .unwrap_or_default();
+
         let is_olmo_think = model.contains("olmo-3.1-32b-think");
+        let is_strict_blacklisted = model.to_lowercase().contains("upstage");
+
         let current_tools = if enable_tools && !is_olmo_think {
             Some(
-                crate::tools::get_all_tools()
+                crate::tools::get_all_tools(&active_skills_list)
                     .iter()
                     .map(|t| ToolDefinition {
                         tool_type: t.tool_type.clone(),
@@ -1938,7 +1990,7 @@ impl Agent {
                             name: t.function.name.clone(),
                             description: t.function.description.clone(),
                             parameters: t.function.parameters.clone(),
-                            strict: t.function.strict, // Required by Cerebras
+                            strict: if is_strict_blacklisted { None } else { t.function.strict },
                         },
                     })
                     .collect(),
@@ -2182,6 +2234,7 @@ impl Agent {
                 },
                 tool_call_id: None,
                 images: None,
+                is_cron: None,
             };
             history.push(msg.clone());
             self.insert_single_message_to_db(app_handle, &msg).await;
@@ -2226,6 +2279,7 @@ impl Agent {
                         tool_calls: None,
                         tool_call_id: Some(tool_call.id.clone()),
                         images: None,
+                        is_cron: None,
                     };
                     history.push(msg.clone());
                     self.insert_single_message_to_db(app_handle, &msg).await;
