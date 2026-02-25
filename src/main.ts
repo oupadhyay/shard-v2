@@ -7,6 +7,7 @@ import "katex/dist/katex.min.css";
 // Internal modules
 import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, AppConfig } from "./types";
 import { ChatState } from "./state";
+import { EVENTS } from "./events";
 import {
   md,
   clearKatexErrors,
@@ -496,7 +497,7 @@ ocrBtn.addEventListener("click", async () => {
 });
 
 // Listen for OCR trigger from global shortcut
-listen("trigger-ocr", async () => {
+listen(EVENTS.TRIGGER_OCR, async () => {
   // Focus immediately so user can type while OCR processes
   inputField.focus();
   try {
@@ -755,7 +756,7 @@ async function loadChatHistory() {
 loadChatHistory();
 
 // Listen for agent retry events (backend requesting UI clear before retry)
-listen<string>("agent-retry", (event) => {
+listen<string>(EVENTS.AGENT_RETRY, (event) => {
   try {
     const payload = JSON.parse(event.payload);
     console.log("[Agent Retry] Received retry event:", payload);
@@ -800,7 +801,7 @@ listen<string>("agent-retry", (event) => {
 });
 
 // Listen for agent streaming response chunks
-listen<string>("agent-response-chunk", (event) => {
+listen<string>(EVENTS.AGENT_RESPONSE_CHUNK, (event) => {
   const chunk = event.payload;
 
   // Ignore empty chunks
@@ -922,7 +923,7 @@ listen<string>("agent-response-chunk", (event) => {
   chatArea.scrollTop = chatArea.scrollHeight;
 });
 
-listen<string>("agent-reasoning-chunk", (event) => {
+listen<string>(EVENTS.AGENT_REASONING_CHUNK, (event) => {
   // ============================================================================
   // REASONING CHUNK HANDLER
   // ============================================================================
@@ -953,7 +954,7 @@ listen<string>("agent-reasoning-chunk", (event) => {
   chatArea.scrollTop = chatArea.scrollHeight;
 });
 
-listen<string>("agent-tool-call", (event) => {
+listen<string>(EVENTS.AGENT_TOOL_CALL, (event) => {
   const payload = JSON.parse(event.payload);
 
   // Idempotent update: find existing block by ID
@@ -1012,7 +1013,7 @@ listen<string>("agent-tool-call", (event) => {
 });
 
 // Listen for tool results and add them to the matching tool call
-listen<string>("agent-tool-result", (event) => {
+listen<string>(EVENTS.AGENT_TOOL_RESULT, (event) => {
   const payload = JSON.parse(event.payload);
   const name = payload.name;
   const result = payload.result;
@@ -1066,12 +1067,12 @@ listen<string>("agent-tool-result", (event) => {
   }
 });
 
-listen("agent-processing-start", () => {
+listen(EVENTS.AGENT_PROCESSING_START, () => {
   // Optional: Show a "thinking" indicator
 });
 
 // Listen for API errors and display with retry button
-listen<string>("agent-error", (event) => {
+listen<string>(EVENTS.AGENT_ERROR, (event) => {
   const errorText = event.payload;
   console.error("API Error:", errorText);
 
@@ -1125,7 +1126,7 @@ listen<string>("agent-error", (event) => {
 });
 
 // Listen for provider fallback notifications (rate limit → OpenRouter)
-listen<string>("agent-fallback", (event) => {
+listen<string>(EVENTS.AGENT_FALLBACK, (event) => {
   // Only show the fallback message once per conversation turn
   if (state.fallbackShownThisTurn) {
     console.log("[Fallback] Skipping duplicate notification");
@@ -1202,11 +1203,11 @@ async function startHide() {
   }
 }
 
-listen("start-hide", () => {
+listen(EVENTS.START_HIDE, () => {
   startHide();
 });
 
-listen("start-show", async () => {
+listen(EVENTS.START_SHOW, async () => {
   const app = document.getElementById("app");
   if (app) {
     // Small delay to ensure window is rendered before fading in
@@ -1331,7 +1332,7 @@ function hideSuggestions() {
   }
 }
 
-listen<ScreenContext>("screen-context-ready", (event) => {
+listen<ScreenContext>(EVENTS.SCREEN_CONTEXT_READY, (event) => {
   console.log("[ScreenContext] Received suggestions:", event.payload);
 
   // Store image for when a suggestion is clicked
