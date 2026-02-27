@@ -235,10 +235,6 @@ pub fn get_secret(key_type: ApiKeyType) -> Result<Option<String>, String> {
     let keys = load_all_keys()?;
     let result = keys.get(key_type.key_name()).cloned();
 
-    if let Some(ref v) = result {
-        log::debug!("[Secrets] Found {:?} (len={})", key_type, v.len());
-    }
-
     Ok(result)
 }
 
