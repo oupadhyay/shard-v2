@@ -239,7 +239,10 @@ async fn save_and_clear_chat(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let config = crate::config::load_config(&app_handle).map_err(|e| e.to_string())?;
-    state.agent.save_and_clear_history(config.gemini_api_key).await;
+    state
+        .agent
+        .save_and_clear_history(config.gemini_api_key)
+        .await;
     Ok(())
 }
 
@@ -289,7 +292,10 @@ async fn load_session(
     state: tauri::State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
-    state.agent.load_session_from_db(&app_handle, &session_id).await
+    state
+        .agent
+        .load_session_from_db(&app_handle, &session_id)
+        .await
 }
 
 /// Retry the last response with a hint about KaTeX rendering errors
@@ -351,7 +357,7 @@ async fn open_dedicated_window(app_handle: AppHandle) -> Result<(), String> {
     .inner_size(900.0, 660.0)
     .min_inner_size(640.0, 480.0)
     .resizable(true)
-    .decorations(false)   // Custom titlebar rendered in HTML
+    .decorations(false) // Custom titlebar rendered in HTML
     .transparent(true)
     .shadow(true)
     .center()
@@ -551,6 +557,23 @@ pub fn run() {
             // Start background jobs
             background::start_background_jobs(app.handle().clone());
 
+            // Hardcoded test for positioning
+            if let Some(main_win) = app.get_webview_window("main") {
+                // Try changing these numbers and saving the file to see where it moves!
+                let test_height = 1130.0;
+                let test_y = -5000.0;
+
+                let _ = main_win.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                    width: 350.0,
+                    height: test_height,
+                }));
+
+                let _ = main_win.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                    x: 0.0,
+                    y: test_y,
+                }));
+            }
+
             let webhook_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 crate::webhook::start_webhook_server(webhook_handle).await;
@@ -618,21 +641,50 @@ pub fn run() {
                 use tauri_nspanel::WebviewWindowExt;
                 let window = app.get_webview_window("main").unwrap();
 
-                // Position window at bottom-left
+                // Position window at bottom-left, flush with screen edges
                 if let Some(monitor) = window.current_monitor().ok().flatten() {
+                    let scale = monitor.scale_factor();
                     let screen_size = monitor.size();
-                    let window_size = window.outer_size().unwrap();
 
-                    // Position: 20px from left, 20px from bottom
-                    let x = 20;
-                    let y = screen_size.height as i32 - window_size.height as i32 - 20;
+                    // Subtract macOS system menu bar (35pt physical) and set size
+                    let menu_bar_px = (35.0 * scale) as u32;
+                    let target_h = screen_size.height.saturating_sub(menu_bar_px);
 
                     window
-                        .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+                        .set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                            width: (350.0 * scale) as u32,
+                            height: target_h,
+                        }))
+                        .ok();
+
+                    // Calculate Y so the bottom edge sits exactly on the bottom physical edge
+                    // X = 0 (flush left)
+                    // Y = monitor_top + (monitor_height - window_height)
+                    let target_y = screen_size.height.saturating_sub(target_h);
+
+                    window
+                        .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                            x: monitor.position().x,
+                            y: monitor.position().y + target_y as i32,
+                        }))
                         .ok();
                 }
 
-                let _panel = window.to_panel().unwrap();
+                // Prevent the app icon from showing on the dock and stealing focus
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+                let panel = window.to_panel().unwrap();
+
+                // Ensure the panel acts as an auxiliary floating window that tiling managers ignore
+                #[allow(deprecated)]
+                {
+                    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                    panel.set_collection_behaviour(
+                        NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary,
+                    );
+                }
             }
 
             // Register Global Shortcuts with handlers
@@ -648,7 +700,9 @@ pub fn run() {
                 .on_shortcut(ctrl_space, move |_app, _shortcut, event| {
                     if event.state == tauri_gs::ShortcutState::Pressed {
                         // If the dedicated window is open, toggle IT instead of ambient
-                        if let Some(dedicated) = app_handle_for_space.get_webview_window("dedicated") {
+                        if let Some(dedicated) =
+                            app_handle_for_space.get_webview_window("dedicated")
+                        {
                             if dedicated.is_visible().unwrap_or(false) {
                                 dedicated.hide().ok();
                             } else {

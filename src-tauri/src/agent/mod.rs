@@ -179,9 +179,9 @@ impl Agent {
             (history_clone, current_session_id, should_archive)
         };
 
-        // Phase 2: Always archive on clear — captures the final session state with latest
-        // title/summary regardless of whether the hash changed since last auto-archive.
-        {
+        // Phase 2: Archive on clear if changes occurred
+        // Only run the archive if the hash changed since the last auto-archive.
+        if should_archive {
             let app_handle_clone = self.app_handle.clone();
             let http_client_clone = self.http_client.clone();
             let session_id_for_task = current_session_id.clone();
@@ -2315,12 +2315,6 @@ impl Agent {
                     let function_name = &tool_call.function.name;
                     let arguments = &tool_call.function.arguments;
                     let args: Value = serde_json::from_str(arguments).unwrap_or(json!({}));
-
-                    let tool_call_id = if tool_call.id.is_empty() {
-                        format!("call_{}", function_name)
-                    } else {
-                        tool_call.id.clone()
-                    };
 
                     // Note: agent-tool-call was already emitted during streaming (line ~2259, with id for dedup).
                     // A second emit here duplicated the card in the frontend.
