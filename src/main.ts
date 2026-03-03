@@ -44,6 +44,26 @@ const ocrBtn = document.getElementById("ocr-btn") as HTMLButtonElement;
 const trashBtn = document.getElementById("trash-btn") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
 const stopBtn = document.getElementById("stop-btn") as HTMLButtonElement;
+const breakoutBtn = document.getElementById("breakout-btn") as HTMLButtonElement;
+
+// Breakout button: fade-out ambient panel, then open dedicated window
+breakoutBtn?.addEventListener("click", async () => {
+  const appEl = document.querySelector(".app-ui") as HTMLElement | null;
+  if (appEl) {
+    appEl.style.transition = "opacity 0.2s ease";
+    appEl.style.opacity = "0";
+  }
+  // Fire immediately — fade-out and window open run concurrently
+  try {
+    await invoke("open_dedicated_window");
+  } catch (e) {
+    // Restore visibility on failure
+    if (appEl) {
+      appEl.style.opacity = "1";
+    }
+    console.error("Failed to open dedicated window:", e);
+  }
+});
 
 // State (centralized in ChatState – see src/state.ts)
 const state = new ChatState();
@@ -1229,6 +1249,13 @@ listen(EVENTS.START_HIDE, () => {
 });
 
 listen(EVENTS.START_SHOW, async () => {
+  // Restore .app-ui opacity in case we faded it out for the dedicated window transition
+  const appUi = document.querySelector(".app-ui") as HTMLElement | null;
+  if (appUi) {
+    appUi.style.transition = "opacity 0.2s ease";
+    appUi.style.opacity = "1";
+  }
+
   const app = document.getElementById("app");
   if (app) {
     // Small delay to ensure window is rendered before fading in
@@ -1646,6 +1673,38 @@ sessionsBtn.addEventListener("click", async () => {
 
       item.appendChild(titleEl);
       item.appendChild(metaEl);
+
+      // Delete button — shown on hover via CSS
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "session-item-delete";
+      deleteBtn.title = "Delete session";
+      deleteBtn.setAttribute("aria-label", "Delete session");
+      deleteBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+      deleteBtn.addEventListener("click", async (e) => {
+        e.stopPropagation(); // don't trigger session load
+        const id = (item as HTMLElement).dataset.id;
+        if (!id) return;
+        try {
+          // Check BEFORE deleting — backend rotates session ID on delete so comparison fails after
+          const activeId = await invoke<string>("get_current_session_id").catch(() => "");
+          const wasActive = activeId === id;
+
+          await invoke("delete_session", { sessionId: id });
+
+          if (wasActive) {
+            chatArea.innerHTML = "";
+            await updateButtonStates();
+          }
+          // Re-render the list
+          item.remove();
+          if (!sessionsListContainer.querySelector(".session-item")) {
+            sessionsListContainer.innerHTML = '<div class="sessions-empty">No recent sessions found.</div>';
+          }
+        } catch (err) {
+          console.error("Failed to delete session:", err);
+        }
+      });
+      item.appendChild(deleteBtn);
 
       sessionsListContainer.appendChild(item);
     });

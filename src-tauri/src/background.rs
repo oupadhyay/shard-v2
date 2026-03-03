@@ -745,6 +745,28 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
 
+    // ── Prune stale sessions (0–1 user messages, older than 1 day) ──────────
+    // These are sessions that were never meaningfully used (e.g. app launched
+    // then closed without chatting). No LLM needed — pure SQL decision.
+    if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+        match store.conn.execute(
+            "DELETE FROM sessions WHERE id IN (
+                SELECT s.id FROM sessions s
+                WHERE s.updated_at < datetime('now', '-1 day')
+                  AND (
+                    SELECT COUNT(*) FROM messages m
+                    WHERE m.session_id = s.id
+                      AND json_extract(m.content, '$.role') = 'user'
+                  ) <= 1
+            )",
+            [],
+        ) {
+            Ok(n) if n > 0 => log::info!("[Cleanup] Pruned {} stale sessions (<= 1 user message, > 1 day old)", n),
+            Ok(_) => {}
+            Err(e) => log::warn!("[Cleanup] Failed to prune stale sessions: {}", e),
+        }
+    }
+
     let interactions_dir = app_data_dir.join("interactions");
 
     let config = crate::config::load_config(app_handle)?;

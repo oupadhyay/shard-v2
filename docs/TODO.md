@@ -52,6 +52,7 @@
   - Extract core logic: `agent/core.rs`
   - Consider separating retry logic, tool execution, and streaming handling
 - [ ] Migrate from `screenshots` crate to `xcap` for screen capture (P2)
+- [ ] Update models supported (especially with OpenRouter free model router)
 
 ## P2: Multi-Provider Support
 
