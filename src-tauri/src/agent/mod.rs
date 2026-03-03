@@ -134,6 +134,17 @@ impl Agent {
         }
     }
 
+    /// Called when the user deletes the currently-active session.
+    /// Rotates to a new session ID without archiving (delete is intentional).
+    pub async fn reset_for_delete(&self) -> String {
+        let new_id = uuid::Uuid::new_v4().to_string();
+        *self.session_id.lock().await = new_id.clone();
+        *self.last_archived_hash.lock().await = 0;
+        self.history.lock().await.clear();
+        *self.backup_history.lock().await = None;
+        new_id
+    }
+
     pub async fn rewind_history(&self) {
         let mut history = self.history.lock().await;
         if history.is_empty() {
@@ -168,7 +179,8 @@ impl Agent {
             (history_clone, current_session_id, should_archive)
         };
 
-        // Phase 2: Spawn background archival task if history changed.
+        // Phase 2: Archive on clear if changes occurred
+        // Only run the archive if the hash changed since the last auto-archive.
         if should_archive {
             let app_handle_clone = self.app_handle.clone();
             let http_client_clone = self.http_client.clone();
@@ -186,12 +198,10 @@ impl Agent {
                     )
                     .await
                     {
-                        log::warn!("[Agent] Failed to archive session: {}", e);
+                        log::warn!("[Agent] Failed to archive session on clear: {}", e);
                     }
                 }
             });
-        } else {
-            log::info!("[Agent] Skipping session archive (no changes in chat history)");
         }
 
         // Phase 3: Update the hash, rotate session ID, clear history and backup.
@@ -1057,6 +1067,50 @@ impl Agent {
         drop(history); // Release lock before persist
         self.persist_history().await;
 
+        // ── Auto-archive: generate session title + summary after 2 user + 2 agent messages ──
+        // Fires once per content change when the session crosses the 2+2 threshold.
+        // Uses last_archived_hash so it won't re-fire on every subsequent message if
+        // the content matches what was previously archived (e.g. no new messages since last archive).
+        if !incognito {
+            let history_snapshot = self.history.lock().await.clone();
+            let user_msgs = history_snapshot.iter().filter(|m| m.role == "user").count();
+            let asst_msgs = history_snapshot
+                .iter()
+                .filter(|m| m.role == "assistant" || m.role == "model")
+                .count();
+
+            if user_msgs >= 2 && asst_msgs >= 2 {
+                let current_hash = self.calculate_history_hash(&history_snapshot);
+                let last_hash = *self.last_archived_hash.lock().await;
+
+                if current_hash != last_hash {
+                    // Update the hash eagerly to prevent concurrent duplicate archives
+                    *self.last_archived_hash.lock().await = current_hash;
+
+                    let session_id_now = self.session_id.lock().await.clone();
+                    let app_handle_clone = self.app_handle.clone();
+                    let http_client_clone = self.http_client.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Ok(config) = crate::config::load_config(&app_handle_clone) {
+                            if let Err(e) = crate::sessions::archive_session_transcript(
+                                &app_handle_clone,
+                                &http_client_clone,
+                                &config,
+                                &session_id_now,
+                                history_snapshot,
+                            )
+                            .await
+                            {
+                                log::warn!("[Agent] Auto-archive failed: {}", e);
+                            } else {
+                                log::info!("[Agent] Auto-archived session after 2+2 messages");
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1755,13 +1809,8 @@ impl Agent {
                 let function_name = &fc.function_call.name;
                 let args = &fc.function_call.args;
 
-                let tool_call_event = json!({
-                    "name": function_name,
-                    "args": args
-                });
-                app_handle
-                    .emit("agent-tool-call", tool_call_event.to_string())
-                    .ok();
+                // Note: agent-tool-call was already emitted during streaming (with id for dedup).
+                // Emitting it again here (without id) caused duplicate cards in the frontend.
 
                 let tool_result = self
                     .execute_tool(app_handle, function_name, args, config)
@@ -2264,20 +2313,8 @@ impl Agent {
                     let arguments = &tool_call.function.arguments;
                     let args: Value = serde_json::from_str(arguments).unwrap_or(json!({}));
 
-                    let tool_call_id = if tool_call.id.is_empty() {
-                        format!("call_{}", function_name)
-                    } else {
-                        tool_call.id.clone()
-                    };
-
-                    let tool_call_event = json!({
-                        "name": function_name,
-                        "args": args,
-                        "id": tool_call_id
-                    });
-                    app_handle
-                        .emit("agent-tool-call", tool_call_event.to_string())
-                        .ok();
+                    // Note: agent-tool-call was already emitted during streaming (line ~2259, with id for dedup).
+                    // A second emit here duplicated the card in the frontend.
 
                     let tool_result = self
                         .execute_tool(app_handle, function_name, &args, config)

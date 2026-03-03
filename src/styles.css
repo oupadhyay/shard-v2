@@ -1399,7 +1399,8 @@ body {
 }
 
 .session-item {
-  padding: 12px;
+  position: relative;
+  padding: 10px 48px 10px 12px; /* right: reserves space for delete btn */
   margin-bottom: 8px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.03);
@@ -1413,15 +1414,85 @@ body {
   border-color: var(--border-subtle);
 }
 
+.session-item-delete {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  right: 10px;
+  height: auto; /* spans full item content area */
+  width: 30px;
+  border-radius: 6px;
+  border: none;
+  background: radial-gradient(ellipse at left, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.04) 100%);
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateX(4px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.session-item:hover .session-item-delete,
+.session-item:focus-within .session-item-delete {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* ============================================
+   Ambient Panel Breakout Button (in index.html)
+   ============================================ */
+
+.breakout-btn {
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  padding: 0;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.breakout-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-default);
+  color: var(--text-secondary);
+  transform: translateY(-50%) scale(1.08);
+}
+
+.breakout-btn:active {
+  transform: translateY(-50%) scale(0.96);
+}
+
+.session-item-delete:hover {
+  background: rgba(200, 60, 60, 0.15);
+  color: var(--accent-error);
+  outline: 0.5px dotted var(--accent-error);
+}
+
 .session-item-title {
   font-weight: 500;
-  font-size: 0.95rem;
+  font-size: 0.82rem;
   color: var(--text-primary);
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 
 .session-item-meta {
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   color: var(--text-tertiary);
   display: flex;
   justify-content: space-between;
