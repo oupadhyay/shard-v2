@@ -347,8 +347,7 @@ inputField.addEventListener("paste", async (e) => {
       const objectUrl = URL.createObjectURL(file);
       const mimeType = file.type;
 
-      // Predict index (since showImagePreview pushes)
-      const imageIndex = state.attachedImages.length;
+
 
       // Define the async process immediately so the promise exists synchronously
       const ocrTask = async () => {
@@ -362,9 +361,7 @@ inputField.addEventListener("paste", async (e) => {
           });
 
           // Update base64 for Gemini (side effect)
-          if (state.attachedImages[imageIndex]) {
-            state.attachedImages[imageIndex].base64 = base64;
-          }
+          imageData.base64 = base64;
 
           // 2. Resize
           console.log("[Paste] Resizing image for OCR...");
@@ -394,18 +391,10 @@ inputField.addEventListener("paste", async (e) => {
       console.log("[Paste] Calling showImagePreview with ObjectURL");
       showImagePreview(imageData);
 
-      // Add side-effect to update ocrText when done and remove loading state
+      // Add side-effect to update ocrText when done
       if (imageData.ocrPromise) {
         imageData.ocrPromise.then(text => {
-          if (state.attachedImages[imageIndex]) {
-            state.attachedImages[imageIndex].ocrText = text;
-          }
-          // Remove loading indicator from preview
-          const container = document.getElementById("image-preview-container");
-          const preview = container?.querySelector(`.image-preview[data-index="${imageIndex}"]`);
-          if (preview) {
-            preview.classList.remove("ocr-processing");
-          }
+          imageData.ocrText = text;
         });
       }
 
@@ -460,6 +449,12 @@ function showImagePreview(imageData: AttachedImage) {
     });
   });
 
+  if (imageData.ocrPromise) {
+    imageData.ocrPromise.finally(() => {
+      preview.classList.remove("ocr-processing");
+    });
+  }
+
   console.log("[showImagePreview] Appending preview to container");
   container.appendChild(preview);
   console.log("[showImagePreview] Append complete");
@@ -474,28 +469,20 @@ ocrBtn.addEventListener("click", async () => {
       // Create promise first so showImagePreview can detect it
       const ocrPromise = invoke<string>("ocr_image", { imageBase64: result.image_base64 });
 
-      showImagePreview({
+      const newImage: AttachedImage = {
         base64: result.image_base64,
         mimeType: result.mime_type,
         ocrText: "[Processing...]",
         ocrPromise,
-      });
-      const index = state.attachedImages.length - 1;
+      };
+      showImagePreview(newImage);
 
       ocrPromise.then(text => {
         console.log("[OCR] Screenshot text:", text.substring(0, 50) + "...");
-        if (state.attachedImages[index]) state.attachedImages[index].ocrText = text;
-        // Remove loading indicator
-        const container = document.getElementById("image-preview-container");
-        const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
-        if (preview) preview.classList.remove("ocr-processing");
+        newImage.ocrText = text;
       }).catch(err => {
         console.error("OCR failed:", err);
-        if (state.attachedImages[index]) state.attachedImages[index].ocrText = "[OCR failed]";
-        // Remove loading indicator
-        const container = document.getElementById("image-preview-container");
-        const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
-        if (preview) preview.classList.remove("ocr-processing");
+        newImage.ocrText = "[OCR failed]";
       });
 
       inputField.focus();
@@ -528,28 +515,20 @@ listen(EVENTS.TRIGGER_OCR, async () => {
       // Create promise first so showImagePreview can detect it
       const ocrPromise = invoke<string>("ocr_image", { imageBase64: result.image_base64 });
 
-      showImagePreview({
+      const newImage: AttachedImage = {
         base64: result.image_base64,
         mimeType: result.mime_type,
         ocrText: "[Processing...]",
         ocrPromise,
-      });
-      const index = state.attachedImages.length - 1;
+      };
+      showImagePreview(newImage);
 
       ocrPromise.then(text => {
         console.log("[OCR] Screenshot text:", text.substring(0, 50) + "...");
-        if (state.attachedImages[index]) state.attachedImages[index].ocrText = text;
-        // Remove loading indicator
-        const container = document.getElementById("image-preview-container");
-        const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
-        if (preview) preview.classList.remove("ocr-processing");
+        newImage.ocrText = text;
       }).catch(err => {
         console.error("OCR failed:", err);
-        if (state.attachedImages[index]) state.attachedImages[index].ocrText = "[OCR failed]";
-        // Remove loading indicator
-        const container = document.getElementById("image-preview-container");
-        const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
-        if (preview) preview.classList.remove("ocr-processing");
+        newImage.ocrText = "[OCR failed]";
       });
 
       inputField.focus();
@@ -996,20 +975,28 @@ listen<string>(EVENTS.AGENT_TOOL_CALL, (event) => {
   let toolDiv = payload.id ? chatArea.querySelector(`[data-tool-id="${payload.id}"]`) as HTMLElement : null;
 
   if (toolDiv) {
-    // Update existing tool call (e.g. arguments streaming)
-    const summaryArgs = toolDiv.querySelector(".tool-summary-args");
-    if (summaryArgs) {
-      const argsText = Object.entries(payload.args || {})
-        .map(([k, v]) => `${md.utils.escapeHtml(k)}="${md.utils.escapeHtml(String(v))}"`)
-        .join(" ");
-      summaryArgs.textContent = argsText;
-    }
-    const toolArgs = toolDiv.querySelector(".tool-args");
-    if (toolArgs) {
-      if (payload.rawArgs) {
-        toolArgs.textContent = payload.rawArgs;
-      } else {
-        toolArgs.textContent = JSON.stringify(payload.args, null, 2);
+    if (isWebSearchTool(payload.name)) {
+      const queryText = toolDiv.querySelector(".query-text");
+      if (queryText) {
+        const query = payload.args?.query || "";
+        queryText.textContent = `"${query || 'Legacy Search'}"`;
+      }
+    } else {
+      // Update existing tool call (e.g. arguments streaming)
+      const summaryArgs = toolDiv.querySelector(".tool-summary-args");
+      if (summaryArgs) {
+        const argsText = Object.entries(payload.args || {})
+          .map(([k, v]) => `${md.utils.escapeHtml(k)}="${md.utils.escapeHtml(String(v))}"`)
+          .join(" ");
+        summaryArgs.textContent = argsText;
+      }
+      const toolArgs = toolDiv.querySelector(".tool-args");
+      if (toolArgs) {
+        if (payload.rawArgs) {
+          toolArgs.textContent = payload.rawArgs;
+        } else {
+          toolArgs.textContent = JSON.stringify(payload.args, null, 2);
+        }
       }
     }
     return;
@@ -1054,15 +1041,20 @@ listen<string>(EVENTS.AGENT_TOOL_RESULT, (event) => {
   const result = payload.result;
 
   if (isWebSearchTool(name)) {
-    // Find matching web search query element
-    const webSearchQueries = Array.from(chatArea.querySelectorAll(".web-search-query"));
-    const matchingQuery = webSearchQueries
-      .reverse()
-      .find((el) => {
-        const resultSection = el.querySelector('.tool-result') as HTMLElement;
-        // Find the one that doesn't have a result yet
-        return resultSection && resultSection.style.display === 'none';
-      });
+    // 1. Try to find by ID if provided (preferred)
+    let matchingQuery = payload.id ? chatArea.querySelector(`[data-tool-id="${payload.id}"]`) as HTMLElement : null;
+
+    // 2. Fallback to finding the last search query without a result
+    if (!matchingQuery) {
+      const webSearchQueries = Array.from(chatArea.querySelectorAll(".web-search-query"));
+      matchingQuery = webSearchQueries
+        .reverse()
+        .find((el) => {
+          const resultSection = el.querySelector('.tool-result') as HTMLElement;
+          // Find the one that doesn't have a result yet
+          return resultSection && resultSection.style.display === 'none';
+        }) as HTMLElement || null;
+    }
 
     if (matchingQuery) {
       const resultSection = matchingQuery.querySelector('.tool-result') as HTMLElement;
@@ -1248,7 +1240,9 @@ listen(EVENTS.START_HIDE, () => {
   startHide();
 });
 
-listen(EVENTS.START_SHOW, async () => {
+listen<boolean>(EVENTS.START_SHOW, async (event) => {
+  const isResume = event.payload;
+
   // Restore .app-ui opacity in case we faded it out for the dedicated window transition
   const appUi = document.querySelector(".app-ui") as HTMLElement | null;
   if (appUi) {
@@ -1266,14 +1260,16 @@ listen(EVENTS.START_SHOW, async () => {
     }, 50);
   }
 
-  // Show loading chips if screen context is enabled (check config)
-  try {
-    const config = await invoke<{ enable_screen_context?: boolean; incognito_mode?: boolean }>("get_config");
-    if (config.enable_screen_context && !config.incognito_mode) {
-      showLoadingChips();
+  // Show loading chips if screen context is enabled and we are not returning from dedicated window
+  if (!isResume) {
+    try {
+      const config = await invoke<{ enable_screen_context?: boolean; incognito_mode?: boolean }>("get_config");
+      if (config.enable_screen_context && !config.incognito_mode) {
+        showLoadingChips();
+      }
+    } catch (e) {
+      console.warn("[ScreenContext] Failed to check config:", e);
     }
-  } catch (e) {
-    console.warn("[ScreenContext] Failed to check config:", e);
   }
 });
 
@@ -1729,6 +1725,13 @@ sessionsBtn.addEventListener("click", async () => {
     sessionsListContainer.innerHTML = `<div class="sessions-error">Failed to load sessions: <span class="sessions-error-details"></span></div>`;
     const detailsSpan = sessionsListContainer.querySelector('.sessions-error-details');
     if (detailsSpan) detailsSpan.textContent = String(e);
+  }
+});
+
+// Refresh sessions list if modal is open and we receive a backend update
+listen("sessions-updated", () => {
+  if (!sessionsModal.classList.contains("hidden")) {
+    sessionsBtn.click();
   }
 });
 

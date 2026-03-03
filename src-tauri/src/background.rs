@@ -749,18 +749,43 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
     // These are sessions that were never meaningfully used (e.g. app launched
     // then closed without chatting). No LLM needed — pure SQL decision.
     if let Ok(store) = crate::memories::get_vector_store(app_handle) {
-        match store.conn.execute(
-            "DELETE FROM sessions WHERE id IN (
-                SELECT s.id FROM sessions s
-                WHERE s.updated_at < datetime('now', '-1 day')
-                  AND (
-                    SELECT COUNT(*) FROM messages m
-                    WHERE m.session_id = s.id
-                      AND json_extract(m.content, '$.role') = 'user'
-                  ) <= 1
-            )",
-            [],
-        ) {
+        let prune_result = tokio::task::spawn_blocking(move || {
+            store.with_transaction(|_store, conn| {
+                // Delete messages for stale sessions first (prevent orphans)
+                conn.execute(
+                    "DELETE FROM messages WHERE session_id IN (
+                        SELECT s.id FROM sessions s
+                        WHERE datetime(s.updated_at) < datetime('now', '-1 day')
+                          AND (
+                            SELECT COUNT(*) FROM messages m
+                            WHERE m.session_id = s.id
+                              AND json_extract(m.content, '$.role') = 'user'
+                          ) <= 1
+                    )",
+                    [],
+                )?;
+
+                // Delete the sessions themselves
+                let n = conn.execute(
+                    "DELETE FROM sessions WHERE id IN (
+                        SELECT s.id FROM sessions s
+                        WHERE datetime(s.updated_at) < datetime('now', '-1 day')
+                          AND (
+                            SELECT COUNT(*) FROM messages m
+                            WHERE m.session_id = s.id
+                              AND json_extract(m.content, '$.role') = 'user'
+                          ) <= 1
+                    )",
+                    [],
+                )?;
+                Ok(n)
+            })
+        })
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+        .map_err(|e| format!("Database error: {}", e));
+
+        match prune_result {
             Ok(n) if n > 0 => log::info!("[Cleanup] Pruned {} stale sessions (<= 1 user message, > 1 day old)", n),
             Ok(_) => {}
             Err(e) => log::warn!("[Cleanup] Failed to prune stale sessions: {}", e),

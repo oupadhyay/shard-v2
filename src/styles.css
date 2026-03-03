@@ -1436,9 +1436,46 @@ body {
   flex-shrink: 0;
 }
 
-.session-item:hover .session-item-delete {
+.session-item:hover .session-item-delete,
+.session-item:focus-within .session-item-delete {
   opacity: 1;
   transform: translateX(0);
+}
+
+/* ============================================
+   Ambient Panel Breakout Button (in index.html)
+   ============================================ */
+
+.breakout-btn {
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  padding: 0;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.breakout-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-default);
+  color: var(--text-secondary);
+  transform: translateY(-50%) scale(1.08);
+}
+
+.breakout-btn:active {
+  transform: translateY(-50%) scale(0.96);
 }
 
 .session-item-delete:hover {

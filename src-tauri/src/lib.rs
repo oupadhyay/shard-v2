@@ -397,23 +397,26 @@ async fn delete_session(
         }
     }
 
-    // Delete messages then session from DB
-    if let Ok(store) = crate::memories::get_vector_store(&app_handle) {
-        store
-            .conn
-            .execute(
+    // Delete messages then session from DB using a blocking task to avoid stalling the async runtime.
+    let store = crate::memories::get_vector_store(&app_handle)
+        .map_err(|e| format!("Failed to access database: {}", e))?;
+
+    tokio::task::spawn_blocking(move || {
+        store.with_transaction(|_store, conn| {
+            conn.execute(
                 "DELETE FROM messages WHERE session_id = ?",
                 rusqlite::params![&session_id],
-            )
-            .map_err(|e| e.to_string())?;
-        store
-            .conn
-            .execute(
+            )?;
+            conn.execute(
                 "DELETE FROM sessions WHERE id = ?",
                 rusqlite::params![&session_id],
-            )
-            .map_err(|e| e.to_string())?;
-    }
+            )?;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+    .map_err(|e| format!("Database error: {}", e))?;
 
     Ok(())
 }
@@ -433,7 +436,9 @@ async fn close_dedicated_window(app_handle: AppHandle) -> Result<(), String> {
     if let Some(main_win) = app_handle.get_webview_window("main") {
         main_win.show().map_err(|e| e.to_string())?;
         main_win.set_focus().map_err(|e| e.to_string())?;
-        main_win.emit("start-show", ()).ok();
+        // Pass `true` as the payload to indicate this is a resume/return,
+        // so the frontend knows to suppress new screen suggestions.
+        main_win.emit("start-show", true).ok();
     }
     Ok(())
 }
@@ -556,23 +561,6 @@ pub fn run() {
 
             // Start background jobs
             background::start_background_jobs(app.handle().clone());
-
-            // Hardcoded test for positioning
-            if let Some(main_win) = app.get_webview_window("main") {
-                // Try changing these numbers and saving the file to see where it moves!
-                let test_height = 1130.0;
-                let test_y = -5000.0;
-
-                let _ = main_win.set_size(tauri::Size::Logical(tauri::LogicalSize {
-                    width: 350.0,
-                    height: test_height,
-                }));
-
-                let _ = main_win.set_position(tauri::Position::Logical(tauri::LogicalPosition {
-                    x: 0.0,
-                    y: test_y,
-                }));
-            }
 
             let webhook_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {

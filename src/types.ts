@@ -48,11 +48,14 @@ export interface AppConfig {
   openrouter_api_key?: string;
   cerebras_api_key?: string;
   groq_api_key?: string;
+  brave_api_key?: string;
   selected_model?: string;
+  background_model?: string;
   enable_web_search?: boolean;
   enable_tools?: boolean;
   incognito_mode?: boolean;
   research_mode?: boolean;
+  enable_screen_context?: boolean;
 }
 
 // Payload for chat command

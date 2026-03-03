@@ -1103,10 +1103,7 @@ impl Agent {
                             {
                                 log::warn!("[Agent] Auto-archive failed: {}", e);
                             } else {
-                                log::info!(
-                                    "[Agent] Auto-archived session {} after 2+2 messages",
-                                    session_id_now
-                                );
+                                log::info!("[Agent] Auto-archived session after 2+2 messages");
                             }
                         }
                     });

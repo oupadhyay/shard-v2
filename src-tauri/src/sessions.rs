@@ -2,7 +2,7 @@ use crate::agent::ChatMessage;
 use crate::config::AppConfig;
 use regex::Regex;
 use reqwest::Client;
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Emitter, Runtime};
 
 /// System prompt for background LLM to generate a descriptive slug and summary for the session
 const SESSION_ANALYSIS_PROMPT: &str = r#"Analyze this conversation and provide two things:
@@ -113,6 +113,8 @@ pub async fn archive_session_transcript<R: Runtime>(
             log::warn!("[Sessions] Failed to update session metadata: {}", e);
         } else {
             log::info!("[Sessions] Saved session metadata to SQLite DB (Title: {}, Summary: {})", safe_slug, summary);
+            // Notify frontend that sessions have been updated so it can refresh the sidebar/modal
+            app_handle.emit("sessions-updated", ()).ok();
         }
     }
 
