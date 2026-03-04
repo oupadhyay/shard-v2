@@ -1,9 +1,79 @@
 #[cfg(test)]
 mod tests {
     use crate::agent::{
-        has_images, supports_tools, to_multimodal_messages, ChatMessage, FunctionCall,
-        ImageAttachment, ToolCall,
+        has_images, supports_tools, to_api_messages, to_multimodal_messages, ApiChatMessage,
+        ChatMessage, FunctionCall, ImageAttachment, ToolCall,
     };
+
+    #[test]
+    fn test_to_api_messages_basic() {
+        let messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: Some("Hello".to_string()),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            images: None,
+            is_cron: None,
+        }];
+
+        let result = to_api_messages(&messages);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, "user");
+        assert_eq!(result[0].content, Some("Hello".to_string()));
+    }
+
+    #[test]
+    fn test_to_api_messages_with_tools() {
+        let messages = vec![
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: Some("Checking weather...".to_string()),
+                reasoning: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "call_123".to_string(),
+                    tool_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "get_weather".to_string(),
+                        arguments: "{\"location\":\"London\"}".to_string(),
+                    },
+                    thought_signature: None,
+                }]),
+                tool_call_id: None,
+                images: None,
+                is_cron: None,
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: Some("Sunny, 20C".to_string()),
+                reasoning: None,
+                tool_calls: None,
+                tool_call_id: Some("call_123".to_string()),
+                images: None,
+                is_cron: None,
+            },
+        ];
+
+        let result = to_api_messages(&messages);
+        assert_eq!(result.len(), 2);
+
+        assert_eq!(result[0].role, "assistant");
+        assert_eq!(result[0].content, Some("Checking weather...".to_string()));
+        let tool_calls = result[0].tool_calls.as_ref().unwrap();
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "call_123");
+
+        assert_eq!(result[1].role, "tool");
+        assert_eq!(result[1].content, Some("Sunny, 20C".to_string()));
+        assert_eq!(result[1].tool_call_id, Some("call_123".to_string()));
+    }
+
+    #[test]
+    fn test_to_api_messages_empty() {
+        let messages: Vec<ChatMessage> = vec![];
+        let result = to_api_messages(&messages);
+        assert!(result.is_empty());
+    }
 
     #[test]
     fn test_to_multimodal_messages_text_only() {
