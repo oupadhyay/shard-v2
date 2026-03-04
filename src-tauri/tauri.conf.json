@@ -29,7 +29,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' asset: https://asset.localhost data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://localhost:* ws://localhost:*;"
     }
   },
   "bundle": {
