@@ -60,13 +60,6 @@ pub struct VectorStore {
 /// Embedding dimension (Gemini text-embedding-004)
 const EMBEDDING_DIM: usize = 768;
 
-/// Compute SHA256 hash of content for cache key
-pub fn compute_content_hash(text: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(text.as_bytes());
-    format!("{:x}", hasher.finalize())
-}
-
 impl VectorStore {
     /// Open or create a vector store at the given path
     pub fn open(db_path: &Path) -> Result<Self, VectorStoreError> {
@@ -117,6 +110,7 @@ impl VectorStore {
     }
 
     /// Compute SHA256 hash of content for cache key
+    #[deprecated(since = "1.0.0", note = "use compute_content_hash instead")]
     pub fn content_hash(text: &str) -> String {
         compute_content_hash(text)
     }
@@ -602,6 +596,13 @@ impl VectorStore {
 // Helper Functions
 // ============================================================================
 
+/// Compute SHA256 hash of content for cache key
+pub fn compute_content_hash(text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 /// Convert f32 vector to bytes for SQLite storage
 fn f32_vec_to_bytes(v: &[f32]) -> Vec<u8> {
     // Store embeddings in a fixed little-endian representation for portability.
@@ -801,6 +802,7 @@ mod tests {
 
     #[test]
     fn test_content_hash() {
+        // Original basic consistency
         let hash1 = compute_content_hash("hello world");
         let hash2 = compute_content_hash("hello world");
         let hash3 = compute_content_hash("different content");
@@ -808,6 +810,21 @@ mod tests {
         assert_eq!(hash1, hash2);
         assert_ne!(hash1, hash3);
         assert_eq!(hash1.len(), 64); // SHA256 hex = 64 chars
+
+        // Empty string
+        let empty_hash = compute_content_hash("");
+        assert_eq!(empty_hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+        // Unicode / Emoji
+        let unicode_hash = compute_content_hash("🦀 Rust");
+        let unicode_hash2 = compute_content_hash("🦀 Rust");
+        assert_eq!(unicode_hash, unicode_hash2);
+        assert_ne!(unicode_hash, empty_hash);
+
+        // Long string
+        let long_string = "a".repeat(10000);
+        let long_hash = compute_content_hash(&long_string);
+        assert_eq!(long_hash.len(), 64);
     }
 
     #[test]
@@ -925,28 +942,5 @@ mod tests {
 
         let result = store.upsert_chunk(&chunk);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_compute_content_hash_comprehensive() {
-        // Empty string
-        let empty_hash = compute_content_hash("");
-        assert_eq!(empty_hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-
-        // Unicode / Emoji
-        let unicode_hash = compute_content_hash("🦀 Rust");
-        let unicode_hash2 = compute_content_hash("🦀 Rust");
-        assert_eq!(unicode_hash, unicode_hash2);
-        assert_ne!(unicode_hash, empty_hash);
-
-        // Long string
-        let long_string = "a".repeat(10000);
-        let long_hash = compute_content_hash(&long_string);
-        assert_eq!(long_hash.len(), 64);
-
-        // Consistency check
-        let hash_a = compute_content_hash("test");
-        let hash_b = compute_content_hash("test");
-        assert_eq!(hash_a, hash_b);
     }
 }
