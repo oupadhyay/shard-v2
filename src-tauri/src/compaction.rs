@@ -324,6 +324,7 @@ pub async fn compact_history<R: Runtime>(
         reasoning: None,
         tool_calls: None,
         tool_call_id: None,
+        is_cron: None,
         images: None,
     };
     history.insert(0, summary_msg);
@@ -388,6 +389,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: None,
         }
     }

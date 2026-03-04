@@ -13,6 +13,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: None,
         }];
 
@@ -31,6 +32,7 @@ mod tests {
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
+                is_cron: None,
                 images: Some(vec![ImageAttachment {
                     base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".to_string(),
                     mime_type: "image/png".to_string(),
@@ -63,6 +65,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![
                 ImageAttachment {
                     base64: "img1".to_string(),
@@ -99,6 +102,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![ImageAttachment {
                 base64: "img_only".to_string(),
                 mime_type: "image/webp".to_string(),
@@ -136,6 +140,7 @@ mod tests {
                 thought_signature: None,
             }]),
             tool_call_id: None,
+            is_cron: None,
             images: None,
         }];
 
@@ -160,6 +165,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: Some("call_123".to_string()),
+            is_cron: None,
             images: None,
         }];
 
@@ -178,6 +184,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![ImageAttachment {
                 base64: "data".to_string(),
                 mime_type: "image/png".to_string(),
@@ -200,6 +207,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![]),
         }];
 
@@ -216,6 +224,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: None,
         }];
         assert!(!has_images(&messages_no_images));
@@ -226,6 +235,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![ImageAttachment {
                 base64: "data".to_string(),
                 mime_type: "image/png".to_string(),
@@ -240,6 +250,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![]),
         }];
         assert!(!has_images(&messages_with_empty_images));

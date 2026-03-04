@@ -98,6 +98,7 @@ mod tests {
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
+                is_cron: None,
                 images: None,
             },
             ChatMessage {
@@ -106,6 +107,7 @@ mod tests {
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
+                is_cron: None,
                 images: None,
             },
         ];
@@ -136,6 +138,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![ImageAttachment {
                 base64: "base64data".to_string(),
                 mime_type: "image/png".to_string(),
@@ -178,6 +181,7 @@ mod tests {
                 thought_signature: Some("sig123".to_string()),
             }]),
             tool_call_id: None,
+            is_cron: None,
             images: None,
         }];
 
@@ -223,6 +227,7 @@ mod tests {
                     thought_signature: None,
                 }]),
                 tool_call_id: None,
+                is_cron: None,
                 images: None,
             },
             ChatMessage {
@@ -231,6 +236,7 @@ mod tests {
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: Some("call_1".to_string()),
+                is_cron: None,
                 images: None,
             },
         ];
@@ -260,6 +266,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: Some("missing_call_id".to_string()),
+            is_cron: None,
             images: None,
         }];
 
@@ -291,6 +298,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: None,
         }];
 
@@ -312,6 +320,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: None,
         }];
 

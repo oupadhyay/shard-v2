@@ -9,6 +9,7 @@ mod tests {
             content: Some("Hello".to_string()),
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: None,
             reasoning: None,
         };
@@ -24,6 +25,7 @@ mod tests {
             content: Some("Look at this".to_string()),
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             reasoning: None,
             images: Some(vec![ImageAttachment {
                 base64: "base64data".to_string(),
@@ -157,6 +159,7 @@ mod tests {
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
+                is_cron: None,
                 images: None,
             },
             ChatMessage {
@@ -165,6 +168,7 @@ mod tests {
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
+                is_cron: None,
                 images: None,
             },
         ];

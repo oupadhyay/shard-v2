@@ -324,6 +324,7 @@ impl Agent {
                                 reasoning: None,
                                 tool_calls: None,
                                 tool_call_id: None,
+                                is_cron: None,
                                 images: None,
                             }
                         }),
@@ -434,6 +435,7 @@ impl Agent {
                     reasoning: None,
                     tool_calls: None,
                     tool_call_id: None,
+                    is_cron: None,
                     images: None,
                 };
                 history.push(msg.clone());
@@ -675,6 +677,7 @@ impl Agent {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: uploaded_images,
         };
         history.push(msg.clone());
@@ -926,6 +929,7 @@ impl Agent {
                     reasoning: None,
                     tool_calls: None,
                     tool_call_id: None,
+                    is_cron: None,
                     images: None,
                 };
                 history.push(msg.clone());
@@ -1656,6 +1660,7 @@ impl Agent {
                         .collect(),
                 ),
                 tool_call_id: None,
+                is_cron: None,
                 images: None,
             };
             history.push(msg.clone());
@@ -1691,6 +1696,7 @@ impl Agent {
                     reasoning: None,
                     tool_calls: None,
                     tool_call_id: Some(format!("call_{}_{}", fc.function_call.name, idx)),
+                    is_cron: None,
                     images: None,
                 };
                 history.push(msg.clone());
@@ -1712,6 +1718,7 @@ impl Agent {
                 },
                 tool_calls: None,
                 tool_call_id: None,
+                is_cron: None,
                 images: None,
             };
             history.push(msg.clone());
@@ -2129,6 +2136,7 @@ impl Agent {
                     Some(tool_calls_buffer.clone())
                 },
                 tool_call_id: None,
+                is_cron: None,
                 images: None,
             };
             history.push(msg.clone());
@@ -2173,6 +2181,7 @@ impl Agent {
                         reasoning: None,
                         tool_calls: None,
                         tool_call_id: Some(tool_call.id.clone()),
+                        is_cron: None,
                         images: None,
                     };
                     history.push(msg.clone());
