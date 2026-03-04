@@ -12,7 +12,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
 import "katex/dist/katex.min.css";
 
-import type { AttachedImage, ChatMessage, AppConfig, OcrResult } from "./types";
+import type { AttachedImage, ChatMessage, AppConfig, OcrResult, ModelsResponse } from "./types";
 import { ChatState } from "./state";
 import { EVENTS } from "./events";
 import {
@@ -36,6 +36,7 @@ import {
   RETRY_ICON,
   SETTINGS_MODAL_HTML,
   initSettingsTabs,
+  populateModelDropdown,
 } from "./ui";
 
 // ── DOM References ────────────────────────────────────────────────────────────
@@ -297,19 +298,7 @@ function showImagePreview(imageData: AttachedImage) {
 
 // ── Settings Modal ────────────────────────────────────────────────────────────
 
-interface ModelInfo {
-  id: string;
-  display_name: string;
-  provider: "gemini" | "openrouter" | "groq" | "cerebras";
-  category: "chat" | "vision" | "background";
-  supports_tools: boolean;
-}
 
-interface ModelsResponse {
-  chat_models: ModelInfo[];
-  vision_models: ModelInfo[];
-  background_models: ModelInfo[];
-}
 
 settingsModal.innerHTML = DOMPurify.sanitize(SETTINGS_MODAL_HTML);
 initSettingsTabs(settingsModal);
@@ -358,49 +347,7 @@ const checkProviderConflict = () => {
   }
 };
 
-function populateModelDropdown(
-  selectEl: HTMLSelectElement,
-  models: ModelInfo[],
-  selectedValue: string | null
-) {
-  selectEl.innerHTML = "";
-  const providerDisplayNames: Record<string, string> = {
-    gemini: "Gemini AI",
-    openrouter: "OpenRouter",
-    groq: "Groq",
-    cerebras: "Cerebras",
-  };
 
-  const groups: Record<string, ModelInfo[]> = {};
-  for (const model of models) {
-    const providerKey = model.provider;
-    if (!groups[providerKey]) groups[providerKey] = [];
-    groups[providerKey].push(model);
-  }
-
-  const providerOrder = ["gemini", "openrouter", "groq", "cerebras"];
-  for (const provider of providerOrder) {
-    const modelsInGroup = groups[provider];
-    if (!modelsInGroup || modelsInGroup.length === 0) continue;
-
-    const optgroup = document.createElement("optgroup");
-    optgroup.label = providerDisplayNames[provider] || provider;
-
-    for (const model of modelsInGroup) {
-      const option = document.createElement("option");
-      option.value = model.id;
-      option.textContent = model.display_name;
-      option.dataset.provider = model.provider;
-      optgroup.appendChild(option);
-    }
-    selectEl.appendChild(optgroup);
-  }
-
-  if (selectedValue) {
-    const exists = Array.from(selectEl.options).some(opt => opt.value === selectedValue);
-    if (exists) selectEl.value = selectedValue;
-  }
-}
 
 modelInput.addEventListener("change", () => {
   updateToolAvailability();
