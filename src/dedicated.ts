@@ -25,7 +25,7 @@ import {
   updateThinkingElement,
   createToolCallElement,
   updateToolResult,
-  addMessage as addMessageToChat,
+  addMessage,
   getOrCreateWebSearchContainer,
   resetWebSearchContainer,
   isWebSearchTool,
@@ -108,14 +108,6 @@ document.addEventListener("click", (e) => {
 
 // ── Chat Helpers ──────────────────────────────────────────────────────────────
 
-function addMessage(
-  role: "user" | "assistant" | "cron",
-  content: string,
-  images?: { base64: string; mimeType: string }[],
-  target: HTMLElement | DocumentFragment = chatArea,
-) {
-  addMessageToChat(target, role, content, images);
-}
 
 // ── Input Handling ────────────────────────────────────────────────────────────
 
@@ -132,7 +124,7 @@ async function handleInput(skipUi = false) {
     state.lastAttachedImages = [...state.attachedImages];
     inputField.value = "";
     inputField.style.height = "auto";
-    addMessage("user", text, currentImages);
+    addMessage(chatArea, "user", text, currentImages);
     updateNewChatButtonState();
     state.attachedImages = [];
     const container = document.getElementById("dedicated-image-preview-container");
@@ -680,7 +672,7 @@ async function loadChatHistory() {
       const displayRole = msg.is_cron ? "cron" : msg.role;
       if (displayRole === "user" || displayRole === "cron") {
         resetWebSearchContainer();
-        addMessage(displayRole as "user" | "assistant" | "cron", msg.content || "", msg.images, fragment);
+        addMessage(fragment, displayRole as "user" | "assistant" | "cron", msg.content || "", msg.images);
       } else if (displayRole === "assistant") {
         if (msg.reasoning) fragment.appendChild(createThinkingElement(msg.reasoning, true));
         if (msg.tool_calls?.length) {
@@ -701,7 +693,7 @@ async function loadChatHistory() {
             }
           });
         }
-        if (msg.content) addMessage("assistant", msg.content, msg.images, fragment);
+        if (msg.content) addMessage(fragment, "assistant", msg.content, msg.images);
       } else if (msg.role === "tool" && msg.tool_call_id) {
         const matched = Array.from(fragment.querySelectorAll(".tool-output"))
           .find((el) => el.getAttribute("data-tool-id") === msg.tool_call_id);
