@@ -24,6 +24,30 @@ mod tests {
     }
 
     #[test]
+    fn test_to_api_messages_ignores_extra_fields() {
+        let messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: Some("Hello".to_string()),
+            reasoning: Some("Thinking...".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            images: Some(vec![ImageAttachment {
+                base64: "data".to_string(),
+                mime_type: "image/png".to_string(),
+                file_uri: None,
+            }]),
+            is_cron: Some(true),
+        }];
+
+        let result = to_api_messages(&messages);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, "user");
+        assert_eq!(result[0].content, Some("Hello".to_string()));
+        assert!(result[0].tool_calls.is_none());
+        assert!(result[0].tool_call_id.is_none());
+    }
+
+    #[test]
     fn test_to_api_messages_with_tools() {
         let messages = vec![
             ChatMessage {
