@@ -1783,19 +1783,11 @@ impl Agent {
         }];
         messages_with_system.extend(history.clone());
 
-        let api_messages: Vec<ApiChatMessage> = messages_with_system
-            .iter()
-            .map(|msg| ApiChatMessage {
-                role: msg.role.clone(),
-                content: msg.content.clone(),
-                tool_calls: msg.tool_calls.clone(),
-                tool_call_id: msg.tool_call_id.clone(),
-            })
-            .collect();
+        let multimodal_messages = to_multimodal_messages(&messages_with_system);
 
         let make_request = |tools_opt: Option<Vec<ToolDefinition>>| {
             let model = model.clone();
-            let messages = api_messages.clone();
+            let messages = multimodal_messages.clone();
             let url = url.clone();
             let api_key = api_key.clone();
             let client = self.http_client.clone();
@@ -1898,7 +1890,7 @@ impl Agent {
 
                     let fallback_body = ChatCompletionRequest {
                         model: fallback_model,
-                        messages: api_messages.clone(),
+                        messages: multimodal_messages.clone(),
                         tools: current_tools.clone(),
                         tool_choice: if current_tools.is_some() {
                             Some("auto".to_string())
