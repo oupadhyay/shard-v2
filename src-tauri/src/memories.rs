@@ -342,6 +342,10 @@ pub fn read_topic_summary<R: Runtime>(
     app_handle: &AppHandle<R>,
     topic: &str,
 ) -> Result<String, String> {
+    if !crate::skills::is_safe_filename(topic) {
+        return Err("Invalid topic name: path traversal detected".to_string());
+    }
+
     let topics_dir = get_topics_dir(app_handle)?;
     // Sanitize filename
     let filename = format!(
@@ -365,6 +369,10 @@ pub fn update_topic_summary<R: Runtime>(
     topic: &str,
     content: &str,
 ) -> Result<(), String> {
+    if !crate::skills::is_safe_filename(topic) {
+        return Err("Invalid topic name: path traversal detected".to_string());
+    }
+
     let topics_dir = get_topics_dir(app_handle)?;
     // Sanitize filename
     let filename = format!(
@@ -495,6 +503,10 @@ pub fn update_insight<R: Runtime>(
     title: &str,
     content: &str,
 ) -> Result<(), String> {
+    if !crate::skills::is_safe_filename(title) {
+        return Err("Invalid insight title: path traversal detected".to_string());
+    }
+
     let insights_dir = get_insights_dir(app_handle)?;
     let filename = format!("{}.md", sanitize_filename(title));
     let path = insights_dir.join(&filename);
@@ -527,6 +539,10 @@ pub fn update_insight<R: Runtime>(
 
 /// Delete an insight file and remove from index
 pub fn delete_insight<R: Runtime>(app_handle: &AppHandle<R>, title: &str) -> Result<bool, String> {
+    if !crate::skills::is_safe_filename(title) {
+        return Err("Invalid insight title: path traversal detected".to_string());
+    }
+
     let insights_dir = get_insights_dir(app_handle)?;
     let filename = format!("{}.md", sanitize_filename(title));
     let path = insights_dir.join(&filename);
