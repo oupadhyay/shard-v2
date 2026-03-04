@@ -73,6 +73,7 @@ export interface ModelInfo {
   provider: "gemini" | "openrouter" | "groq" | "cerebras";
   category: "chat" | "vision" | "background";
   supports_tools: boolean;
+  supports_vision: boolean;
 }
 
 export interface ModelsResponse {
