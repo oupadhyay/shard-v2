@@ -759,7 +759,7 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
                           AND (
                             SELECT COUNT(*) FROM messages m
                             WHERE m.session_id = s.id
-                              AND json_extract(m.content, '$.role') = 'user'
+                              AND m.role = 'user'
                           ) <= 1
                     )",
                     [],
@@ -773,7 +773,7 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
                           AND (
                             SELECT COUNT(*) FROM messages m
                             WHERE m.session_id = s.id
-                              AND json_extract(m.content, '$.role') = 'user'
+                              AND m.role = 'user'
                           ) <= 1
                     )",
                     [],
