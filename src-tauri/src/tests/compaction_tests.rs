@@ -16,8 +16,8 @@ fn make_message(role: &str, content_len: usize) -> ChatMessage {
         reasoning: None,
         tool_calls: None,
         tool_call_id: None,
-        images: None,
         is_cron: None,
+        images: None,
     }
 }
 

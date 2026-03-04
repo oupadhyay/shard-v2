@@ -51,6 +51,8 @@ pub struct ChatMessage {
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_cron: Option<bool>,
     /// Images attached to the message. Supports backward-compat read from old "image" field.
     #[serde(
         default,
@@ -59,8 +61,6 @@ pub struct ChatMessage {
         skip_serializing_if = "Option::is_none"
     )]
     pub images: Option<Vec<ImageAttachment>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_cron: Option<bool>,
 }
 
 /// Wrapper for saving chat history to disk while retaining the session identity
@@ -172,7 +172,7 @@ impl RetryReason {
 #[derive(Serialize, Debug)]
 pub struct ChatCompletionRequest {
     pub model: String,
-    pub messages: Vec<ApiChatMessage>,
+    pub messages: Vec<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]

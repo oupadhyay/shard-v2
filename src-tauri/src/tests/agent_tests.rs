@@ -9,9 +9,9 @@ mod tests {
             content: Some("Hello".to_string()),
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: None,
             reasoning: None,
-            is_cron: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("Hello"));
@@ -25,13 +25,13 @@ mod tests {
             content: Some("Look at this".to_string()),
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             reasoning: None,
             images: Some(vec![ImageAttachment {
                 base64: "base64data".to_string(),
                 mime_type: "image/png".to_string(),
                 file_uri: Some("https://example.com/image.png".to_string()),
             }]),
-            is_cron: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"images\":[{"));
@@ -159,8 +159,8 @@ mod tests {
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                images: None,
                 is_cron: None,
+                images: None,
             },
             ChatMessage {
                 role: "assistant".to_string(),
@@ -168,8 +168,8 @@ mod tests {
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                images: None,
                 is_cron: None,
+                images: None,
             },
         ];
 
