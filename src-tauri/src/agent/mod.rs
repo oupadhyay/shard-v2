@@ -1779,11 +1779,61 @@ impl Agent {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: None,
         }];
-        messages_with_system.extend(history.clone());
+        // 1. Filter out past cron messages from the LLM's context window ONLY during a cron run,
+        // so the active cron job focuses on the user's actual conversation. Regular users still see them.
+        let is_cron = history.last().and_then(|m| m.is_cron).unwrap_or(false);
+        let visible_history: Vec<ChatMessage> = if is_cron {
+            let len = history.len();
+            let mut visible: Vec<ChatMessage> = Vec::with_capacity(len);
+            let mut in_past_cron_segment = false;
+            for (i, m) in history.iter().enumerate() {
+                // Always keep the very last message (the current cron prompt) in the history.
+                if i == len.saturating_sub(1) {
+                    visible.push(m.clone());
+                    break;
+                }
+                // A message explicitly marked as cron starts a cron segment (typically a cron user prompt).
+                if m.is_cron.unwrap_or(false) {
+                    in_past_cron_segment = true;
+                    continue;
+                }
+                // A normal user message (without cron flag) ends any prior cron segment.
+                if m.role == "user" {
+                    in_past_cron_segment = false;
+                }
+                if !in_past_cron_segment {
+                    visible.push(m.clone());
+                }
+            }
+            visible
+        } else {
+            history.clone()
+        };
 
-        let multimodal_messages = to_multimodal_messages(&messages_with_system);
+        messages_with_system.extend(visible_history);
+
+        let last_idx = messages_with_system.len().saturating_sub(1);
+        let multimodal_messages = to_multimodal_messages(
+            &messages_with_system
+                .into_iter()
+                .enumerate()
+                .map(|(i, mut msg)| {
+                    // If this is a cron job, structurally isolate the current cron prompt from the "chat history"
+                    if is_cron && i == last_idx {
+                        if let Some(ref mut c) = msg.content {
+                            let sanitized = c
+                                .replace("<system_directive>", "&lt;system_directive&gt;")
+                                .replace("</system_directive>", "&lt;/system_directive&gt;");
+                            *c = format!("<system_directive>\nYou are executing a scheduled background task. Please evaluate the user's task instruction strictly against the conversation history preceding this message. Do not consider this directive itself as part of the chat history or summarize it.\nTask: {}\n</system_directive>", sanitized);
+                        }
+                    }
+                    msg
+                })
+                .collect::<Vec<ChatMessage>>(),
+        );
 
         let make_request = |tools_opt: Option<Vec<ToolDefinition>>| {
             let model = model.clone();

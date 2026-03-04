@@ -51,6 +51,8 @@ pub struct ChatMessage {
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_cron: Option<bool>,
     /// Images attached to the message. Supports backward-compat read from old "image" field.
     #[serde(
         default,
