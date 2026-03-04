@@ -35,6 +35,7 @@ import {
   SESSIONS_MODAL_HTML,
   initSettingsTabs,
   resizeImage,
+  formatSessionDate,
 } from "./ui";
 
 // DOM Elements
@@ -1658,7 +1659,7 @@ sessionsBtn.addEventListener("click", async () => {
       metaEl.className = "session-item-meta";
 
       const dateSpan = document.createElement("span");
-      dateSpan.textContent = new Date(s.date).toLocaleDateString();
+      dateSpan.textContent = formatSessionDate(s.date);
 
       const summarySpan = document.createElement("span");
       summarySpan.className = "session-item-summary";
