@@ -810,7 +810,7 @@ listen<string>(EVENTS.AGENT_RETRY, (event) => {
 });
 
 // Listen for background cron jobs starting
-listen<string>("agent-cron-started", (event) => {
+listen<string>(EVENTS.AGENT_CRON_STARTED, (event) => {
   const prompt = DOMPurify.sanitize(event.payload);
   resetWebSearchContainer();
   addMessage("cron", prompt, undefined);
@@ -1666,7 +1666,7 @@ sessionsBtn.addEventListener("click", async () => {
 });
 
 // Refresh sessions list if modal is open and we receive a backend update
-listen("sessions-updated", () => {
+listen(EVENTS.SESSIONS_UPDATED, () => {
   if (!sessionsModal.classList.contains("hidden")) {
     sessionsBtn.click();
   }

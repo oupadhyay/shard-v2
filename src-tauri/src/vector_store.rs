@@ -133,7 +133,7 @@ impl VectorStore {
     }
 
     /// Compute SHA256 hash of content for cache key
-    #[deprecated(since = "1.0.0", note = "use compute_content_hash instead")]
+    #[deprecated(since = "0.2.0", note = "use compute_content_hash instead")]
     pub fn content_hash(text: &str) -> String {
         compute_content_hash(text)
     }
