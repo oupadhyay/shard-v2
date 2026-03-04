@@ -731,9 +731,12 @@ async function loadChatHistory() {
 
           // Try to match by ID first if available
           if (msg.tool_call_id) {
-            matchingTool = toolMessages
-              .reverse()
-              .find((el) => el.getAttribute("data-tool-id") === msg.tool_call_id);
+            for (let i = toolMessages.length - 1; i >= 0; i--) {
+              if (toolMessages[i].getAttribute("data-tool-id") === msg.tool_call_id) {
+                matchingTool = toolMessages[i];
+                break;
+              }
+            }
           }
 
           // Fallback to the last one if no ID match
@@ -1046,14 +1049,16 @@ listen<string>(EVENTS.AGENT_TOOL_RESULT, (event) => {
 
     // 2. Fallback to finding the last search query without a result
     if (!matchingQuery) {
-      const webSearchQueries = Array.from(chatArea.querySelectorAll(".web-search-query"));
-      matchingQuery = webSearchQueries
-        .reverse()
-        .find((el) => {
-          const resultSection = el.querySelector('.tool-result') as HTMLElement;
-          // Find the one that doesn't have a result yet
-          return resultSection && resultSection.style.display === 'none';
-        }) as HTMLElement || null;
+      const webSearchQueries = chatArea.querySelectorAll(".web-search-query");
+      for (let i = webSearchQueries.length - 1; i >= 0; i--) {
+        const el = webSearchQueries[i] as HTMLElement;
+        const resultSection = el.querySelector('.tool-result') as HTMLElement;
+        // Find the one that doesn't have a result yet
+        if (resultSection && resultSection.style.display === 'none') {
+          matchingQuery = el;
+          break;
+        }
+      }
     }
 
     if (matchingQuery) {
@@ -1080,10 +1085,14 @@ listen<string>(EVENTS.AGENT_TOOL_RESULT, (event) => {
     }
   } else {
     // Find the most recent tool-output with matching name
-    const toolMessages = Array.from(chatArea.querySelectorAll(".tool-output"));
-    const matchingTool = toolMessages
-      .reverse()
-      .find((el) => el.getAttribute("data-tool-name") === name);
+    const toolMessages = chatArea.querySelectorAll(".tool-output");
+    let matchingTool: Element | undefined;
+    for (let i = toolMessages.length - 1; i >= 0; i--) {
+      if (toolMessages[i].getAttribute("data-tool-name") === name) {
+        matchingTool = toolMessages[i];
+        break;
+      }
+    }
 
     if (matchingTool) {
       updateToolResult(
