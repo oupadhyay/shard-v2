@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT NOT NULL,
     summary TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    active_skills TEXT DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS messages (

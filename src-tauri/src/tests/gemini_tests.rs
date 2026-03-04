@@ -99,6 +99,7 @@ mod tests {
                 tool_calls: None,
                 tool_call_id: None,
                 images: None,
+                is_cron: None,
             },
             ChatMessage {
                 role: "assistant".to_string(),
@@ -107,6 +108,7 @@ mod tests {
                 tool_calls: None,
                 tool_call_id: None,
                 images: None,
+                is_cron: None,
             },
         ];
 
@@ -141,6 +143,7 @@ mod tests {
                 mime_type: "image/png".to_string(),
                 file_uri: Some("https://example.com/image.png".to_string()),
             }]),
+            is_cron: None,
         }];
 
         let result = construct_gemini_messages(&history);
@@ -179,6 +182,7 @@ mod tests {
             }]),
             tool_call_id: None,
             images: None,
+            is_cron: None,
         }];
 
         let result = construct_gemini_messages(&history);
@@ -224,6 +228,7 @@ mod tests {
                 }]),
                 tool_call_id: None,
                 images: None,
+                is_cron: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
@@ -232,6 +237,7 @@ mod tests {
                 tool_calls: None,
                 tool_call_id: Some("call_1".to_string()),
                 images: None,
+                is_cron: None,
             },
         ];
 
@@ -261,6 +267,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: Some("missing_call_id".to_string()),
             images: None,
+            is_cron: None,
         }];
 
         let result = construct_gemini_messages(&history);
@@ -292,6 +299,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             images: None,
+            is_cron: None,
         }];
 
         let result = construct_gemini_messages(&history);
@@ -313,6 +321,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             images: None,
+            is_cron: None,
         }];
 
         let result = construct_gemini_messages(&history);

@@ -26,6 +26,7 @@ pub mod sessions;
 pub mod skills;
 mod tools;
 pub mod vector_store;
+mod webhook;
 
 #[cfg(test)]
 mod tests;
@@ -227,6 +228,7 @@ async fn chat(
             images_base64,
             images_mime_types,
             &config,
+            false,
         )
         .await
 }
@@ -237,7 +239,10 @@ async fn save_and_clear_chat(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let config = crate::config::load_config(&app_handle).map_err(|e| e.to_string())?;
-    state.agent.save_and_clear_history(config.gemini_api_key).await;
+    state
+        .agent
+        .save_and_clear_history(config.gemini_api_key)
+        .await;
     Ok(())
 }
 
@@ -287,7 +292,10 @@ async fn load_session(
     state: tauri::State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
-    state.agent.load_session_from_db(&app_handle, &session_id).await
+    state
+        .agent
+        .load_session_from_db(&app_handle, &session_id)
+        .await
 }
 
 /// Retry the last response with a hint about KaTeX rendering errors
@@ -316,6 +324,121 @@ async fn cancel_current_stream() -> Result<(), String> {
 async fn hide_window(app_handle: AppHandle) -> Result<(), String> {
     if let Some(window) = app_handle.get_webview_window("main") {
         window.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Open the dedicated (breakout) chat window.
+/// If it already exists, bring it to focus.
+/// Hides the ambient panel — the frontend handles the fade-out transition
+/// before invoking this command.
+#[tauri::command]
+async fn open_dedicated_window(app_handle: AppHandle) -> Result<(), String> {
+    // If the dedicated window already exists, just focus it.
+    if let Some(win) = app_handle.get_webview_window("dedicated") {
+        win.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    // Hide the ambient panel (frontend has already faded it out).
+    if let Some(main_win) = app_handle.get_webview_window("main") {
+        main_win.hide().map_err(|e| e.to_string())?;
+    }
+
+    // Create the dedicated window. It loads the same Vite dev server / dist
+    // but at `dedicated.html`, which uses a separate entry point with the
+    // full session-sidebar layout.
+    tauri::WebviewWindowBuilder::new(
+        &app_handle,
+        "dedicated",
+        tauri::WebviewUrl::App("dedicated.html".into()),
+    )
+    .title("Shard")
+    .inner_size(900.0, 660.0)
+    .min_inner_size(640.0, 480.0)
+    .resizable(true)
+    .decorations(false) // Custom titlebar rendered in HTML
+    .transparent(true)
+    .shadow(true)
+    .center()
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Delete a session and all its messages. If the session is currently active,
+/// rotates to a new session so the agent isn't left in a ghost state.
+#[tauri::command]
+async fn delete_session(
+    session_id: String,
+    state: tauri::State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    // Rotate agent state if deleting the active session
+    {
+        let current = state.agent.session_id.lock().await.clone();
+        if current == session_id {
+            drop(current);
+            let new_id = state.agent.reset_for_delete().await;
+            // Create the new session row so FK constraints pass for future messages
+            if let Ok(store) = crate::memories::get_vector_store(&app_handle) {
+                let now = chrono::Utc::now().to_rfc3339();
+                let session = crate::db::sessions::SessionRow {
+                    id: new_id,
+                    title: "Active Session".to_string(),
+                    summary: None,
+                    created_at: now.clone(),
+                    updated_at: now,
+                    active_skills: Some("[]".to_string()),
+                };
+                let _ = crate::db::sessions::insert_session(&store, &session);
+            }
+        }
+    }
+
+    // Delete messages then session from DB using a blocking task to avoid stalling the async runtime.
+    let store = crate::memories::get_vector_store(&app_handle)
+        .map_err(|e| format!("Failed to access database: {}", e))?;
+
+    tokio::task::spawn_blocking(move || {
+        store.with_transaction(|_store, conn| {
+            conn.execute(
+                "DELETE FROM messages WHERE session_id = ?",
+                rusqlite::params![&session_id],
+            )?;
+            conn.execute(
+                "DELETE FROM sessions WHERE id = ?",
+                rusqlite::params![&session_id],
+            )?;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+    .map_err(|e| format!("Database error: {}", e))?;
+
+    Ok(())
+}
+
+/// Return the session ID currently held by the agent (used by frontend to detect active session).
+#[tauri::command]
+async fn get_current_session_id(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    Ok(state.agent.session_id.lock().await.clone())
+}
+
+#[tauri::command]
+async fn close_dedicated_window(app_handle: AppHandle) -> Result<(), String> {
+    if let Some(win) = app_handle.get_webview_window("dedicated") {
+        win.close().map_err(|e| e.to_string())?;
+    }
+    // Restore the ambient panel and trigger its fade-in via the start-show event.
+    if let Some(main_win) = app_handle.get_webview_window("main") {
+        main_win.show().map_err(|e| e.to_string())?;
+        main_win.set_focus().map_err(|e| e.to_string())?;
+        // Pass `true` as the payload to indicate this is a resume/return,
+        // so the frontend knows to suppress new screen suggestions.
+        main_win.emit("start-show", true).ok();
     }
     Ok(())
 }
@@ -439,6 +562,11 @@ pub fn run() {
             // Start background jobs
             background::start_background_jobs(app.handle().clone());
 
+            let webhook_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                crate::webhook::start_webhook_server(webhook_handle).await;
+            });
+
             if let Ok(store) = memories::get_vector_store(&app.handle().clone()) {
                 if let Err(e) = crate::db::sessions::run_migration(&app.handle().clone(), &store) {
                     log::warn!("[Startup] Session migration failed: {}", e);
@@ -501,21 +629,50 @@ pub fn run() {
                 use tauri_nspanel::WebviewWindowExt;
                 let window = app.get_webview_window("main").unwrap();
 
-                // Position window at bottom-left
+                // Position window at bottom-left, flush with screen edges
                 if let Some(monitor) = window.current_monitor().ok().flatten() {
+                    let scale = monitor.scale_factor();
                     let screen_size = monitor.size();
-                    let window_size = window.outer_size().unwrap();
 
-                    // Position: 20px from left, 20px from bottom
-                    let x = 20;
-                    let y = screen_size.height as i32 - window_size.height as i32 - 20;
+                    // Subtract macOS system menu bar (35pt physical) and set size
+                    let menu_bar_px = (35.0 * scale) as u32;
+                    let target_h = screen_size.height.saturating_sub(menu_bar_px);
 
                     window
-                        .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+                        .set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                            width: (350.0 * scale) as u32,
+                            height: target_h,
+                        }))
+                        .ok();
+
+                    // Calculate Y so the bottom edge sits exactly on the bottom physical edge
+                    // X = 0 (flush left)
+                    // Y = monitor_top + (monitor_height - window_height)
+                    let target_y = screen_size.height.saturating_sub(target_h);
+
+                    window
+                        .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                            x: monitor.position().x,
+                            y: monitor.position().y + target_y as i32,
+                        }))
                         .ok();
                 }
 
-                let _panel = window.to_panel().unwrap();
+                // Prevent the app icon from showing on the dock and stealing focus
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+                let panel = window.to_panel().unwrap();
+
+                // Ensure the panel acts as an auxiliary floating window that tiling managers ignore
+                #[allow(deprecated)]
+                {
+                    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                    panel.set_collection_behaviour(
+                        NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary,
+                    );
+                }
             }
 
             // Register Global Shortcuts with handlers
@@ -530,11 +687,24 @@ pub fn run() {
                 .global_shortcut()
                 .on_shortcut(ctrl_space, move |_app, _shortcut, event| {
                     if event.state == tauri_gs::ShortcutState::Pressed {
+                        // If the dedicated window is open, toggle IT instead of ambient
+                        if let Some(dedicated) =
+                            app_handle_for_space.get_webview_window("dedicated")
+                        {
+                            if dedicated.is_visible().unwrap_or(false) {
+                                dedicated.hide().ok();
+                            } else {
+                                dedicated.show().ok();
+                                dedicated.set_focus().ok();
+                            }
+                            return;
+                        }
+
+                        // No dedicated window — toggle the ambient panel
                         if window_for_space.is_visible().unwrap_or(false) {
                             // Trigger fade out in frontend
                             window_for_space.emit("start-hide", ()).ok();
                         } else {
-                            // Show window immediately
                             window_for_space.show().ok();
                             window_for_space.set_focus().ok();
                             // Trigger fade in
@@ -609,6 +779,10 @@ pub fn run() {
             cancel_current_stream,
             rewind_history,
             hide_window,
+            open_dedicated_window,
+            close_dedicated_window,
+            delete_session,
+            get_current_session_id,
             force_cleanup,
             force_summary,
             rebuild_topic_index,

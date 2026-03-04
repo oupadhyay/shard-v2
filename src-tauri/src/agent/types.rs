@@ -59,6 +59,8 @@ pub struct ChatMessage {
         skip_serializing_if = "Option::is_none"
     )]
     pub images: Option<Vec<ImageAttachment>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_cron: Option<bool>,
 }
 
 /// Wrapper for saving chat history to disk while retaining the session identity
@@ -152,10 +154,10 @@ impl RetryReason {
                 format!(
                     "[RETRY HINT] Your previous response had LaTeX rendering errors:\n{}\n\n\
                     Please rewrite using correct LaTeX syntax:\n\
-                    - Use single $ for inline math: $x^2$\n\
-                    - Use $$ on separate lines for display math (not inline)\n\
+                    - Use single \\$ for inline math: \\$x^2\\$\n\
+                    - Use \\$\\$ on separate lines for display math (not inline)\n\
                     - Ensure all delimiters are properly paired\n\
-                    - Avoid nested $ symbols like $a$b$ - use $a$ $b$ instead",
+                    - Avoid nested \\$ symbols like \\$a\\$b\\$ - use \\$a\\$ \\$b\\$ instead",
                     errors.join("\n")
                 )
             }

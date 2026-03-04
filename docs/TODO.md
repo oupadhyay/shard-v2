@@ -2,64 +2,18 @@
 
 ## P0: Code Review Issues (Feb 2026)
 
-### Medium
-
 - [ ] **Manual config merging** - (Deferred) Using `#[serde(default)]` patterns, full refactor to `figment` deemed too large for this pass.
-- [x] **Global frontend state** ([main.ts:42-48](../src/main.ts)) - Encapsulated in `ChatState` class (`src/state.ts`)
 - [ ] **Monolithic handleInput** ([main.ts:69-224](../src/main.ts)) - Split into `preparePayload`, `sendChatMessage`, etc.
-
----
 
 ## P0: OpenClaw Gaps
 
 - [x] **Unified Session Model** - Isolate chat contexts instead of a single global append-only history.
-- [x] **Skills Engine & Pi Runtime** - Dynamic tools and prompts loaded from `~/Library/Application Support/dev.ojasw.shard/skills/`.
-- [ ] **Automation (Cronjobs, Webhooks, Gmail)** - Background tasks and event-driven agent runs.
+- [x] **Skills Engine & Pi Runtime** - Expose skills as discoverable "tools" (e.g., `list_skills`, `load_skill`) so the agent can temporarily assume personas or load instructions on-demand, rather than forcing them into the global system prompt.
+- [x] **Automation (Cronjobs, Webhooks, Gmail)** - Background tasks and event-driven agent runs.
 
----
+## P0: Password Prompts
 
-## P0: Clawdbot Memory Learnings
-
-### 1. Compaction + Pre-Compaction Memory Flush
-
-- [x] Add `context_size` config per model (e.g., 131K for GPT-OSS, 1M for all Gemini models)
-- [x] Track token usage in conversation history
-- [x] Trigger compaction when approaching ~50% of context window
-- [x] Pre-compaction flush: silent LLM turn to save important facts to `memory/YYYY-MM-DD.md` before summarization
-- [x] Store compaction summaries in session transcripts (JSONL)
-
-### 2. Chunking Pipeline for Topics/Insights
-
-- [x] Chunk content into ~400 tokens with 80-token overlap
-- [x] Store chunks with line range metadata: `{chunk_id, text, start_line, end_line, embedding}`
-- [x] Update `find_relevant_context()` to search chunks instead of whole documents
-- [x] Return specific snippets instead of entire topic files
-
-### 3. sqlite-vec for Embedding Storage
-
-- [x] Replace JSON index files with SQLite database (`memories.sqlite`)
-- [x] Use `sqlite-vec` extension for vector similarity search
-- [x] Use FTS5 for BM25 keyword matching (hybrid search in one DB)
-- [x] Add `embedding_cache` table to avoid re-embedding unchanged content
-
-### 4. Session Memory Hooks + Descriptive Slugs
-
-- [x] On conversation clear/new session: extract last N messages
-- [x] Generate descriptive slug via LLM (e.g., "api-design-discussion")
-- [x] Save to `memory/YYYY-MM-DD-\<slug\>.md` for searchable session transcripts
-
-### 5. Explicit Memory Search Tools
-
-- [x] Add `memory_search` tool: semantic search across all memory tiers
-  - Params: `query`, `max_results`, `min_score`
-  - Returns: `{path, start_line, end_line, score, snippet, source}`
-- [x] Add `memory_get` tool: read specific lines from a memory file
-  - Params: `path`, `from`, `lines`
-- [x] Keep existing silent RAG injection for baseline context
-
-## P0: Read Page via Browser Tool
-
-- [x] Add `open_url` tool to allow Shard to read any URL (HTML/browser/DOM?)
+- [ ] Still requires 2 passwords prompts (there is always allow but 2 shouldn't be necessary?)
 
 ## P1: Better Screen Context Experience
 
@@ -101,6 +55,7 @@
   - Extract core logic: `agent/core.rs`
   - Consider separating retry logic, tool execution, and streaming handling
 - [ ] Migrate from `screenshots` crate to `xcap` for screen capture (P2)
+- [ ] Update models supported (especially with OpenRouter free model router)
 
 ## P2: Multi-Provider Support
 
@@ -112,6 +67,26 @@
 - [ ] Set up GitHub Actions for cross-platform builds
   - macOS: Uses existing `build-macos.sh` script
   - Auto-create releases with `.dmg`, `.msi`, `.AppImage`
+
+## P2: Future Horizons (Documentation & Stubs)
+
+### 1. Full Browser Control
+
+- [ ] Investigate Playwright/Puppeteer Rust bindings for headful browsing.
+- [ ] Implement a real DOM-interaction agent loop (click, type, scroll).
+- [ ] Add visual reasoning (screenshots to VLM) to handle complex web apps.
+
+### 2. Mobile App (iOS/Android)
+
+- [ ] Evaluate Tauri Mobile vs React Native for the client view.
+- [ ] Implement remote connection to the desktop "Shard Hub" (since the local app runs the heavy vector DB/models).
+- [ ] Add share sheet extensions to quickly pipe links/text into Shard Mobile.
+
+### 3. Nodes (Device Sync & Distributed Shard)
+
+- [ ] Design a peer-to-peer sync protocol (e.g., libp2p or simple WebSockets) to keep `memories.sqlite` consistent across multiple devices.
+- [ ] Allow one powerful desktop node to run embedded inference for weaker mobile nodes.
+- [ ] Create a "Nodes" UI panel to manage connected devices and sync status.
 
 ## P3: Hybrid Retrieval Enhancements
 

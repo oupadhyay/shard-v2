@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::time::{self, Duration};
 
 /// Configuration for background jobs
@@ -272,6 +272,7 @@ pub fn parse_cleanup_decision(llm_response: &str) -> Result<CleanupDecision, Str
 
 /// Start all background jobs (sequential: Summary first, then Cleanup)
 pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
+    let summary_cleanup_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         let mut job_interval = time::interval(Duration::from_secs(JOB_INTERVAL_HOURS * 3600));
 
@@ -281,7 +282,7 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
             log::info!("[Background] Starting scheduled jobs (Summary → Cleanup)...");
 
             // Load last run info to check if we should skip
-            let mut last_run_info = load_last_run_info(&app_handle);
+            let mut last_run_info = load_last_run_info(&summary_cleanup_handle);
             let now = Utc::now().to_rfc3339();
 
             // Summary job with skip check
@@ -292,7 +293,7 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                 );
             } else {
                 log::info!("[Background] Running summary job...");
-                match run_summary_job(&app_handle).await {
+                match run_summary_job(&summary_cleanup_handle).await {
                     Ok(result) => {
                         log::info!(
                             "[Summary] Complete. {} interactions analyzed, {} topics updated.",
@@ -301,18 +302,18 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                         );
                         // Update last run time on success
                         last_run_info.summary_last_run = Some(now.clone());
-                        save_last_run_info(&app_handle, &last_run_info);
+                        save_last_run_info(&summary_cleanup_handle, &last_run_info);
 
                         if !result.topics_updated.is_empty() || !result.insights_created.is_empty()
                         {
                             log::info!(
                                 "[Background] Topics/insights changed, rebuilding chunk index..."
                             );
-                            if let Ok(config) = crate::config::load_config(&app_handle) {
+                            if let Ok(config) = crate::config::load_config(&summary_cleanup_handle) {
                                 if let Some(api_key) = config.gemini_api_key {
                                     let http_client = reqwest::Client::new();
                                     match crate::memories::rebuild_chunk_index(
-                                        &app_handle,
+                                        &summary_cleanup_handle,
                                         &http_client,
                                         &api_key,
                                     )
@@ -345,7 +346,7 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                 );
             } else {
                 log::info!("[Background] Running cleanup job...");
-                match run_cleanup_job(&app_handle).await {
+                match run_cleanup_job(&summary_cleanup_handle).await {
                     Ok(result) => {
                         log::info!(
                             "[Cleanup] Complete. Removed {} entries, freed {} bytes.",
@@ -354,7 +355,7 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                         );
                         // Update last run time on success
                         last_run_info.cleanup_last_run = Some(Utc::now().to_rfc3339());
-                        save_last_run_info(&app_handle, &last_run_info);
+                        save_last_run_info(&summary_cleanup_handle, &last_run_info);
                     }
                     Err(e) => {
                         log::error!("[Background] Cleanup job failed: {}", e);
@@ -366,6 +367,67 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                 "[Background] All jobs complete. Next run in {} hours.",
                 JOB_INTERVAL_HOURS
             );
+        }
+    });
+
+    // Start user-defined cron jobs
+    let cron_handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Ok(config) = crate::config::load_config(&cron_handle) {
+            if let Some(cron_jobs) = config.cron_jobs {
+                if !cron_jobs.is_empty() {
+                    match tokio_cron_scheduler::JobScheduler::new().await {
+                        Ok(sched) => {
+                            for job_cfg in cron_jobs {
+                                let app_h = cron_handle.clone();
+                                let prompt = job_cfg.prompt.clone();
+                                let schedule = job_cfg.schedule.clone();
+
+                                let job = tokio_cron_scheduler::Job::new_async(schedule.as_str(), move |_uuid, mut _l| {
+                                    let app_h2 = app_h.clone();
+                                    let prompt2 = prompt.clone();
+                                    Box::pin(async move {
+                                        let sanitized_prompt = prompt2.replace(&['\n', '\r'][..], " ");
+                                        log::info!("[Cron] Triggering background task: {}", sanitized_prompt);
+                                        let state = app_h2.state::<crate::AppState>();
+                                        if let Ok(cfg) = crate::config::load_config(&app_h2) {
+                                            app_h2.emit("agent-cron-started", &prompt2).ok();
+                                            // Directly hook into the agent pipe
+                                            let _ = state.agent.process_message(
+                                                &app_h2,
+                                                prompt2,
+                                                None,
+                                                None,
+                                                &cfg,
+                                                true
+                                            ).await;
+                                        }
+                                    })
+                                });
+
+                                match job {
+                                    Ok(j) => {
+                                        if let Err(e) = sched.add(j).await {
+                                            log::error!("[Cron] Failed to add job: {}", e);
+                                        } else {
+                                            log::info!("[Cron] Scheduled background job: '{}'", schedule);
+                                        }
+                                    }
+                                    Err(e) => log::error!("[Cron] Invalid cron schedule '{}': {}", schedule, e),
+                                }
+                            }
+
+                            if let Err(e) = sched.start().await {
+                                log::error!("[Cron] Failed to start scheduler: {}", e);
+                            } else {
+                                log::info!("[Cron] Scheduler started successfully");
+                                std::future::pending::<()>().await;
+                            }
+                        }
+                        Err(e) => log::error!("[Cron] Failed to create JobScheduler: {}", e),
+                    }
+                }
+            }
         }
     });
 }
@@ -682,6 +744,53 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+    // ── Prune stale sessions (0–1 user messages, older than 1 day) ──────────
+    // These are sessions that were never meaningfully used (e.g. app launched
+    // then closed without chatting). No LLM needed — pure SQL decision.
+    if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+        let prune_result = tokio::task::spawn_blocking(move || {
+            store.with_transaction(|_store, conn| {
+                // Delete messages for stale sessions first (prevent orphans)
+                conn.execute(
+                    "DELETE FROM messages WHERE session_id IN (
+                        SELECT s.id FROM sessions s
+                        WHERE datetime(s.updated_at) < datetime('now', '-1 day')
+                          AND (
+                            SELECT COUNT(*) FROM messages m
+                            WHERE m.session_id = s.id
+                              AND json_extract(m.content, '$.role') = 'user'
+                          ) <= 1
+                    )",
+                    [],
+                )?;
+
+                // Delete the sessions themselves
+                let n = conn.execute(
+                    "DELETE FROM sessions WHERE id IN (
+                        SELECT s.id FROM sessions s
+                        WHERE datetime(s.updated_at) < datetime('now', '-1 day')
+                          AND (
+                            SELECT COUNT(*) FROM messages m
+                            WHERE m.session_id = s.id
+                              AND json_extract(m.content, '$.role') = 'user'
+                          ) <= 1
+                    )",
+                    [],
+                )?;
+                Ok(n)
+            })
+        })
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+        .map_err(|e| format!("Database error: {}", e));
+
+        match prune_result {
+            Ok(n) if n > 0 => log::info!("[Cleanup] Pruned {} stale sessions (<= 1 user message, > 1 day old)", n),
+            Ok(_) => {}
+            Err(e) => log::warn!("[Cleanup] Failed to prune stale sessions: {}", e),
+        }
+    }
 
     let interactions_dir = app_data_dir.join("interactions");
 

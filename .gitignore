@@ -27,6 +27,9 @@ dist-ssr
 .env
 *.code-workspace
 
+# Internal
+docs/*
+
 # Agent files
 AGENTS.md
 lessons_learned.md

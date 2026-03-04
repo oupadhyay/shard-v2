@@ -5,6 +5,12 @@ use tauri::{AppHandle, Manager, Runtime};
 
 const CONFIG_FILENAME: &str = "config.toml";
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct CronJob {
+    pub schedule: String,
+    pub prompt: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppConfig {
     // API keys - stored in OS keyring at runtime, but serializable to frontend
@@ -44,6 +50,9 @@ pub struct AppConfig {
     // Fallback model for quota errors
     #[serde(default)]
     pub fallback_model: Option<String>, // Default: openai/gpt-oss-120b:free
+    // Cron jobs
+    #[serde(default)]
+    pub cron_jobs: Option<Vec<CronJob>>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +182,7 @@ impl Default for AppConfig {
             compaction_preserve_turns: Some(5),
             // Fallback model for quota errors
             fallback_model: Some("openai/gpt-oss-120b:free".to_string()),
+            cron_jobs: None,
         }
     }
 }
@@ -474,5 +484,26 @@ mod tests {
             .get_model_provider_config("some-model", "main chat")
             .unwrap_err();
         assert!(err.contains("OpenRouter"));
+    }
+
+    #[test]
+    fn test_cron_jobs_deserialization() {
+        let toml_str = r#"
+            [[cron_jobs]]
+            schedule = "1/10 * * * * *"
+            prompt = "Test cron job 1"
+
+            [[cron_jobs]]
+            schedule = "0 30 8 * * *"
+            prompt = "Test cron job 2"
+        "#;
+
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let jobs = config.cron_jobs.unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].schedule, "1/10 * * * * *");
+        assert_eq!(jobs[0].prompt, "Test cron job 1");
+        assert_eq!(jobs[1].schedule, "0 30 8 * * *");
+        assert_eq!(jobs[1].prompt, "Test cron job 2");
     }
 }

@@ -19,6 +19,7 @@ export class ChatState {
   // ── Chat processing ──────────────────────────────────────────────
   isProcessing = false;
   isCancelled = false;
+  currentSessionId: string | null = null;
 
   // ── Image attachments ────────────────────────────────────────────
   attachedImages: AttachedImage[] = [];

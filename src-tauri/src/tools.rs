@@ -1,8 +1,32 @@
 use crate::agent::{FunctionDefinition, ToolDefinition};
 use serde_json::json;
 
-pub fn get_all_tools() -> Vec<ToolDefinition> {
-    vec![
+pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
+    // Collect all required tools from the active skills
+    let mut required_tools = std::collections::HashSet::new();
+    for skill in active_skills {
+        for tool in crate::skills::get_skill_required_tools(skill) {
+            required_tools.insert(tool);
+        }
+    }
+
+    // Global tools always available to the agent
+    let global_tools = [
+        "web_search",
+        "open_url",
+        "memory_search",
+        "memory_get",
+        "save_memory",
+        "refresh_memories",
+        "read_topic_summary",
+        "update_topic_summary",
+        "load_skill",
+        "unload_skill",
+        "list_skills",
+        "search_wikipedia",
+    ];
+
+    let all_tools = vec![
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
@@ -11,7 +35,7 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "location": { "type": "string", "description": "City name (e.g. 'Paris', 'London') or Zip code (e.g. '94102')" },
+                        "location": { "type": "string", "description": "City name ONLY (e.g. 'Paris', 'London', 'Tracy'). Do NOT include state abbreviations, country codes, or commas." },
                     },
                     "required": ["location"],
                     "additionalProperties": false
@@ -220,5 +244,54 @@ pub fn get_all_tools() -> Vec<ToolDefinition> {
                 strict: Some(true),
             },
         },
-    ]
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "load_skill".to_string(),
+                description: "Load a specific dynamic skill into your session context. This adds specialized instructions to your system prompt. You should ONLY load a skill if it is strictly necessary to answer the user's current prompt. You MUST unload the skill when the specific mini-task is complete to avoid context pollution. Please check the 'Available Skills' section in your system prompt to see what skills you can load.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "The exact name of the skill to load" },
+                    },
+                    "required": ["name"],
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "unload_skill".to_string(),
+                description: "Unload a specific dynamic skill from your session context. You MUST do this immediately after you have finished the specific mini-task that required the skill.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "The name of the skill to unload" },
+                    },
+                    "required": ["name"],
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "list_skills".to_string(),
+                description: "List all dynamically loadable skills available in the workspace. Use this to discover expertise you can adopt.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
+    ];
+
+    all_tools.into_iter().filter(|t| {
+        global_tools.contains(&t.function.name.as_str()) || required_tools.contains(&t.function.name)
+    }).collect()
 }

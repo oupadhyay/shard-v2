@@ -15,6 +15,7 @@ fn bench_history_serialization(c: &mut Criterion) {
             tool_calls: None,
             tool_call_id: None,
             images: None,
+            is_cron: None,
         });
     }
 
@@ -42,6 +43,7 @@ fn bench_session_transcript_formatting(c: &mut Criterion) {
             tool_calls: None,
             tool_call_id: None,
             images: None,
+            is_cron: None,
         });
     }
 

@@ -92,6 +92,29 @@ impl VectorStore {
         // Initialize schema
         conn.execute_batch(include_str!("schema.sql"))?;
 
+        // Auto-migrate schema for existing databases (add active_skills)
+        if let Err(e) = conn.execute(
+            "ALTER TABLE sessions ADD COLUMN active_skills TEXT DEFAULT '[]';",
+            [],
+        ) {
+            match &e {
+                rusqlite::Error::SqliteFailure(_, Some(msg))
+                    if msg.contains("duplicate column name") =>
+                {
+                    log::debug!(
+                        "[VectorStore] sessions.active_skills column already exists: {}",
+                        msg
+                    );
+                }
+                _ => {
+                    log::warn!(
+                        "[VectorStore] Failed to auto-migrate sessions.active_skills column: {}",
+                        e
+                    );
+                }
+            }
+        }
+
         log::info!("[VectorStore] Opened database at {:?}", db_path);
 
         Ok(Self { conn })
@@ -110,10 +133,9 @@ impl VectorStore {
     }
 
     /// Compute SHA256 hash of content for cache key
+    #[deprecated(since = "1.0.0", note = "use compute_content_hash instead")]
     pub fn content_hash(text: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(text.as_bytes());
-        format!("{:x}", hasher.finalize())
+        compute_content_hash(text)
     }
 
     /// Get the number of chunks in the store
@@ -190,7 +212,7 @@ impl VectorStore {
             SourceType::Insight => "insight",
             SourceType::Session => "session",
         };
-        let content_hash = Self::content_hash(&chunk.text);
+        let content_hash = compute_content_hash(&chunk.text);
 
         if chunk.embedding.len() != EMBEDDING_DIM {
             return Err(VectorStoreError::Migration(format!(
@@ -597,6 +619,13 @@ impl VectorStore {
 // Helper Functions
 // ============================================================================
 
+/// Compute SHA256 hash of content for cache key
+pub fn compute_content_hash(text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 /// Convert f32 vector to bytes for SQLite storage
 fn f32_vec_to_bytes(v: &[f32]) -> Vec<u8> {
     // Store embeddings in a fixed little-endian representation for portability.
@@ -743,7 +772,7 @@ mod tests {
         let db_path = dir.path().join("test.sqlite");
         let store = VectorStore::open(&db_path).unwrap();
 
-        let hash = VectorStore::content_hash("test content");
+        let hash = compute_content_hash("test content");
         let embedding = vec![0.5f32; EMBEDDING_DIM];
 
         // Cache miss
@@ -796,13 +825,29 @@ mod tests {
 
     #[test]
     fn test_content_hash() {
-        let hash1 = VectorStore::content_hash("hello world");
-        let hash2 = VectorStore::content_hash("hello world");
-        let hash3 = VectorStore::content_hash("different content");
+        // Original basic consistency
+        let hash1 = compute_content_hash("hello world");
+        let hash2 = compute_content_hash("hello world");
+        let hash3 = compute_content_hash("different content");
 
         assert_eq!(hash1, hash2);
         assert_ne!(hash1, hash3);
         assert_eq!(hash1.len(), 64); // SHA256 hex = 64 chars
+
+        // Empty string
+        let empty_hash = compute_content_hash("");
+        assert_eq!(empty_hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+        // Unicode / Emoji
+        let unicode_hash = compute_content_hash("🦀 Rust");
+        let unicode_hash2 = compute_content_hash("🦀 Rust");
+        assert_eq!(unicode_hash, unicode_hash2);
+        assert_ne!(unicode_hash, empty_hash);
+
+        // Long string
+        let long_string = "a".repeat(10000);
+        let long_hash = compute_content_hash(&long_string);
+        assert_eq!(long_hash.len(), 64);
     }
 
     #[test]
