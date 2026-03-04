@@ -40,15 +40,18 @@ pub fn list_available_skills() -> Vec<String> {
 
 /// Validates a filename to ensure it's a single "normal" path component.
 /// This prevents path traversal by rejecting names with separators, ".." components, etc.
-pub fn is_safe_filename(name: &str) -> bool {
+pub(crate) fn is_safe_filename(name: &str) -> bool {
     if name.is_empty() {
         return false;
     }
 
-    // Explicitly block separators and drive prefixes that might be parsed as
-    // part of a single Normal component on some platforms but still allow
-    // escaping the intended directory via PathBuf::push.
-    if name.contains('/') || name.contains('\\') || name.contains(':') {
+    // Explicitly block separators, drive prefixes, and control characters
+    // that might allow escaping the intended directory.
+    if name.contains('/')
+        || name.contains('\\')
+        || name.contains(':')
+        || name.chars().any(|c| c.is_control())
+    {
         return false;
     }
 
@@ -57,9 +60,8 @@ pub fn is_safe_filename(name: &str) -> bool {
 
     match components.next() {
         Some(std::path::Component::Normal(c)) => {
-            // Must be a normal component, and it must exactly match the input
-            // to ensure no other components (like separators) are present.
-            c == name && components.next().is_none()
+            // Must be a single normal component matching the input exactly.
+            c.to_str() == Some(name) && components.next().is_none()
         }
         _ => false,
     }

@@ -41,6 +41,9 @@ mod tests {
         assert!(!is_safe_filename("C:relative"));
         assert!(!is_safe_filename("C:\\absolute"));
         assert!(!is_safe_filename("file:name"));
+        assert!(!is_safe_filename("file\nname"));
+        assert!(!is_safe_filename("file\rname"));
+        assert!(!is_safe_filename("file\0name"));
     }
 
     #[test]
