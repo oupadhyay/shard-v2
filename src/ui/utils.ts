@@ -4,19 +4,29 @@
 
 /**
  * Formats a session date string into a human-readable relative label
- * @param raw SQLite datetime string (UTC)
+ * @param raw SQLite/RFC3339 datetime string (typically UTC, may include offset)
+ * @param now Optional reference date for testability (defaults to current time)
  */
-export function formatSessionDate(raw: string): string {
+export function formatSessionDate(raw: string, now?: Date): string {
   if (!raw) return "Unknown";
-  // Append "Z" to treat as UTC (SQLite stores UTC without timezone marker)
-  const utcStr = raw.includes("T") ? raw : raw.replace(" ", "T") + "Z";
-  const d = new Date(utcStr);
+  // Normalize to RFC3339: support existing RFC3339-with-offset strings and
+  // only append "Z" (UTC) when no timezone/offset is present.
+  let normalized = raw.trim();
+  if (!normalized.includes("T")) {
+    normalized = normalized.replace(" ", "T");
+  }
+  const hasExplicitZone =
+    normalized.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(normalized);
+  if (!hasExplicitZone) {
+    normalized += "Z";
+  }
+  const d = new Date(normalized);
   if (isNaN(d.getTime())) return "Unknown";
 
-  const now = new Date();
+  const ref = now ?? new Date();
   // Compare calendar dates in local time
   const localDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayLocal = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
   const diffDays = Math.round((todayLocal.getTime() - localDate.getTime()) / (1000 * 60 * 60 * 24));
 
   if (diffDays === 0) return "Today";
