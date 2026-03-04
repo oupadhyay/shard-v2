@@ -22,24 +22,29 @@ mod tests {
 
     #[test]
     fn test_cosine_similarity_logic() {
-        // We can't access the private function directly, but we can copy the logic to verify it
-        fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-            let dot_product: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
-            let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-            let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        // Test identical vectors
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![1.0, 2.0, 3.0];
+        assert!((cosine_similarity(&a, &b) - 1.0).abs() < 1e-6);
 
-            if norm_a == 0.0 || norm_b == 0.0 {
-                return 0.0;
-            }
-
-            dot_product / (norm_a * norm_b)
-        }
-
+        // Test orthogonal vectors
         let a = vec![1.0, 0.0, 0.0];
-        let b = vec![1.0, 0.0, 0.0];
-        assert!((cosine_similarity(&a, &b) - 1.0).abs() < 1e-5);
-
         let c = vec![0.0, 1.0, 0.0];
-        assert!((cosine_similarity(&a, &c) - 0.0).abs() < 1e-5);
+        assert!((cosine_similarity(&a, &c) - 0.0).abs() < 1e-6);
+
+        // Test opposite vectors
+        let d = vec![-1.0, 0.0, 0.0];
+        assert!((cosine_similarity(&a, &d) - (-1.0)).abs() < 1e-6);
+
+        // Test zero vector (should return 0.0, not NaN)
+        let zero = vec![0.0, 0.0, 0.0];
+        assert_eq!(cosine_similarity(&a, &zero), 0.0);
+
+        // Test different length vectors (zip behavior)
+        let a_short = vec![1.0, 2.0];
+        let b_long = vec![1.0, 2.0, 3.0];
+        let sim = cosine_similarity(&a_short, &b_long);
+        let expected = 5.0 / (5.0f32.sqrt() * 14.0f32.sqrt());
+        assert!((sim - expected).abs() < 1e-6);
     }
 }
