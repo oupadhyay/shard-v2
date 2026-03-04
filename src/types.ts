@@ -65,3 +65,18 @@ export interface ChatMessagePayload {
   imagesMimeTypes?: string[];
   [key: string]: unknown; // Index signature for Tauri invoke compatibility
 }
+
+// Model types from backend
+export interface ModelInfo {
+  id: string;
+  display_name: string;
+  provider: "gemini" | "openrouter" | "groq" | "cerebras";
+  category: "chat" | "vision" | "background";
+  supports_tools: boolean;
+}
+
+export interface ModelsResponse {
+  chat_models: ModelInfo[];
+  vision_models: ModelInfo[];
+  background_models: ModelInfo[];
+}
