@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::agent::{
-        has_images, supports_tools, to_api_messages, to_multimodal_messages, ApiChatMessage,
-        ChatMessage, FunctionCall, ImageAttachment, ToolCall,
+        has_images, supports_tools, to_api_messages, to_multimodal_messages, ChatMessage,
+        FunctionCall, ImageAttachment, ToolCall,
     };
 
     #[test]
