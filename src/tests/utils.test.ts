@@ -1,3 +1,6 @@
+// Force UTC timezone for deterministic date comparisons
+process.env.TZ = 'UTC';
+
 import { describe, it, expect } from 'vitest';
 import { formatSessionDate } from '../ui/utils';
 
@@ -32,14 +35,17 @@ describe('formatSessionDate', () => {
     expect(formatSessionDate('2026-03-03 08:30:00', now)).toBe('Today');
   });
 
+  it('handles timestamp with T but no timezone/offset', () => {
+    expect(formatSessionDate('2026-03-03T08:30:00', now)).toBe('Today');
+  });
+
   it('handles RFC3339 with +00:00 offset', () => {
     expect(formatSessionDate('2026-03-03T08:30:00+00:00', now)).toBe('Today');
   });
 
   it('handles RFC3339 with non-UTC offset', () => {
-    // Verify it parses without error and returns a valid label
-    const result = formatSessionDate('2026-03-02T20:00:00-08:00', now);
-    expect(['Today', 'Yesterday']).toContain(result);
+    // -08:00 offset: 2026-03-02T20:00:00-08:00 = 2026-03-03T04:00:00Z → Today
+    expect(formatSessionDate('2026-03-02T20:00:00-08:00', now)).toBe('Today');
   });
 
   it('returns "Unknown" for empty string', () => {
