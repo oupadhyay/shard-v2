@@ -19,6 +19,31 @@ mod tests {
         assert_eq!(get_skill_content("../../../etc/passwd"), None);
         assert_eq!(get_skill_content("some/path"), None);
         assert_eq!(get_skill_content("some\\path"), None);
+        assert_eq!(get_skill_content("/etc/passwd"), None);
+        assert_eq!(get_skill_content("C:\\Windows\\System32\\drivers\\etc\\hosts"), None);
+        assert_eq!(get_skill_content("C:file"), None);
+        assert_eq!(get_skill_content("file:name"), None);
+        assert_eq!(get_skill_content("."), None);
+        assert_eq!(get_skill_content(".."), None);
+    }
+
+    #[test]
+    fn test_is_safe_filename() {
+        use crate::skills::is_safe_filename;
+        assert!(is_safe_filename("valid_name"));
+        assert!(is_safe_filename("valid-name.123"));
+        assert!(!is_safe_filename(""));
+        assert!(!is_safe_filename("."));
+        assert!(!is_safe_filename(".."));
+        assert!(!is_safe_filename("dir/file"));
+        assert!(!is_safe_filename("dir\\file"));
+        assert!(!is_safe_filename("/absolute"));
+        assert!(!is_safe_filename("C:relative"));
+        assert!(!is_safe_filename("C:\\absolute"));
+        assert!(!is_safe_filename("file:name"));
+        assert!(!is_safe_filename("file\nname"));
+        assert!(!is_safe_filename("file\rname"));
+        assert!(!is_safe_filename("file\0name"));
     }
 
     #[test]
