@@ -6,6 +6,7 @@ import "katex/dist/katex.min.css";
 
 // Internal modules
 import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, AppConfig, ModelsResponse } from "./types";
+import type { SessionSummary } from "./ui/sessions";
 import { ChatState } from "./state";
 import { EVENTS } from "./events";
 import {
@@ -1567,7 +1568,7 @@ sessionsBtn.addEventListener("click", async () => {
     }
 
     sessionsListContainer.innerHTML = '';
-    const sessions: import("./ui/sessions").SessionSummary[] = JSON.parse(resultString);
+    const sessions: SessionSummary[] = JSON.parse(resultString);
 
     sessions.forEach((s) => {
       const item = document.createElement("div");
