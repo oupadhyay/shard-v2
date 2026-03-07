@@ -1996,12 +1996,13 @@ impl Agent {
                 .collect::<Vec<ChatMessage>>(),
         );
 
-        // Note: multimodal_messages is cloned per request attempt because
-        // ChatCompletionRequest owns the Vec and reqwest::json() consumes it.
-        // This only duplicates base64 image data on retry/fallback paths.
+        // Note: multimodal_messages is no longer cloned per request attempt because
+        // ChatCompletionRequest is now generic over the messages type, allowing us to borrow.
+        // This avoids deep cloning large base64 image data on retry/fallback paths.
         let make_request = |tools_opt: Option<Vec<ToolDefinition>>| {
             let model = model.clone();
-            let messages = multimodal_messages.clone();
+            // Borrow messages to avoid cloning
+            let messages = multimodal_messages.as_slice();
             let url = url.clone();
             let api_key = api_key.clone();
             let client = self.http_client.clone();
@@ -2111,7 +2112,7 @@ impl Agent {
 
                     let fallback_body = ChatCompletionRequest {
                         model: fallback_model,
-                        messages: multimodal_messages.clone(),
+                        messages: multimodal_messages.as_slice(),
                         tools: current_tools.clone(),
                         tool_choice: if current_tools.is_some() {
                             Some("auto".to_string())

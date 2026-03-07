@@ -252,6 +252,38 @@ mod tests {
     }
 
     #[test]
+    fn test_to_multimodal_messages_null_content() {
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            reasoning: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_123".to_string(),
+                tool_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "get_weather".to_string(),
+                    arguments: "{\"location\":\"London\"}".to_string(),
+                },
+                thought_signature: None,
+            }]),
+            tool_call_id: None,
+            is_cron: None,
+            images: None,
+        }];
+
+        let result = to_multimodal_messages(&messages);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["role"], "assistant");
+        assert!(result[0]["content"].is_null()); // Explicitly check for null content
+
+        let tool_calls = result[0]["tool_calls"]
+            .as_array()
+            .expect("Should have tool_calls");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0]["id"], "call_123");
+    }
+
+    #[test]
     fn test_to_multimodal_messages_tool_result() {
         let messages = vec![ChatMessage {
             role: "tool".to_string(),

@@ -170,9 +170,9 @@ impl RetryReason {
 // ============================================================================
 
 #[derive(Serialize, Debug)]
-pub struct ChatCompletionRequest {
+pub struct ChatCompletionRequest<M: serde::Serialize> {
     pub model: String,
-    pub messages: Vec<serde_json::Value>,
+    pub messages: M,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
