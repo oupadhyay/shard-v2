@@ -7,3 +7,4 @@ pub mod vision_llm;
 pub mod weather;
 pub mod web_search;
 pub mod wikipedia;
+pub mod youtube;

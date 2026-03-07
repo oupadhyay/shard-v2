@@ -1154,8 +1154,10 @@ impl Agent {
             .execute_tool_uncached(app_handle, function_name, args, config)
             .await;
 
-        // Cache the result if eligible
-        crate::cache::cache_result(app_handle, function_name, args, &result);
+        // Cache the result if eligible (never cache errors)
+        if !result.starts_with("Error") {
+            crate::cache::cache_result(app_handle, function_name, args, &result);
+        }
 
         result
     }
@@ -1247,6 +1249,36 @@ impl Agent {
                         format!("Read URL Results for {}:\n\n{}", url, markdown)
                     }
                     Err(e) => format!("Error reading URL: {}", e),
+                }
+            }
+            "youtube_transcript" => {
+                let video = args["video"].as_str().unwrap_or_default();
+                let video_id = match crate::integrations::youtube::extract_video_id(video) {
+                    Some(id) => id,
+                    None => return format!("Error: Could not extract a YouTube video ID from '{}'", video),
+                };
+                match crate::integrations::youtube::fetch_transcript(&self.http_client, &video_id).await {
+                    Ok(segments) => {
+                        let formatted = crate::integrations::youtube::format_transcript(&segments);
+                        // Truncate very long transcripts to avoid blowing up context
+                        if formatted.len() > 30_000 {
+                            format!(
+                                "YouTube Transcript (video: {}, {} segments, truncated):\n\n{}...\n\n[Transcript truncated at 30,000 chars. Total length: {} chars]",
+                                video_id,
+                                segments.len(),
+                                &formatted[..30_000],
+                                formatted.len()
+                            )
+                        } else {
+                            format!(
+                                "YouTube Transcript (video: {}, {} segments):\n\n{}",
+                                video_id,
+                                segments.len(),
+                                formatted
+                            )
+                        }
+                    }
+                    Err(e) => format!("Error fetching transcript: {}", e),
                 }
             }
             "save_memory" => {
