@@ -1268,10 +1268,14 @@ impl Agent {
                         let video_link = format!("https://youtu.be/{}", video_id);
                         // Truncate very long transcripts to avoid blowing up context,
                         // but generate a chunked LLM summary of the full content so nothing is lost.
-                        if formatted.len() > 30_000 {
-                            // Find a safe UTF-8 boundary at or before 30,000 bytes
-                            let truncate_at = formatted.floor_char_boundary(30_000);
-                            let char_count = formatted.chars().count();
+                        let char_count = formatted.chars().count();
+                        if char_count > 30_000 {
+                            // Find byte offset of the 30,000th character
+                            let truncate_at = formatted
+                                .char_indices()
+                                .nth(30_000)
+                                .map(|(i, _)| i)
+                                .unwrap_or(formatted.len());
 
                             // Summarize the full transcript via background LLM (chunked for long transcripts)
                             let summary = self.summarize_long_transcript(config, &formatted, title_label).await;
@@ -1701,36 +1705,53 @@ impl Agent {
         ).await
     }
 
-    /// Split a transcript into chunks of approximately `max_chars` characters each.
-    /// Splits on newline boundaries to avoid cutting mid-line, and uses
-    /// `floor_char_boundary` as a fallback for lines longer than `max_chars`.
+    /// Split a transcript into chunks of approximately `max_chars` Unicode characters each.
+    /// Splits on newline boundaries to avoid cutting mid-line.
     fn split_transcript_chunks<'a>(&self, text: &'a str, max_chars: usize) -> Vec<&'a str> {
-        if text.len() <= max_chars {
+        let total_chars = text.chars().count();
+        if total_chars <= max_chars {
             return vec![text];
         }
 
-        let mut chunks = Vec::new();
-        let mut start = 0;
+        // Precompute byte offsets for each character boundary
+        let char_offsets: Vec<usize> = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(text.len()))
+            .collect();
 
-        while start < text.len() {
-            if text.len() - start <= max_chars {
-                chunks.push(&text[start..]);
+        let mut chunks = Vec::new();
+        let mut start_char = 0;
+
+        while start_char < total_chars {
+            let remaining_chars = total_chars - start_char;
+            if remaining_chars <= max_chars {
+                let byte_start = char_offsets[start_char];
+                chunks.push(&text[byte_start..]);
                 break;
             }
 
-            // Find a safe boundary at or before max_chars from start
-            let end_bound = text.floor_char_boundary(start + max_chars);
+            let end_char = start_char + max_chars;
+            let byte_start = char_offsets[start_char];
+            let byte_end = char_offsets[end_char];
 
-            // Try to split on the last newline before the boundary
-            let chunk_slice = &text[start..end_bound];
-            let split_at = if let Some(nl_pos) = chunk_slice.rfind('\n') {
-                start + nl_pos + 1 // include the newline in this chunk
+            // Try to split on the last newline before the character boundary
+            let chunk_slice = &text[byte_start..byte_end];
+            let split_byte = if let Some(nl_pos) = chunk_slice.rfind('\n') {
+                byte_start + nl_pos + '\n'.len_utf8()
             } else {
-                end_bound // no newline found — use the char boundary
+                byte_end
             };
 
-            chunks.push(&text[start..split_at]);
-            start = split_at;
+            chunks.push(&text[byte_start..split_byte]);
+
+            // Find the char index corresponding to split_byte
+            let next_start_char = char_offsets[start_char..]
+                .iter()
+                .position(|&offset| offset >= split_byte)
+                .map(|pos| start_char + pos)
+                .unwrap_or(total_chars);
+            start_char = next_start_char;
         }
 
         chunks

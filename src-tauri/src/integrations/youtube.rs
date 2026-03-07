@@ -15,6 +15,11 @@ use serde::Deserialize;
 
 // ── Video ID extraction ─────────────────────────────────────────────
 
+/// Validate that a string looks like a YouTube video ID (11 alphanumeric chars including - and _).
+fn is_valid_video_id(id: &str) -> bool {
+    id.len() == 11 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Extract a YouTube video ID from a URL or return the input if it already looks like an ID.
 ///
 /// Handles: youtube.com/watch?v=, youtu.be/, youtube.com/embed/, youtube.com/shorts/,
@@ -30,17 +35,23 @@ pub fn extract_video_id(input: &str) -> Option<String> {
         if host == "youtu.be" {
             let path = url.path().trim_start_matches('/');
             if !path.is_empty() {
-                return Some(path.split('/').next()?.split('?').next()?.to_string());
+                let id = path.split('/').next()?.split('?').next()?.to_string();
+                if is_valid_video_id(&id) {
+                    return Some(id);
+                }
             }
         }
 
         // youtube.com or www.youtube.com or m.youtube.com
-        if host.contains("youtube.com") {
+        if host == "youtube.com" || host.ends_with(".youtube.com") {
             // /watch?v=VIDEO_ID
             if url.path() == "/watch" {
                 for (key, value) in url.query_pairs() {
                     if key == "v" && !value.is_empty() {
-                        return Some(value.to_string());
+                        let id = value.to_string();
+                        if is_valid_video_id(&id) {
+                            return Some(id);
+                        }
                     }
                 }
             }
@@ -51,14 +62,16 @@ pub fn extract_video_id(input: &str) -> Option<String> {
                 && matches!(segments[0], "embed" | "shorts" | "v")
                 && !segments[1].is_empty()
             {
-                return Some(segments[1].split('?').next()?.to_string());
+                let id = segments[1].split('?').next()?.to_string();
+                if is_valid_video_id(&id) {
+                    return Some(id);
+                }
             }
         }
     }
 
     // Bare video ID: 11 alphanumeric chars (plus - and _)
-    if input.len() == 11 && input.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
+    if is_valid_video_id(input) {
         return Some(input.to_string());
     }
 
@@ -221,29 +234,47 @@ async fn run_ytdlp(video_url: &str) -> Result<YtDlpMetadata, String> {
             }
         })?;
 
-    // Grab stdout/stderr handles before awaiting, so we retain access to `child` for kill.
+    // Read stdout/stderr concurrently with waiting for the child to avoid
+    // deadlocks if OS pipe buffers fill up.
+    use tokio::io::AsyncReadExt;
+
     let mut stdout = child.stdout.take().ok_or("Failed to capture yt-dlp stdout")?;
     let mut stderr = child.stderr.take().ok_or("Failed to capture yt-dlp stderr")?;
 
-    // Wait for the process with a 30-second timeout.
-    // On timeout, explicitly kill the child to prevent orphan OS processes.
-    let timeout = std::time::Duration::from_secs(30);
-    let status = tokio::select! {
-        _ = tokio::time::sleep(timeout) => {
-            let _ = child.kill().await;
-            return Err("yt-dlp timed out after 30 seconds".to_string());
-        }
-        result = child.wait() => {
-            result.map_err(|e| format!("Failed to run yt-dlp: {}", e))?
-        }
+    let join_fut = async {
+        let mut stdout_buf = Vec::new();
+        let mut stderr_buf = Vec::new();
+
+        let wait_fut = child.wait();
+        let stdout_fut = stdout.read_to_end(&mut stdout_buf);
+        let stderr_fut = stderr.read_to_end(&mut stderr_buf);
+
+        let (status_res, stdout_res, stderr_res) =
+            tokio::join!(wait_fut, stdout_fut, stderr_fut);
+
+        let status = status_res?;
+        stdout_res?;
+        stderr_res?;
+
+        Ok::<(std::process::ExitStatus, Vec<u8>, Vec<u8>), std::io::Error>((
+            status,
+            stdout_buf,
+            stderr_buf,
+        ))
     };
 
-    // Read captured output after process exits
-    use tokio::io::AsyncReadExt;
-    let mut stdout_buf = Vec::new();
-    let mut stderr_buf = Vec::new();
-    stdout.read_to_end(&mut stdout_buf).await.map_err(|e| format!("Failed to read yt-dlp stdout: {}", e))?;
-    stderr.read_to_end(&mut stderr_buf).await.map_err(|e| format!("Failed to read yt-dlp stderr: {}", e))?;
+    let timeout = std::time::Duration::from_secs(30);
+    let (status, stdout_buf, stderr_buf) =
+        match tokio::time::timeout(timeout, join_fut).await {
+            Err(_) => {
+                let _ = child.kill().await;
+                return Err("yt-dlp timed out after 30 seconds".to_string());
+            }
+            Ok(Err(e)) => {
+                return Err(format!("Failed to run yt-dlp: {}", e));
+            }
+            Ok(Ok((status, stdout_buf, stderr_buf))) => (status, stdout_buf, stderr_buf),
+        };
 
     if !status.success() {
         let stderr_str = String::from_utf8_lossy(&stderr_buf);
@@ -296,9 +327,13 @@ fn pick_caption_url(metadata: &YtDlpMetadata) -> Result<String, String> {
     fn find_any_srv1(
         map: &std::collections::HashMap<String, Vec<SubtitleEntry>>,
     ) -> Option<String> {
-        for entries in map.values() {
-            if let Some(url) = find_srv1(entries) {
-                return Some(url.to_string());
+        let mut keys: Vec<&String> = map.keys().collect();
+        keys.sort();
+        for key in keys {
+            if let Some(entries) = map.get(key) {
+                if let Some(url) = find_srv1(entries) {
+                    return Some(url.to_string());
+                }
             }
         }
         None
@@ -461,6 +496,7 @@ mod tests {
         assert_eq!(extract_video_id("not a url"), None);
         assert_eq!(extract_video_id("https://google.com"), None);
         assert_eq!(extract_video_id(""), None);
+        assert_eq!(extract_video_id("https://youtube.com.evil.tld/watch?v=dQw4w9WgXcQ"), None);
     }
 
     #[test]
