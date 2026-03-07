@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { SessionSummary } from '../ui/sessions';
+import { type SessionSummary, renderSessionItem } from '../ui/sessions';
 
 /**
  * Tests verify that the DOM-based session rendering approach used in main.ts
@@ -7,36 +7,16 @@ import type { SessionSummary } from '../ui/sessions';
  * parses HTML, so malicious payloads are rendered as plain text.
  */
 describe('Sessions UI - DOM-based rendering', () => {
-  function renderSessionItem(s: SessionSummary): HTMLElement {
-    const item = document.createElement("div");
-    item.className = "session-item";
-    item.dataset.id = s.session_id;
+  // Use a simple stub for date formatting in tests to avoid timezone issues
+  // and focus on DOM sanitization/escaping logic.
+  const formatDateStub = (d: string) => new Date(d).toLocaleDateString();
 
-    const titleEl = document.createElement("div");
-    titleEl.className = "session-item-title";
-    titleEl.textContent = s.title;
-
-    const metaEl = document.createElement("div");
-    metaEl.className = "session-item-meta";
-
-    const dateSpan = document.createElement("span");
-    dateSpan.textContent = new Date(s.date).toLocaleDateString();
-
-    const summarySpan = document.createElement("span");
-    summarySpan.className = "session-item-summary";
-    summarySpan.textContent = s.summary !== "No summary available"
-      ? s.summary.substring(0, 120) + (s.summary.length > 120 ? "..." : "")
-      : "";
-
-    metaEl.appendChild(dateSpan);
-    metaEl.appendChild(summarySpan);
-    item.appendChild(titleEl);
-    item.appendChild(metaEl);
-    return item;
+  function renderStubbedSessionItem(s: SessionSummary): HTMLElement {
+    return renderSessionItem(s, formatDateStub);
   }
 
   it('renders session items correctly', () => {
-    const item = renderSessionItem({
+    const item = renderStubbedSessionItem({
       session_id: '123',
       title: 'Session 1',
       date: '2023-01-01T00:00:00.000Z',
@@ -49,7 +29,7 @@ describe('Sessions UI - DOM-based rendering', () => {
   });
 
   it('is safe against XSS in title (textContent never parses HTML)', () => {
-    const item = renderSessionItem({
+    const item = renderStubbedSessionItem({
       session_id: 'xss',
       title: '<script>alert("xss")</script>',
       date: '2023-01-01T00:00:00.000Z',
@@ -62,7 +42,7 @@ describe('Sessions UI - DOM-based rendering', () => {
   });
 
   it('is safe against XSS in summary', () => {
-    const item = renderSessionItem({
+    const item = renderStubbedSessionItem({
       session_id: 'xss',
       title: 'Safe',
       date: '2023-01-01T00:00:00.000Z',
@@ -75,7 +55,7 @@ describe('Sessions UI - DOM-based rendering', () => {
   });
 
   it('is safe against XSS in session_id (dataset escapes automatically)', () => {
-    const item = renderSessionItem({
+    const item = renderStubbedSessionItem({
       session_id: '"><script>alert(1)</script>',
       title: 'Safe',
       date: '2023-01-01T00:00:00.000Z',
@@ -88,7 +68,7 @@ describe('Sessions UI - DOM-based rendering', () => {
 
   it('truncates long summaries', () => {
     const longSummary = 'a'.repeat(200);
-    const item = renderSessionItem({
+    const item = renderStubbedSessionItem({
       session_id: 'long',
       title: 'Long',
       date: '2023-01-01T00:00:00.000Z',
@@ -101,7 +81,7 @@ describe('Sessions UI - DOM-based rendering', () => {
   });
 
   it('shows empty summary for "No summary available"', () => {
-    const item = renderSessionItem({
+    const item = renderStubbedSessionItem({
       session_id: 'no-summary',
       title: 'Test',
       date: '2023-01-01T00:00:00.000Z',

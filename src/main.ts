@@ -6,7 +6,7 @@ import "katex/dist/katex.min.css";
 
 // Internal modules
 import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, AppConfig, ModelsResponse } from "./types";
-import type { SessionSummary } from "./ui/sessions";
+import { type SessionSummary, renderSessionItem } from "./ui/sessions";
 import { ChatState } from "./state";
 import { EVENTS } from "./events";
 import {
@@ -1564,29 +1564,7 @@ sessionsBtn.addEventListener("click", async () => {
     const sessions: SessionSummary[] = JSON.parse(resultString);
 
     sessions.forEach((s) => {
-      const item = document.createElement("div");
-      item.className = "session-item";
-      item.dataset.id = s.session_id;
-
-      const titleEl = document.createElement("div");
-      titleEl.className = "session-item-title";
-      titleEl.textContent = s.title;
-
-      const metaEl = document.createElement("div");
-      metaEl.className = "session-item-meta";
-
-      const dateSpan = document.createElement("span");
-      dateSpan.textContent = formatSessionDate(s.date);
-
-      const summarySpan = document.createElement("span");
-      summarySpan.className = "session-item-summary";
-      summarySpan.textContent = s.summary !== "No summary available" ? s.summary.substring(0, 120) + (s.summary.length > 120 ? "..." : "") : "";
-
-      metaEl.appendChild(dateSpan);
-      metaEl.appendChild(summarySpan);
-
-      item.appendChild(titleEl);
-      item.appendChild(metaEl);
+      const item = renderSessionItem(s, formatSessionDate);
 
       // Delete button — shown on hover via CSS
       const deleteBtn = document.createElement("button");

@@ -582,7 +582,7 @@ newChatBtn?.addEventListener("click", async () => {
 });
 
 // Listen for background session analysis completion
-listen("sessions-updated", () => {
+listen(EVENTS.SESSIONS_UPDATED, () => {
   loadSessions().catch(e => console.error("Failed to reload sessions after update:", e));
 });
 
