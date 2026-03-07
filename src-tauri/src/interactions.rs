@@ -164,6 +164,10 @@ pub async fn log_interaction<R: Runtime>(
 // ============================================================================
 
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() {
+        return 0.0;
+    }
+
     let dot_product: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -363,15 +367,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cosine_similarity() {
-        let a = vec![1.0, 0.0, 0.0];
-        let b = vec![1.0, 0.0, 0.0]; // Identical
-        assert!((cosine_similarity(&a, &b) - 1.0).abs() < 1e-5);
+    fn test_cosine_similarity_comprehensive() {
+        // Test identical vectors
+        let vec_query = vec![1.0, 2.0, 3.0];
+        let vec_identical = vec![1.0, 2.0, 3.0];
+        assert!((cosine_similarity(&vec_query, &vec_identical) - 1.0).abs() < 1e-6);
 
-        let c = vec![0.0, 1.0, 0.0]; // Orthogonal
-        assert!((cosine_similarity(&a, &c) - 0.0).abs() < 1e-5);
+        // Test orthogonal vectors
+        let vec_a = vec![1.0, 0.0, 0.0];
+        let vec_orthogonal = vec![0.0, 1.0, 0.0];
+        assert!((cosine_similarity(&vec_a, &vec_orthogonal) - 0.0).abs() < 1e-6);
 
-        let d = vec![-1.0, 0.0, 0.0]; // Opposite
-        assert!((cosine_similarity(&a, &d) - -1.0).abs() < 1e-5);
+        // Test opposite vectors
+        let vec_opposite = vec![-1.0, 0.0, 0.0];
+        assert!((cosine_similarity(&vec_a, &vec_opposite) - (-1.0)).abs() < 1e-6);
+
+        // Test zero vector (should return 0.0, not NaN)
+        let vec_zero = vec![0.0, 0.0, 0.0];
+        assert_eq!(cosine_similarity(&vec_a, &vec_zero), 0.0);
+
+        // Test different length vectors (should return 0.0 as per updated logic)
+        let vec_short = vec![1.0, 2.0];
+        let vec_long = vec![1.0, 2.0, 3.0];
+        assert_eq!(cosine_similarity(&vec_short, &vec_long), 0.0);
     }
 }
