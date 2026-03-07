@@ -6,6 +6,8 @@
  * `get_available_models` Tauri command.
  */
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::LazyLock;
 
 /// Provider identifies which API endpoint handles this model
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,6 +228,40 @@ pub fn get_background_models() -> Vec<ModelInfo> {
             supports_vision: false, // Text-only
         },
     ]
+}
+
+/// Static registry mapping model IDs to (provider, supports_vision).
+/// Built once on first access from all model lists.
+static MODEL_REGISTRY: LazyLock<HashMap<String, (Provider, bool)>> = LazyLock::new(|| {
+    let mut map = HashMap::new();
+    for model in get_chat_models()
+        .into_iter()
+        .chain(get_vision_models())
+        .chain(get_background_models())
+    {
+        map.insert(model.id, (model.provider, model.supports_vision));
+    }
+    map
+});
+
+/// Check if a model ID corresponds to a Gemini provider model.
+/// Uses the model registry first; falls back to heuristic (no `/`, no `(Cerebras)`, no `(Groq)`).
+pub fn is_gemini_model(model_id: &str) -> bool {
+    if let Some((provider, _)) = MODEL_REGISTRY.get(model_id) {
+        return *provider == Provider::Gemini;
+    }
+
+    // Fallback heuristic for unknown model IDs
+    !model_id.contains('/') && !model_id.contains("(Cerebras)") && !model_id.contains("(Groq)")
+}
+
+/// Check if a model ID supports native vision (direct image processing).
+/// Returns false for unknown models (they will use the Vision LLM fallback).
+pub fn model_supports_vision(model_id: &str) -> bool {
+    MODEL_REGISTRY
+        .get(model_id)
+        .map(|(_, vision)| *vision)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

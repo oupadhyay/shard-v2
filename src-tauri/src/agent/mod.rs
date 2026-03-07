@@ -6,7 +6,7 @@ pub(crate) mod openrouter;
 mod types;
 
 pub use gemini::{construct_gemini_messages, parse_gemini_chunk, AgentEvent};
-pub use openrouter::{has_images, supports_tools, to_api_messages, to_multimodal_messages};
+pub use openrouter::{has_images, supports_tools, to_multimodal_messages};
 pub use types::*;
 
 use crate::integrations::{
@@ -491,9 +491,7 @@ impl Agent {
             .clone()
             .unwrap_or("gemini-2.5-flash-lite".to_string());
 
-        let is_gemini = !selected_model.contains("/")
-            && !selected_model.contains("(Cerebras)")
-            && !selected_model.contains("(Groq)");
+        let is_gemini = crate::models::is_gemini_model(&selected_model);
 
         let _continue_turn = if is_gemini {
             let api_key = config.gemini_api_key.as_ref().ok_or("No Gemini API key")?;
@@ -586,15 +584,18 @@ impl Agent {
 
         let mut history = self.history.lock().await;
 
-        // Determine model type
+        // Determine model type using the centralized registry
         let selected_model = config
             .selected_model
             .clone()
             .unwrap_or("gemini-2.5-flash-lite".to_string());
-        let is_gemini = !selected_model.contains("/");
+        let is_gemini = crate::models::is_gemini_model(&selected_model);
+        let has_native_vision = crate::models::model_supports_vision(&selected_model);
 
-        // Process images: upload to Gemini Files API if using Gemini model,
-        // or describe via Vision LLM for other providers
+        // Process images with 3-way routing:
+        //   1. Gemini: Upload via Files API (native multimodal with file URIs)
+        //   2. Vision-capable OpenRouter: Store base64, pass natively via to_multimodal_messages()
+        //   3. Non-vision model: Vision LLM fallback for text description + store base64 for history
         let mut image_descriptions: Vec<String> = Vec::new();
         let uploaded_images: Option<Vec<ImageAttachment>> = if let (Some(bases), Some(mimes)) =
             (images_base64.as_ref(), images_mime_types.as_ref())
@@ -606,7 +607,7 @@ impl Agent {
 
                 for (img_data, mime_type) in bases.iter().zip(mimes.iter()) {
                     let file_uri = if is_gemini {
-                        // Upload to Gemini Files API
+                        // Gemini: Upload to Files API for native multimodal
                         match crate::gemini_files::upload_image_to_gemini_files_api(
                             &self.http_client,
                             img_data,
@@ -629,14 +630,21 @@ impl Agent {
                                 ))
                             }
                         }
+                    } else if has_native_vision {
+                        // Vision-capable OpenRouter model: images will be sent natively
+                        // via to_multimodal_messages() as inline data URIs
+                        log::info!(
+                            "[Agent] Model {} supports vision — sending image natively",
+                            selected_model
+                        );
+                        None
                     } else {
-                        // For non-Gemini providers, use Vision LLM to process image WITH context
-                        // This passes the user's actual question for contextual understanding
+                        // Non-vision model: use Vision LLM to produce text description
                         match crate::integrations::vision_llm::process_image_with_context(
                             &self.http_client,
                             img_data,
                             mime_type,
-                            &message, // Pass user's question for contextual response
+                            &message,
                             config,
                         )
                         .await
@@ -657,9 +665,10 @@ impl Agent {
                                     .push("[Image attached but could not be analyzed]".to_string());
                             }
                         }
-                        None // No file URI for non-Gemini
+                        None
                     };
 
+                    // Always store image data on the attachment for history fidelity
                     attachments.push(ImageAttachment {
                         base64: img_data.clone(),
                         mime_type: mime_type.clone(),
@@ -673,8 +682,9 @@ impl Agent {
             None
         };
 
-        // For non-Gemini providers, prepend contextual image analysis to the message
-        let augmented_message = if !is_gemini && !image_descriptions.is_empty() {
+        // For non-vision models, prepend contextual image analysis to the message
+        let augmented_message = if !is_gemini && !has_native_vision && !image_descriptions.is_empty()
+        {
             let analysis = image_descriptions.join("\n\n");
             format!(
                 "[Visual Analysis]\n{}\n\n[User Message]\n{}",
@@ -934,10 +944,8 @@ impl Agent {
                 .clone()
                 .unwrap_or("gemini-2.5-flash-lite".to_string());
 
-            // Detect provider: Gemini models don't have slash or provider suffixes
-            let is_gemini = !selected_model.contains("/")
-                && !selected_model.contains("(Cerebras)")
-                && !selected_model.contains("(Groq)");
+            // Detect provider using centralized model registry
+            let is_gemini = crate::models::is_gemini_model(&selected_model);
 
             // Inject retry hint if pending (from previous failed attempt)
             if let Some(hint) = pending_retry_hint.take() {
@@ -1022,6 +1030,18 @@ impl Agent {
                         continue;
                     }
                 }
+            }
+
+            // Notify frontend when retries are exhausted
+            if !continue_turn && retry_count >= max_retries && retry_count > 0 {
+                let exhausted_event = serde_json::json!({
+                    "reason": "empty_response",
+                    "attempts": retry_count,
+                    "max": max_retries
+                });
+                app_handle
+                    .emit("agent-retry-exhausted", exhausted_event.to_string())
+                    .ok();
             }
 
             if !continue_turn {
@@ -1134,8 +1154,10 @@ impl Agent {
             .execute_tool_uncached(app_handle, function_name, args, config)
             .await;
 
-        // Cache the result if eligible
-        crate::cache::cache_result(app_handle, function_name, args, &result);
+        // Cache the result if eligible (never cache errors)
+        if !result.starts_with("Error") {
+            crate::cache::cache_result(app_handle, function_name, args, &result);
+        }
 
         result
     }
@@ -1227,6 +1249,68 @@ impl Agent {
                         format!("Read URL Results for {}:\n\n{}", url, markdown)
                     }
                     Err(e) => format!("Error reading URL: {}", e),
+                }
+            }
+            "youtube_transcript" => {
+                let video = args["video"].as_str().unwrap_or_default();
+                let video_id = match crate::integrations::youtube::extract_video_id(video) {
+                    Some(id) => id,
+                    None => return format!("Error: Could not extract a YouTube video ID from '{}'", video),
+                };
+                match crate::integrations::youtube::fetch_transcript(&self.http_client, &video_id).await {
+                    Ok(result) => {
+                        let formatted = crate::integrations::youtube::format_transcript(
+                            &result.segments,
+                            result.title.as_deref(),
+                            result.channel.as_deref(),
+                        );
+                        let title_label = result.title.as_deref().unwrap_or(&video_id);
+                        let video_link = format!("https://youtu.be/{}", video_id);
+                        // Truncate very long transcripts to avoid blowing up context,
+                        // but generate a chunked LLM summary of the full content so nothing is lost.
+                        let char_count = formatted.chars().count();
+                        if char_count > 30_000 {
+                            // Find byte offset of the 30,000th character
+                            let truncate_at = formatted
+                                .char_indices()
+                                .nth(30_000)
+                                .map(|(i, _)| i)
+                                .unwrap_or(formatted.len());
+
+                            // Summarize the full transcript via background LLM (chunked for long transcripts)
+                            let summary = self.summarize_long_transcript(config, &formatted, title_label).await;
+
+                            let summary_section = match &summary {
+                                Ok(s) => format!(
+                                    "\n\n--- LLM Summary of Full Video ---\n\n{}\n\n--- End Summary ---",
+                                    s
+                                ),
+                                Err(e) => {
+                                    log::warn!("[YouTube] Failed to summarize transcript: {}", e);
+                                    String::new()
+                                }
+                            };
+
+                            format!(
+                                "YouTube Transcript — {} ({})\n{} segments, truncated\n\n{}...\n\n[Transcript truncated at ~30,000 chars. Total length: {} chars]{}",
+                                title_label,
+                                video_link,
+                                result.segments.len(),
+                                &formatted[..truncate_at],
+                                char_count,
+                                summary_section,
+                            )
+                        } else {
+                            format!(
+                                "YouTube Transcript — {} ({})\n{} segments\n\n{}",
+                                title_label,
+                                video_link,
+                                result.segments.len(),
+                                formatted
+                            )
+                        }
+                    }
+                    Err(e) => format!("Error fetching transcript: {}", e),
                 }
             }
             "save_memory" => {
@@ -1533,6 +1617,144 @@ impl Agent {
         }
 
         Ok(false)
+    }
+
+    /// Summarize a long YouTube transcript using the background LLM.
+    ///
+    /// For transcripts that exceed the background model's context window, splits the
+    /// transcript into chunks, summarizes each independently, then produces a final
+    /// combined summary. This ensures no information is lost regardless of transcript length.
+    ///
+    /// Chunk size is set conservatively at 80,000 chars (~20K tokens) to leave room for
+    /// the system prompt and response within the 128K-token context of background models.
+    async fn summarize_long_transcript(
+        &self,
+        config: &crate::config::AppConfig,
+        full_transcript: &str,
+        title: &str,
+    ) -> Result<String, String> {
+        let model = config
+            .background_model
+            .as_deref()
+            .unwrap_or("gpt-oss-120b (Groq)");
+
+        log::info!(
+            "[YouTube] Summarizing long transcript ({} chars) for \"{}\" via {}",
+            full_transcript.chars().count(),
+            title,
+            model
+        );
+
+        // ~20K tokens worth of transcript per chunk, leaving headroom for system prompt + response
+        const CHUNK_SIZE: usize = 80_000;
+
+        // Split transcript into chunks at UTF-8-safe boundaries
+        let chunks = self.split_transcript_chunks(full_transcript, CHUNK_SIZE);
+
+        if chunks.len() == 1 {
+            // Small enough to summarize in one shot
+            let system_prompt = "You are a precise summarization assistant. Given a full YouTube video transcript, produce a comprehensive summary that captures ALL key points, arguments, examples, and conclusions. Organize the summary with clear sections. Do not omit any important topics or details — the user will only see the first portion of the timestamped transcript plus your summary for the rest.";
+            let user_message = format!(
+                "Summarize the following YouTube video transcript comprehensively. The video is titled \"{}\".\n\n---\n{}",
+                title, full_transcript
+            );
+            return crate::background::call_llm_oneshot(
+                &self.http_client, config, model, system_prompt, &user_message, 4000, 0.3,
+            ).await;
+        }
+
+        // Multi-chunk: summarize each chunk, then combine
+        log::info!(
+            "[YouTube] Transcript split into {} chunks for summarization",
+            chunks.len()
+        );
+
+        let chunk_system = "You are a precise summarization assistant. You will receive one section of a YouTube video transcript. Produce a detailed summary of THIS section only, capturing all key points, arguments, examples, data, and conclusions. Be thorough — your output will be combined with summaries of other sections.";
+
+        let mut chunk_summaries = Vec::with_capacity(chunks.len());
+        for (i, chunk) in chunks.iter().enumerate() {
+            let user_message = format!(
+                "Summarize section {} of {} from the YouTube video \"{}\". Capture every important detail.\n\n---\n{}",
+                i + 1,
+                chunks.len(),
+                title,
+                chunk
+            );
+
+            let summary = crate::background::call_llm_oneshot(
+                &self.http_client, config, model, chunk_system, &user_message, 3000, 0.3,
+            ).await?;
+
+            log::info!(
+                "[YouTube] Chunk {}/{} summarized ({} chars)",
+                i + 1, chunks.len(), summary.len()
+            );
+            chunk_summaries.push(format!("## Section {} of {}\n{}", i + 1, chunks.len(), summary));
+        }
+
+        // Final pass: combine chunk summaries into one coherent summary
+        let combined = chunk_summaries.join("\n\n");
+        let merge_system = "You are a precise summarization assistant. You will receive multiple section summaries from a single YouTube video. Merge them into ONE coherent, comprehensive summary. Preserve all important details, eliminate redundancy, and organize with clear sections. The user will rely on this as a complete representation of the video's content.";
+        let merge_message = format!(
+            "Merge the following section summaries from the YouTube video \"{}\" into a single comprehensive summary.\n\n---\n{}",
+            title, combined
+        );
+
+        crate::background::call_llm_oneshot(
+            &self.http_client, config, model, merge_system, &merge_message, 4000, 0.3,
+        ).await
+    }
+
+    /// Split a transcript into chunks of approximately `max_chars` Unicode characters each.
+    /// Splits on newline boundaries to avoid cutting mid-line.
+    fn split_transcript_chunks<'a>(&self, text: &'a str, max_chars: usize) -> Vec<&'a str> {
+        let total_chars = text.chars().count();
+        if total_chars <= max_chars {
+            return vec![text];
+        }
+
+        // Precompute byte offsets for each character boundary
+        let char_offsets: Vec<usize> = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(text.len()))
+            .collect();
+
+        let mut chunks = Vec::new();
+        let mut start_char = 0;
+
+        while start_char < total_chars {
+            let remaining_chars = total_chars - start_char;
+            if remaining_chars <= max_chars {
+                let byte_start = char_offsets[start_char];
+                chunks.push(&text[byte_start..]);
+                break;
+            }
+
+            let end_char = start_char + max_chars;
+            let byte_start = char_offsets[start_char];
+            let byte_end = char_offsets[end_char];
+
+            // Try to split on the last newline before the character boundary
+            let chunk_slice = &text[byte_start..byte_end];
+            let split_byte = if let Some(nl_pos) = chunk_slice.rfind('\n') {
+                byte_start + nl_pos + '\n'.len_utf8()
+            } else {
+                byte_end
+            };
+
+            chunks.push(&text[byte_start..split_byte]);
+
+            // Find the char index corresponding to split_byte
+            let next_start_char = char_offsets[start_char..]
+                .iter()
+                .position(|&offset| offset >= split_byte)
+                .map(|pos| start_char + pos)
+                .unwrap_or(total_chars);
+            start_char = next_start_char;
+        }
+
+        chunks
     }
 
     async fn process_gemini_turn<R: Runtime>(

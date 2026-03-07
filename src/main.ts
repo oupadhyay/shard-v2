@@ -5,7 +5,7 @@ import DOMPurify from "dompurify";
 import "katex/dist/katex.min.css";
 
 // Internal modules
-import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, AppConfig, ModelsResponse } from "./types";
+import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, ModelsResponse } from "./types";
 import { type SessionSummary, renderSessionItem } from "./ui/sessions";
 import { ChatState } from "./state";
 import { EVENTS } from "./events";
@@ -140,42 +140,12 @@ async function handleInput(skipUi = false) {
   stopBtn.dataset.mode = "stop";
 
   try {
-    // Include image data or OCR text based on model
+    // Always send image binary data to backend — provider routing happens server-side
     const messagePayload: ChatMessagePayload = { message: skipUi ? state.lastUserMessage : text };
 
     if (imagesToSend.length > 0) {
-      // For OpenRouter models (don't support images), prepend OCR text
-      // For Gemini models, send image data
-      // Simple heuristic: if there's a slash in model name, it's OpenRouter
-      const config = await invoke<AppConfig>("get_config");
-      const selectedModel = config?.selected_model || "";
-
-      // Heuristic: If it's not a Gemini model, we treat it as OpenRouter/Groq/etc and send OCR text
-      if (!selectedModel.toLowerCase().includes("gemini")) {
-        // Wait for any pending OCR
-        const pendingImages = imagesToSend.filter(img => img.ocrPromise);
-        if (pendingImages.length > 0) {
-          await Promise.all(imagesToSend.map(async (img) => {
-            if (img.ocrPromise) {
-              try {
-                const text = await img.ocrPromise;
-                img.ocrText = text;
-              } catch (e) {
-                console.error("OCR failed during wait:", e);
-                img.ocrText = "[OCR failed]";
-              }
-            }
-          }));
-        }
-
-        // OpenRouter - use OCR text for all images
-        const ocrTexts = imagesToSend.map((img) => img.ocrText).join("\n---\n");
-        messagePayload.message = `[Image OCR]:\n${ocrTexts}\n\n${messagePayload.message}`;
-      } else {
-        // Gemini - send image data as arrays
-        messagePayload.imagesBase64 = imagesToSend.map((img) => img.base64);
-        messagePayload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
-      }
+      messagePayload.imagesBase64 = imagesToSend.map((img) => img.base64);
+      messagePayload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
     }
 
     console.log("Sending payload to backend:", {
@@ -796,6 +766,18 @@ listen<string>(EVENTS.AGENT_RETRY, (event) => {
     chatArea.scrollTop = chatArea.scrollHeight;
   } catch (e) {
     console.error("[Agent Retry] Failed to parse retry event:", e);
+  }
+});
+
+// Listen for retry exhaustion (best-effort response stays, just clean up indicator)
+listen<string>(EVENTS.AGENT_RETRY_EXHAUSTED, (event) => {
+  try {
+    const payload = JSON.parse(event.payload);
+    console.log("[Agent Retry] Retries exhausted:", payload);
+    const loadingIndicator = chatArea.querySelector("#loading-indicator");
+    if (loadingIndicator) loadingIndicator.remove();
+  } catch (e) {
+    console.error("[Agent Retry] Failed to parse exhausted event:", e);
   }
 });
 

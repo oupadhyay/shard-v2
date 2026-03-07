@@ -164,6 +164,31 @@ pub async fn call_background_llm(
     model: &str,
     prompt: &str,
 ) -> Result<String, String> {
+    call_llm_oneshot(
+        http_client,
+        config,
+        model,
+        "You are a memory management assistant. Analyze interaction logs and provide structured JSON responses. Be concise and accurate.",
+        prompt,
+        2000,
+        0.3,
+    )
+    .await
+}
+
+/// General-purpose one-shot LLM call with a custom system prompt.
+///
+/// Uses the background model provider (OpenRouter/Groq/Cerebras).
+/// Returns the text content of the first response choice.
+pub async fn call_llm_oneshot(
+    http_client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    model: &str,
+    system_prompt: &str,
+    user_message: &str,
+    max_tokens: u32,
+    temperature: f64,
+) -> Result<String, String> {
     let (provider_config, api_key) = config.get_model_provider_config(model, "background jobs")?;
 
     let payload = serde_json::json!({
@@ -171,15 +196,15 @@ pub async fn call_background_llm(
         "messages": [
             {
                 "role": "system",
-                "content": "You are a memory management assistant. Analyze interaction logs and provide structured JSON responses. Be concise and accurate."
+                "content": system_prompt
             },
             {
                 "role": "user",
-                "content": prompt
+                "content": user_message
             }
         ],
-        "temperature": 0.3,
-        "max_tokens": 2000
+        "temperature": temperature,
+        "max_tokens": max_tokens
     });
 
     let res = http_client

@@ -147,26 +147,12 @@ async function handleInput(skipUi = false) {
   stopBtn.dataset.mode = "stop";
 
   try {
+    // Always send image binary data to backend — provider routing happens server-side
     const payload: Record<string, unknown> = { message: skipUi ? state.lastUserMessage : text };
 
     if (imagesToSend.length > 0) {
-      const config = await invoke<AppConfig>("get_config");
-      const selectedModel = config?.selected_model || "";
-      if (!selectedModel.toLowerCase().includes("gemini")) {
-        await Promise.all(
-          imagesToSend.map(async (img) => {
-            if (img.ocrPromise) {
-              try { img.ocrText = await img.ocrPromise; }
-              catch { img.ocrText = "[OCR failed]"; }
-            }
-          })
-        );
-        const ocrTexts = imagesToSend.map((img) => img.ocrText).join("\n---\n");
-        payload.message = `[Image OCR]:\n${ocrTexts}\n\n${payload.message}`;
-      } else {
-        payload.imagesBase64 = imagesToSend.map((img) => img.base64);
-        payload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
-      }
+      payload.imagesBase64 = imagesToSend.map((img) => img.base64);
+      payload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
     }
 
     await invoke("chat", payload);
@@ -818,6 +804,18 @@ listen<string>(EVENTS.AGENT_RETRY, (event) => {
     chatArea.scrollTop = chatArea.scrollHeight;
   } catch (e) {
     console.error("[Agent Retry] Failed to parse retry event:", e);
+  }
+});
+
+// Listen for retry exhaustion (best-effort response stays, just clean up indicator)
+listen<string>(EVENTS.AGENT_RETRY_EXHAUSTED, (event) => {
+  try {
+    const payload = JSON.parse(event.payload);
+    console.log("[Agent Retry] Retries exhausted:", payload);
+    const loadingIndicator = chatArea.querySelector("#loading-indicator");
+    if (loadingIndicator) loadingIndicator.remove();
+  } catch (e) {
+    console.error("[Agent Retry] Failed to parse exhausted event:", e);
   }
 });
 

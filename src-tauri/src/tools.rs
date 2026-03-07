@@ -24,6 +24,7 @@ pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
         "unload_skill",
         "list_skills",
         "search_wikipedia",
+        "youtube_transcript",
     ];
 
     let all_tools = vec![
@@ -134,6 +135,22 @@ pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
                         "url": { "type": "string", "description": "The full HTTPS URL of the web page to read." },
                     },
                     "required": ["url"],
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "youtube_transcript".to_string(),
+                description: "Get the transcript/captions of a YouTube video. Accepts a YouTube URL or video ID. Returns timestamped text. Use this when the user asks about the content of a YouTube video, wants a summary, or references a YouTube link.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "video": { "type": "string", "description": "YouTube video URL (e.g. 'https://www.youtube.com/watch?v=dQw4w9WgXcQ') or video ID (e.g. 'dQw4w9WgXcQ')" },
+                    },
+                    "required": ["video"],
                     "additionalProperties": false
                 }),
                 strict: Some(true),
@@ -291,7 +308,11 @@ pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
         },
     ];
 
-    all_tools.into_iter().filter(|t| {
-        global_tools.contains(&t.function.name.as_str()) || required_tools.contains(&t.function.name)
-    }).collect()
+    all_tools
+        .into_iter()
+        .filter(|t| {
+            global_tools.contains(&t.function.name.as_str())
+                || required_tools.contains(&t.function.name)
+        })
+        .collect()
 }

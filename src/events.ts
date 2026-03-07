@@ -3,6 +3,7 @@
  */
 export const EVENTS = {
   AGENT_RETRY: "agent-retry",
+  AGENT_RETRY_EXHAUSTED: "agent-retry-exhausted",
   AGENT_RESPONSE_CHUNK: "agent-response-chunk",
   AGENT_REASONING_CHUNK: "agent-reasoning-chunk",
   AGENT_TOOL_CALL: "agent-tool-call",

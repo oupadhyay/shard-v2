@@ -1,22 +1,7 @@
 // OpenRouter API utilities - message conversion helpers
 // Supports both text-only and multimodal (text + image) messages
 
-#![allow(dead_code)]
-
 use super::types::*;
-
-/// Convert chat messages to OpenRouter/OpenAI API format (text-only)
-pub fn to_api_messages(messages: &[ChatMessage]) -> Vec<ApiChatMessage> {
-    messages
-        .iter()
-        .map(|msg| ApiChatMessage {
-            role: msg.role.clone(),
-            content: msg.content.clone(),
-            tool_calls: msg.tool_calls.clone(),
-            tool_call_id: msg.tool_call_id.clone(),
-        })
-        .collect()
-}
 
 /// Convert chat messages to multimodal API format with image support
 /// Returns a JSON Value that can be used directly in the request
