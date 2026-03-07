@@ -63,7 +63,8 @@ describe('Sessions UI - DOM-based rendering', () => {
     });
 
     expect(item.dataset.id).toBe('"><script>alert(1)</script>');
-    expect(item.outerHTML).not.toContain('data-id=""><script>');
+    expect(item.querySelector('script')).toBeNull();
+    expect(item.getAttribute('data-id')).toBe('"><script>alert(1)</script>');
   });
 
   it('truncates long summaries', () => {

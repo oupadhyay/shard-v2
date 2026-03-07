@@ -27,6 +27,7 @@ export function renderSessionItem(s: SessionSummary, formatDateFn: (d: string) =
 
   const titleEl = document.createElement("div");
   titleEl.className = "session-item-title";
+  // DOMPurify is not needed here: textContent does not parse HTML, so it is inherently XSS-safe.
   titleEl.textContent = s.title;
 
   const metaEl = document.createElement("div");

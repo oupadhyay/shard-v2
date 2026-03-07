@@ -367,7 +367,7 @@ async fn open_dedicated_window(app_handle: AppHandle) -> Result<(), String> {
             // Best effort so we don't return an error and confuse the UI if it fails.
             if let Some(win) = main_win {
                 if let Err(e) = win.hide() {
-                    eprintln!("Warning: Failed to hide main window after creating dedicated window: {}", e);
+                    log::warn!("Failed to hide main window after creating dedicated window: {}", e);
                 }
             }
         }
