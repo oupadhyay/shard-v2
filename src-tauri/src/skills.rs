@@ -38,14 +38,38 @@ pub fn list_available_skills() -> Vec<String> {
     skills
 }
 
-/// Reads the content of a specific skill by its name.
-pub fn get_skill_content(name: &str) -> Option<String> {
+/// Validates a filename to ensure it's a single "normal" path component.
+/// This prevents path traversal by rejecting names with separators, ".." components, etc.
+pub(crate) fn is_safe_filename(name: &str) -> bool {
     if name.is_empty() {
-        return None;
+        return false;
     }
 
-    // Prevent path traversal
-    if name.contains('/') || name.contains('\\') || name.contains("..") {
+    // Explicitly block separators, drive prefixes, and control characters
+    // that might allow escaping the intended directory.
+    if name.contains('/')
+        || name.contains('\\')
+        || name.contains(':')
+        || name.chars().any(|c| c.is_control())
+    {
+        return false;
+    }
+
+    let path = std::path::Path::new(name);
+    let mut components = path.components();
+
+    match components.next() {
+        Some(std::path::Component::Normal(c)) => {
+            // Must be a single normal component matching the input exactly.
+            c.to_str() == Some(name) && components.next().is_none()
+        }
+        _ => false,
+    }
+}
+
+/// Reads the content of a specific skill by its name.
+pub fn get_skill_content(name: &str) -> Option<String> {
+    if !is_safe_filename(name) {
         return None;
     }
 
