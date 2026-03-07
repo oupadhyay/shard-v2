@@ -341,14 +341,12 @@ async fn open_dedicated_window(app_handle: AppHandle) -> Result<(), String> {
     }
 
     // Hide the ambient panel (frontend has already faded it out).
-    if let Some(main_win) = app_handle.get_webview_window("main") {
-        main_win.hide().map_err(|e| e.to_string())?;
-    }
+    let main_win = app_handle.get_webview_window("main");
 
     // Create the dedicated window. It loads the same Vite dev server / dist
     // but at `dedicated.html`, which uses a separate entry point with the
     // full session-sidebar layout.
-    tauri::WebviewWindowBuilder::new(
+    let result = tauri::WebviewWindowBuilder::new(
         &app_handle,
         "dedicated",
         tauri::WebviewUrl::App("dedicated.html".into()),
@@ -361,8 +359,20 @@ async fn open_dedicated_window(app_handle: AppHandle) -> Result<(), String> {
     .transparent(true)
     .shadow(true)
     .center()
-    .build()
-    .map_err(|e| e.to_string())?;
+    .build();
+
+    match result {
+        Ok(_) => {
+            // Only hide main window after dedicated window is successfully created.
+            // Best effort so we don't return an error and confuse the UI if it fails.
+            if let Some(win) = main_win {
+                if let Err(e) = win.hide() {
+                    log::warn!("Failed to hide main window after creating dedicated window: {}", e);
+                }
+            }
+        }
+        Err(e) => return Err(e.to_string()),
+    }
 
     Ok(())
 }

@@ -6,6 +6,7 @@ import "katex/dist/katex.min.css";
 
 // Internal modules
 import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, AppConfig, ModelsResponse } from "./types";
+import { type SessionSummary, renderSessionItem } from "./ui/sessions";
 import { ChatState } from "./state";
 import { EVENTS } from "./events";
 import {
@@ -128,7 +129,6 @@ async function handleInput(skipUi = false) {
 
   // Reset web search container for new response
   resetWebSearchContainer();
-
 
   // Clear KaTeX errors for new response (for auto-retry tracking)
   clearKatexErrors();
@@ -340,8 +340,6 @@ inputField.addEventListener("paste", async (e) => {
       // Create object URL for instant preview
       const objectUrl = URL.createObjectURL(file);
       const mimeType = file.type;
-
-
 
       // Define the async process immediately so the promise exists synchronously
       const ocrTask = async () => {
@@ -802,7 +800,7 @@ listen<string>(EVENTS.AGENT_RETRY, (event) => {
 });
 
 // Listen for background cron jobs starting
-listen<string>("agent-cron-started", (event) => {
+listen<string>(EVENTS.AGENT_CRON_STARTED, (event) => {
   const prompt = DOMPurify.sanitize(event.payload);
   resetWebSearchContainer();
   addMessage(chatArea, "cron", prompt, undefined);
@@ -1267,8 +1265,6 @@ interface ScreenContext {
   ocr_text: string;
 }
 
-
-
 // Create suggestions container (positioned above bottom-bar)
 const suggestionsContainer = document.createElement("div");
 suggestionsContainer.className = "suggestion-pills hidden";
@@ -1279,8 +1275,6 @@ document.getElementById("app")?.querySelector(".bottom-bar")?.before(suggestions
 inputField.addEventListener("input", () => {
   hideSuggestions();
 });
-
-
 
 function showSuggestions(suggestions: string[]) {
   if (suggestions.length === 0) return;
@@ -1444,10 +1438,6 @@ const checkProviderConflict = () => {
 modelInput.addEventListener("change", checkProviderConflict);
 backgroundModelInput.addEventListener("change", checkProviderConflict);
 
-
-
-
-
 settingsBtn.addEventListener("click", async () => {
   try {
     // Load models from backend first
@@ -1543,31 +1533,10 @@ sessionsBtn.addEventListener("click", async () => {
     }
 
     sessionsListContainer.innerHTML = '';
-    const sessions = JSON.parse(resultString);
-    sessions.forEach((s: any) => {
-      const item = document.createElement("div");
-      item.className = "session-item";
-      item.dataset.id = s.session_id;
+    const sessions: SessionSummary[] = JSON.parse(resultString);
 
-      const titleEl = document.createElement("div");
-      titleEl.className = "session-item-title";
-      titleEl.textContent = s.title;
-
-      const metaEl = document.createElement("div");
-      metaEl.className = "session-item-meta";
-
-      const dateSpan = document.createElement("span");
-      dateSpan.textContent = formatSessionDate(s.date);
-
-      const summarySpan = document.createElement("span");
-      summarySpan.className = "session-item-summary";
-      summarySpan.textContent = s.summary !== "No summary available" ? s.summary.substring(0, 120) + (s.summary.length > 120 ? "..." : "") : "";
-
-      metaEl.appendChild(dateSpan);
-      metaEl.appendChild(summarySpan);
-
-      item.appendChild(titleEl);
-      item.appendChild(metaEl);
+    sessions.forEach((s) => {
+      const item = renderSessionItem(s, formatSessionDate);
 
       // Delete button — shown on hover via CSS
       const deleteBtn = document.createElement("button");
@@ -1604,7 +1573,6 @@ sessionsBtn.addEventListener("click", async () => {
       sessionsListContainer.appendChild(item);
     });
 
-
     // Add click listeners
     sessionsListContainer.querySelectorAll('.session-item').forEach(el => {
       el.addEventListener('click', async (e) => {
@@ -1628,7 +1596,7 @@ sessionsBtn.addEventListener("click", async () => {
 });
 
 // Refresh sessions list if modal is open and we receive a backend update
-listen("sessions-updated", () => {
+listen(EVENTS.SESSIONS_UPDATED, () => {
   if (!sessionsModal.classList.contains("hidden")) {
     sessionsBtn.click();
   }
