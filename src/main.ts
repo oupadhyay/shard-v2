@@ -18,7 +18,7 @@ import {
   updateThinkingElement,
   createToolCallElement,
   updateToolResult,
-  addMessage as addMessageToChat,
+  addMessage,
   getOrCreateWebSearchContainer,
   resetWebSearchContainer,
   isWebSearchTool,
@@ -80,14 +80,6 @@ document.addEventListener("click", (e) => {
   }
 });
 
-function addMessage(
-  role: "user" | "assistant" | "cron",
-  content: string,
-  images?: { base64: string; mimeType: string }[],
-  container: HTMLElement | DocumentFragment = chatArea,
-) {
-  addMessageToChat(container, role, content, images);
-}
 
 // Helper: Handle Input
 async function handleInput(skipUi = false) {
@@ -112,7 +104,7 @@ async function handleInput(skipUi = false) {
     inputField.value = "";
     inputField.style.height = "auto"; // Reset height
     // Pass all images for display
-    addMessage("user", text, currentImages);
+    addMessage(chatArea, "user", text, currentImages);
 
     // Clear image preview immediately to prevent duplication
     state.attachedImages = [];
@@ -643,7 +635,7 @@ async function loadChatHistory() {
         // Reset web search container for each user message (new turn)
         resetWebSearchContainer();
         // Pass all images if present in history
-        addMessage(displayRole as "user" | "assistant" | "cron", msg.content || "", msg.images, fragment);
+        addMessage(fragment, displayRole as "user" | "assistant" | "cron", msg.content || "", msg.images);
       } else if (displayRole === "assistant") {
         // 1. Render Reasoning (if present)
         if (msg.reasoning) {
@@ -690,7 +682,7 @@ async function loadChatHistory() {
 
         // 3. Render Assistant Content (if present)
         if (msg.content) {
-          addMessage("assistant", msg.content, msg.images, fragment);
+          addMessage(fragment, "assistant", msg.content, msg.images);
         }
       } else if (msg.role === "tool") {
         // Tool result message - try to find matching element by ID
@@ -813,7 +805,7 @@ listen<string>(EVENTS.AGENT_RETRY, (event) => {
 listen<string>("agent-cron-started", (event) => {
   const prompt = DOMPurify.sanitize(event.payload);
   resetWebSearchContainer();
-  addMessage("cron", prompt, undefined);
+  addMessage(chatArea, "cron", prompt, undefined);
 });
 
 // Listen for agent streaming response chunks
