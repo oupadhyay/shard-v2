@@ -799,6 +799,18 @@ listen<string>(EVENTS.AGENT_RETRY, (event) => {
   }
 });
 
+// Listen for retry exhaustion (best-effort response stays, just clean up indicator)
+listen<string>(EVENTS.AGENT_RETRY_EXHAUSTED, (event) => {
+  try {
+    const payload = JSON.parse(event.payload);
+    console.log("[Agent Retry] Retries exhausted:", payload);
+    const loadingIndicator = chatArea.querySelector("#loading-indicator");
+    if (loadingIndicator) loadingIndicator.remove();
+  } catch (e) {
+    console.error("[Agent Retry] Failed to parse exhausted event:", e);
+  }
+});
+
 // Listen for background cron jobs starting
 listen<string>(EVENTS.AGENT_CRON_STARTED, (event) => {
   const prompt = DOMPurify.sanitize(event.payload);

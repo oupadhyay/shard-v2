@@ -1024,6 +1024,18 @@ impl Agent {
                 }
             }
 
+            // Notify frontend when retries are exhausted
+            if !continue_turn && retry_count >= max_retries && retry_count > 0 {
+                let exhausted_event = serde_json::json!({
+                    "reason": "empty_response",
+                    "attempts": retry_count,
+                    "max": max_retries
+                });
+                app_handle
+                    .emit("agent-retry-exhausted", exhausted_event.to_string())
+                    .ok();
+            }
+
             if !continue_turn {
                 break;
             }

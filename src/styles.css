@@ -1007,6 +1007,17 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* Loading dots animation for retry indicator */
+.loading-dots {
+  color: var(--text-secondary);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
 .stop-btn:hover {
   background: rgba(255, 255, 255, 0.15);
   border-color: var(--border-default);
