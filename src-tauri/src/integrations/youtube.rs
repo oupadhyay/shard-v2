@@ -70,6 +70,12 @@ pub fn extract_video_id(input: &str) -> Option<String> {
 /// Subset of yt-dlp JSON output we care about.
 #[derive(Debug, Deserialize)]
 struct YtDlpMetadata {
+    /// Video title.
+    #[serde(default)]
+    title: Option<String>,
+    /// Channel/uploader name.
+    #[serde(default)]
+    channel: Option<String>,
     /// Manually uploaded subtitles, keyed by language code.
     #[serde(default)]
     subtitles: std::collections::HashMap<String, Vec<SubtitleEntry>>,
@@ -114,6 +120,14 @@ pub struct TimedSegment {
     pub text: String,
 }
 
+/// Result of fetching a transcript, including video metadata.
+#[derive(Debug)]
+pub struct TranscriptResult {
+    pub title: Option<String>,
+    pub channel: Option<String>,
+    pub segments: Vec<TimedSegment>,
+}
+
 // ── Core logic ──────────────────────────────────────────────────────
 
 /// Fetch the transcript for a YouTube video.
@@ -123,12 +137,15 @@ pub struct TimedSegment {
 pub async fn fetch_transcript(
     client: &Client,
     video_id: &str,
-) -> Result<Vec<TimedSegment>, String> {
+) -> Result<TranscriptResult, String> {
     log::info!("[YouTube] Fetching transcript for video: {}", video_id);
 
     // 1. Run yt-dlp to get video metadata JSON
     let video_url = format!("https://www.youtube.com/watch?v={}", video_id);
     let metadata = run_ytdlp(&video_url).await?;
+
+    let title = metadata.title.clone();
+    let channel = metadata.channel.clone();
 
     // 2. Pick the best caption track URL (srv1 XML format)
     let caption_url = pick_caption_url(&metadata)?;
@@ -176,19 +193,26 @@ pub async fn fetch_transcript(
     }
 
     log::info!(
-        "[YouTube] Parsed {} transcript segments",
-        segments.len()
+        "[YouTube] Parsed {} transcript segments for \"{}\"",
+        segments.len(),
+        title.as_deref().unwrap_or("unknown")
     );
 
-    Ok(segments)
+    Ok(TranscriptResult {
+        title,
+        channel,
+        segments,
+    })
 }
 
 /// Run `yt-dlp -j <url>` and parse the JSON output.
+/// Times out after 30 seconds to prevent indefinite hangs.
 async fn run_ytdlp(video_url: &str) -> Result<YtDlpMetadata, String> {
-    let output = tokio::process::Command::new("yt-dlp")
+    let mut child = tokio::process::Command::new("yt-dlp")
         .args(["-j", "--no-warnings", "--skip-download", video_url])
-        .output()
-        .await
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 "yt-dlp is not installed. Install it with: brew install yt-dlp (macOS) or pip install yt-dlp".to_string()
@@ -197,17 +221,41 @@ async fn run_ytdlp(video_url: &str) -> Result<YtDlpMetadata, String> {
             }
         })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    // Grab stdout/stderr handles before awaiting, so we retain access to `child` for kill.
+    let mut stdout = child.stdout.take().ok_or("Failed to capture yt-dlp stdout")?;
+    let mut stderr = child.stderr.take().ok_or("Failed to capture yt-dlp stderr")?;
+
+    // Wait for the process with a 30-second timeout.
+    // On timeout, explicitly kill the child to prevent orphan OS processes.
+    let timeout = std::time::Duration::from_secs(30);
+    let status = tokio::select! {
+        _ = tokio::time::sleep(timeout) => {
+            let _ = child.kill().await;
+            return Err("yt-dlp timed out after 30 seconds".to_string());
+        }
+        result = child.wait() => {
+            result.map_err(|e| format!("Failed to run yt-dlp: {}", e))?
+        }
+    };
+
+    // Read captured output after process exits
+    use tokio::io::AsyncReadExt;
+    let mut stdout_buf = Vec::new();
+    let mut stderr_buf = Vec::new();
+    stdout.read_to_end(&mut stdout_buf).await.map_err(|e| format!("Failed to read yt-dlp stdout: {}", e))?;
+    stderr.read_to_end(&mut stderr_buf).await.map_err(|e| format!("Failed to read yt-dlp stderr: {}", e))?;
+
+    if !status.success() {
+        let stderr_str = String::from_utf8_lossy(&stderr_buf);
         return Err(format!(
             "yt-dlp failed (exit {}): {}",
-            output.status.code().unwrap_or(-1),
-            stderr.trim()
+            status.code().unwrap_or(-1),
+            stderr_str.trim()
         ));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(&stdout)
+    let stdout_str = String::from_utf8_lossy(&stdout_buf);
+    serde_json::from_str(&stdout_str)
         .map_err(|e| format!("Failed to parse yt-dlp JSON output: {}", e))
 }
 
@@ -283,25 +331,54 @@ fn pick_caption_url(metadata: &YtDlpMetadata) -> Result<String, String> {
     Err("No captions available for this video. The video may not have subtitles or closed captions.".to_string())
 }
 
+/// Format a duration in seconds to a human-readable timestamp.
+/// When `force_hours` is true, always uses HH:MM:SS format.
+/// Otherwise uses HH:MM:SS for durations >= 1 hour, MM:SS for shorter.
+fn format_timestamp(total_secs: u32, force_hours: bool) -> String {
+    let hours = total_secs / 3600;
+    let mins = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
+    if force_hours || hours > 0 {
+        format!("{:02}:{:02}:{:02}", hours, mins, secs)
+    } else {
+        format!("{:02}:{:02}", mins, secs)
+    }
+}
+
 /// Format transcript segments into a readable string with timestamps.
-pub fn format_transcript(segments: &[TimedSegment]) -> String {
+/// Includes video metadata header if title/channel are provided.
+pub fn format_transcript(
+    segments: &[TimedSegment],
+    title: Option<&str>,
+    channel: Option<&str>,
+) -> String {
     let mut result = String::new();
 
-    // Compute total video duration from last segment
-    if let Some(last) = segments.last() {
-        let total_secs = (last.start_secs + last.duration_secs) as u32;
-        let total_mins = total_secs / 60;
-        let total_rem = total_secs % 60;
-        result.push_str(&format!(
-            "Duration: {:02}:{:02}\n\n",
-            total_mins, total_rem
-        ));
+    // Header with title and channel
+    if let Some(t) = title {
+        result.push_str(&format!("Title: {}\n", t));
+    }
+    if let Some(c) = channel {
+        result.push_str(&format!("Channel: {}\n", c));
     }
 
+    // Compute total video duration from last segment
+    let use_hours = segments
+        .last()
+        .map(|last| (last.start_secs + last.duration_secs) >= 3600.0)
+        .unwrap_or(false);
+
+    if let Some(last) = segments.last() {
+        let total_secs = (last.start_secs + last.duration_secs) as u32;
+        result.push_str(&format!("Duration: {}\n", format_timestamp(total_secs, false)));
+    }
+
+    result.push('\n');
+
     for seg in segments {
-        let mins = (seg.start_secs / 60.0) as u32;
-        let secs = (seg.start_secs % 60.0) as u32;
-        result.push_str(&format!("[{:02}:{:02}] {}\n", mins, secs, seg.text));
+        let seg_secs = seg.start_secs as u32;
+        let ts = format_timestamp(seg_secs, use_hours);
+        result.push_str(&format!("[{}] {}\n", ts, seg.text));
     }
     result
 }
@@ -389,6 +466,8 @@ mod tests {
     #[test]
     fn test_pick_caption_url_prefers_manual_english() {
         let metadata = YtDlpMetadata {
+            title: None,
+            channel: None,
             subtitles: {
                 let mut m = std::collections::HashMap::new();
                 m.insert(
@@ -425,6 +504,8 @@ mod tests {
     #[test]
     fn test_pick_caption_url_falls_back_to_auto() {
         let metadata = YtDlpMetadata {
+            title: None,
+            channel: None,
             subtitles: std::collections::HashMap::new(),
             automatic_captions: {
                 let mut m = std::collections::HashMap::new();
@@ -445,6 +526,8 @@ mod tests {
     #[test]
     fn test_pick_caption_url_no_captions() {
         let metadata = YtDlpMetadata {
+            title: None,
+            channel: None,
             subtitles: std::collections::HashMap::new(),
             automatic_captions: std::collections::HashMap::new(),
         };
@@ -456,6 +539,8 @@ mod tests {
     #[test]
     fn test_pick_caption_url_non_english_fallback() {
         let metadata = YtDlpMetadata {
+            title: None,
+            channel: None,
             subtitles: {
                 let mut m = std::collections::HashMap::new();
                 m.insert(
@@ -475,8 +560,10 @@ mod tests {
 
     #[test]
     fn test_parse_ytdlp_json() {
-        // Minimal yt-dlp JSON with subtitle entries
+        // Minimal yt-dlp JSON with subtitle entries and title
         let json = r#"{
+            "title": "Test Video",
+            "channel": "Test Channel",
             "subtitles": {
                 "en": [
                     {"url": "https://example.com/en.srv1", "ext": "srv1"},
@@ -490,6 +577,8 @@ mod tests {
             }
         }"#;
         let metadata: YtDlpMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("Test Video"));
+        assert_eq!(metadata.channel.as_deref(), Some("Test Channel"));
         assert_eq!(metadata.subtitles.len(), 1);
         assert_eq!(metadata.subtitles["en"].len(), 2);
         assert_eq!(metadata.automatic_captions["en"][0].ext, "srv1");
@@ -497,11 +586,13 @@ mod tests {
 
     #[test]
     fn test_parse_ytdlp_json_empty_captions() {
-        // yt-dlp JSON with no subtitles at all
+        // yt-dlp JSON with no subtitles at all (title/channel optional)
         let json = r#"{"subtitles": {}, "automatic_captions": {}}"#;
         let metadata: YtDlpMetadata = serde_json::from_str(json).unwrap();
         assert!(metadata.subtitles.is_empty());
         assert!(metadata.automatic_captions.is_empty());
+        assert!(metadata.title.is_none());
+        assert!(metadata.channel.is_none());
     }
 
     #[test]
@@ -525,9 +616,68 @@ mod tests {
                 text: "Second segment".to_string(),
             },
         ];
-        let formatted = format_transcript(&segments);
+        let formatted = format_transcript(&segments, None, None);
         assert!(formatted.contains("Duration: 01:07"));
         assert!(formatted.contains("[00:00] Hello world"));
         assert!(formatted.contains("[01:05] Second segment"));
+        // No title/channel header when None
+        assert!(!formatted.contains("Title:"));
+        assert!(!formatted.contains("Channel:"));
+    }
+
+    #[test]
+    fn test_format_transcript_with_metadata() {
+        let segments = vec![
+            TimedSegment {
+                start_secs: 0.0,
+                duration_secs: 5.0,
+                text: "Welcome".to_string(),
+            },
+        ];
+        let formatted = format_transcript(&segments, Some("My Video"), Some("My Channel"));
+        assert!(formatted.contains("Title: My Video"));
+        assert!(formatted.contains("Channel: My Channel"));
+        assert!(formatted.contains("Duration: 00:05"));
+        assert!(formatted.contains("[00:00] Welcome"));
+    }
+
+    #[test]
+    fn test_format_transcript_hour_long_video() {
+        let segments = vec![
+            TimedSegment {
+                start_secs: 0.0,
+                duration_secs: 2.0,
+                text: "Start".to_string(),
+            },
+            TimedSegment {
+                start_secs: 3661.0,
+                duration_secs: 5.0,
+                text: "Over an hour in".to_string(),
+            },
+        ];
+        let formatted = format_transcript(&segments, None, None);
+        assert!(formatted.contains("Duration: 01:01:06"));
+        assert!(formatted.contains("[00:00:00] Start"));
+        assert!(formatted.contains("[01:01:01] Over an hour in"));
+    }
+
+    #[test]
+    fn test_format_timestamp() {
+        // Auto mode (force_hours = false): MM:SS under an hour, HH:MM:SS at/above
+        assert_eq!(format_timestamp(0, false), "00:00");
+        assert_eq!(format_timestamp(65, false), "01:05");
+        assert_eq!(format_timestamp(3599, false), "59:59");
+        assert_eq!(format_timestamp(3600, false), "01:00:00");
+        assert_eq!(format_timestamp(3661, false), "01:01:01");
+        assert_eq!(format_timestamp(7325, false), "02:02:05");
+    }
+
+    #[test]
+    fn test_format_timestamp_forced_hours() {
+        // force_hours = true: always HH:MM:SS even for short durations
+        assert_eq!(format_timestamp(0, true), "00:00:00");
+        assert_eq!(format_timestamp(65, true), "00:01:05");
+        assert_eq!(format_timestamp(3599, true), "00:59:59");
+        assert_eq!(format_timestamp(3600, true), "01:00:00");
     }
 }

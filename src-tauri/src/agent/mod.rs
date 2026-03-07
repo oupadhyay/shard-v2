@@ -1258,22 +1258,50 @@ impl Agent {
                     None => return format!("Error: Could not extract a YouTube video ID from '{}'", video),
                 };
                 match crate::integrations::youtube::fetch_transcript(&self.http_client, &video_id).await {
-                    Ok(segments) => {
-                        let formatted = crate::integrations::youtube::format_transcript(&segments);
-                        // Truncate very long transcripts to avoid blowing up context
+                    Ok(result) => {
+                        let formatted = crate::integrations::youtube::format_transcript(
+                            &result.segments,
+                            result.title.as_deref(),
+                            result.channel.as_deref(),
+                        );
+                        let title_label = result.title.as_deref().unwrap_or(&video_id);
+                        let video_link = format!("https://youtu.be/{}", video_id);
+                        // Truncate very long transcripts to avoid blowing up context,
+                        // but generate a chunked LLM summary of the full content so nothing is lost.
                         if formatted.len() > 30_000 {
+                            // Find a safe UTF-8 boundary at or before 30,000 bytes
+                            let truncate_at = formatted.floor_char_boundary(30_000);
+                            let char_count = formatted.chars().count();
+
+                            // Summarize the full transcript via background LLM (chunked for long transcripts)
+                            let summary = self.summarize_long_transcript(config, &formatted, title_label).await;
+
+                            let summary_section = match &summary {
+                                Ok(s) => format!(
+                                    "\n\n--- LLM Summary of Full Video ---\n\n{}\n\n--- End Summary ---",
+                                    s
+                                ),
+                                Err(e) => {
+                                    log::warn!("[YouTube] Failed to summarize transcript: {}", e);
+                                    String::new()
+                                }
+                            };
+
                             format!(
-                                "YouTube Transcript (video: {}, {} segments, truncated):\n\n{}...\n\n[Transcript truncated at 30,000 chars. Total length: {} chars]",
-                                video_id,
-                                segments.len(),
-                                &formatted[..30_000],
-                                formatted.len()
+                                "YouTube Transcript — {} ({})\n{} segments, truncated\n\n{}...\n\n[Transcript truncated at ~30,000 chars. Total length: {} chars]{}",
+                                title_label,
+                                video_link,
+                                result.segments.len(),
+                                &formatted[..truncate_at],
+                                char_count,
+                                summary_section,
                             )
                         } else {
                             format!(
-                                "YouTube Transcript (video: {}, {} segments):\n\n{}",
-                                video_id,
-                                segments.len(),
+                                "YouTube Transcript — {} ({})\n{} segments\n\n{}",
+                                title_label,
+                                video_link,
+                                result.segments.len(),
                                 formatted
                             )
                         }
@@ -1585,6 +1613,127 @@ impl Agent {
         }
 
         Ok(false)
+    }
+
+    /// Summarize a long YouTube transcript using the background LLM.
+    ///
+    /// For transcripts that exceed the background model's context window, splits the
+    /// transcript into chunks, summarizes each independently, then produces a final
+    /// combined summary. This ensures no information is lost regardless of transcript length.
+    ///
+    /// Chunk size is set conservatively at 80,000 chars (~20K tokens) to leave room for
+    /// the system prompt and response within the 128K-token context of background models.
+    async fn summarize_long_transcript(
+        &self,
+        config: &crate::config::AppConfig,
+        full_transcript: &str,
+        title: &str,
+    ) -> Result<String, String> {
+        let model = config
+            .background_model
+            .as_deref()
+            .unwrap_or("gpt-oss-120b (Groq)");
+
+        log::info!(
+            "[YouTube] Summarizing long transcript ({} chars) for \"{}\" via {}",
+            full_transcript.chars().count(),
+            title,
+            model
+        );
+
+        // ~20K tokens worth of transcript per chunk, leaving headroom for system prompt + response
+        const CHUNK_SIZE: usize = 80_000;
+
+        // Split transcript into chunks at UTF-8-safe boundaries
+        let chunks = self.split_transcript_chunks(full_transcript, CHUNK_SIZE);
+
+        if chunks.len() == 1 {
+            // Small enough to summarize in one shot
+            let system_prompt = "You are a precise summarization assistant. Given a full YouTube video transcript, produce a comprehensive summary that captures ALL key points, arguments, examples, and conclusions. Organize the summary with clear sections. Do not omit any important topics or details — the user will only see the first portion of the timestamped transcript plus your summary for the rest.";
+            let user_message = format!(
+                "Summarize the following YouTube video transcript comprehensively. The video is titled \"{}\".\n\n---\n{}",
+                title, full_transcript
+            );
+            return crate::background::call_llm_oneshot(
+                &self.http_client, config, model, system_prompt, &user_message, 4000, 0.3,
+            ).await;
+        }
+
+        // Multi-chunk: summarize each chunk, then combine
+        log::info!(
+            "[YouTube] Transcript split into {} chunks for summarization",
+            chunks.len()
+        );
+
+        let chunk_system = "You are a precise summarization assistant. You will receive one section of a YouTube video transcript. Produce a detailed summary of THIS section only, capturing all key points, arguments, examples, data, and conclusions. Be thorough — your output will be combined with summaries of other sections.";
+
+        let mut chunk_summaries = Vec::with_capacity(chunks.len());
+        for (i, chunk) in chunks.iter().enumerate() {
+            let user_message = format!(
+                "Summarize section {} of {} from the YouTube video \"{}\". Capture every important detail.\n\n---\n{}",
+                i + 1,
+                chunks.len(),
+                title,
+                chunk
+            );
+
+            let summary = crate::background::call_llm_oneshot(
+                &self.http_client, config, model, chunk_system, &user_message, 3000, 0.3,
+            ).await?;
+
+            log::info!(
+                "[YouTube] Chunk {}/{} summarized ({} chars)",
+                i + 1, chunks.len(), summary.len()
+            );
+            chunk_summaries.push(format!("## Section {} of {}\n{}", i + 1, chunks.len(), summary));
+        }
+
+        // Final pass: combine chunk summaries into one coherent summary
+        let combined = chunk_summaries.join("\n\n");
+        let merge_system = "You are a precise summarization assistant. You will receive multiple section summaries from a single YouTube video. Merge them into ONE coherent, comprehensive summary. Preserve all important details, eliminate redundancy, and organize with clear sections. The user will rely on this as a complete representation of the video's content.";
+        let merge_message = format!(
+            "Merge the following section summaries from the YouTube video \"{}\" into a single comprehensive summary.\n\n---\n{}",
+            title, combined
+        );
+
+        crate::background::call_llm_oneshot(
+            &self.http_client, config, model, merge_system, &merge_message, 4000, 0.3,
+        ).await
+    }
+
+    /// Split a transcript into chunks of approximately `max_chars` characters each.
+    /// Splits on newline boundaries to avoid cutting mid-line, and uses
+    /// `floor_char_boundary` as a fallback for lines longer than `max_chars`.
+    fn split_transcript_chunks<'a>(&self, text: &'a str, max_chars: usize) -> Vec<&'a str> {
+        if text.len() <= max_chars {
+            return vec![text];
+        }
+
+        let mut chunks = Vec::new();
+        let mut start = 0;
+
+        while start < text.len() {
+            if text.len() - start <= max_chars {
+                chunks.push(&text[start..]);
+                break;
+            }
+
+            // Find a safe boundary at or before max_chars from start
+            let end_bound = text.floor_char_boundary(start + max_chars);
+
+            // Try to split on the last newline before the boundary
+            let chunk_slice = &text[start..end_bound];
+            let split_at = if let Some(nl_pos) = chunk_slice.rfind('\n') {
+                start + nl_pos + 1 // include the newline in this chunk
+            } else {
+                end_bound // no newline found — use the char boundary
+            };
+
+            chunks.push(&text[start..split_at]);
+            start = split_at;
+        }
+
+        chunks
     }
 
     async fn process_gemini_turn<R: Runtime>(

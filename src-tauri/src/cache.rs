@@ -37,7 +37,7 @@ pub fn get_ttl_for_tool(tool_name: &str) -> Option<i64> {
         "search_wikipedia" => Some(7 * 24 * 60 * 60), // 7 days
         "search_arxiv" => Some(7 * 24 * 60 * 60), // 7 days
         "read_arxiv_paper" => Some(7 * 24 * 60 * 60), // 7 days
-        "youtube_transcript" => Some(7 * 24 * 60 * 60), // 7 days
+        "youtube_transcript" => Some(365 * 24 * 60 * 60 * 100), // ~100 years (effectively forever) — transcripts are immutable, and calls are expensive
 
         // Short TTL (1 hour) - frequently changing data
         "get_weather" => Some(60 * 60),     // 1 hour

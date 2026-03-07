@@ -9,10 +9,6 @@
 
 - [ ] Still requires 2 passwords prompts (there is always allow but 2 shouldn't be necessary?)
 
-## P1: Better Screen Context Experience
-
-- [x] Instead of showing analyzing screen, show no loading and just animate when the suggestions are ready (especially useful when the user just opens the chat window to ask a question unrelated to screen context). This will make the screen context experience feel faster (since no loading state) and more intuitive.
-
 ## P1: LaTeX/Markdown Error Detection UI
 
 - [ ] **Unbalanced delimiter warnings** - Show error hint when `$` or `$$` delimiters are unbalanced (detected by `detectUnrenderedLatex()`)
@@ -28,6 +24,7 @@
 ## P1: Improve Tool UX
 
 - [ ] Improve weather, stock, and web_search tool output UX. weather should get a full forecast as text for model (show as diagram in UI), stock should give price percentage changes and price history as text for model (show as graph in UI), web_search should show the full results as links and summary for model (show as list of websites visited in UI).
+- [ ] Fix `open_url` tool failing on JS-rendered sites like `f1calendar.com` (currently returns empty or minimal content without JS execution).
 
 ## P2: Light Mode Theme Support
 
