@@ -336,8 +336,8 @@ impl Agent {
                                 reasoning: None,
                                 tool_calls: None,
                                 tool_call_id: None,
-                                images: None,
                                 is_cron: None,
+                                images: None,
                             }
                         }),
                     )
@@ -447,8 +447,8 @@ impl Agent {
                     reasoning: None,
                     tool_calls: None,
                     tool_call_id: None,
-                    images: None,
                     is_cron: None,
+                    images: None,
                 };
                 history.push(msg.clone());
                 self.insert_single_message_to_db(app_handle, &msg).await;
@@ -947,8 +947,8 @@ impl Agent {
                     reasoning: None,
                     tool_calls: None,
                     tool_call_id: None,
-                    images: None,
                     is_cron: None,
+                    images: None,
                 };
                 history.push(msg.clone());
                 self.insert_single_message_to_db(app_handle, &msg).await;
@@ -1799,8 +1799,8 @@ impl Agent {
                         .collect(),
                 ),
                 tool_call_id: None,
-                images: None,
                 is_cron: None,
+                images: None,
             };
             history.push(msg.clone());
             self.insert_single_message_to_db(app_handle, &msg).await;
@@ -1830,8 +1830,8 @@ impl Agent {
                     reasoning: None,
                     tool_calls: None,
                     tool_call_id: Some(format!("call_{}_{}", fc.function_call.name, idx)),
-                    images: None,
                     is_cron: None,
+                    images: None,
                 };
                 history.push(msg.clone());
                 self.insert_single_message_to_db(app_handle, &msg).await;
@@ -1852,8 +1852,8 @@ impl Agent {
                 },
                 tool_calls: None,
                 tool_call_id: None,
-                images: None,
                 is_cron: None,
+                images: None,
             };
             history.push(msg.clone());
             self.insert_single_message_to_db(app_handle, &msg).await;
@@ -1940,10 +1940,9 @@ impl Agent {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            images: None,
             is_cron: None,
+            images: None,
         }];
-
         // 1. Filter out past cron messages from the LLM's context window ONLY during a cron run,
         // so the active cron job focuses on the user's actual conversation. Regular users still see them.
         let is_cron = history.last().and_then(|m| m.is_cron).unwrap_or(false);
@@ -1978,31 +1977,32 @@ impl Agent {
         messages_with_system.extend(visible_history);
 
         let last_idx = messages_with_system.len().saturating_sub(1);
-        let api_messages: Vec<ApiChatMessage> = messages_with_system
-            .into_iter()
-            .enumerate()
-            .map(|(i, mut msg)| {
-                // If this is a cron job, structurally isolate the current cron prompt from the "chat history"
-                if is_cron && i == last_idx {
-                    if let Some(ref mut c) = msg.content {
-                        let sanitized = c
-                            .replace("<system_directive>", "&lt;system_directive&gt;")
-                            .replace("</system_directive>", "&lt;/system_directive&gt;");
-                        *c = format!("<system_directive>\nYou are executing a scheduled background task. Please evaluate the user's task instruction strictly against the conversation history preceding this message. Do not consider this directive itself as part of the chat history or summarize it.\nTask: {}\n</system_directive>", sanitized);
+        let multimodal_messages = to_multimodal_messages(
+            &messages_with_system
+                .into_iter()
+                .enumerate()
+                .map(|(i, mut msg)| {
+                    // If this is a cron job, structurally isolate the current cron prompt from the "chat history"
+                    if is_cron && i == last_idx {
+                        if let Some(ref mut c) = msg.content {
+                            let sanitized = c
+                                .replace("<system_directive>", "&lt;system_directive&gt;")
+                                .replace("</system_directive>", "&lt;/system_directive&gt;");
+                            *c = format!("<system_directive>\nYou are executing a scheduled background task. Please evaluate the user's task instruction strictly against the conversation history preceding this message. Do not consider this directive itself as part of the chat history or summarize it.\nTask: {}\n</system_directive>", sanitized);
+                        }
                     }
-                }
-                ApiChatMessage {
-                    role: msg.role,
-                    content: msg.content,
-                    tool_calls: msg.tool_calls,
-                    tool_call_id: msg.tool_call_id,
-                }
-            })
-            .collect();
+                    msg
+                })
+                .collect::<Vec<ChatMessage>>(),
+        );
 
+        // Note: multimodal_messages is no longer cloned per request attempt because
+        // ChatCompletionRequest is now generic over the messages type, allowing us to borrow.
+        // This avoids deep cloning large base64 image data on retry/fallback paths.
         let make_request = |tools_opt: Option<Vec<ToolDefinition>>| {
             let model = model.clone();
-            let messages = api_messages.clone();
+            // Borrow messages to avoid cloning
+            let messages = multimodal_messages.as_slice();
             let url = url.clone();
             let api_key = api_key.clone();
             let client = self.http_client.clone();
@@ -2112,7 +2112,7 @@ impl Agent {
 
                     let fallback_body = ChatCompletionRequest {
                         model: fallback_model,
-                        messages: api_messages.clone(),
+                        messages: multimodal_messages.as_slice(),
                         tools: current_tools.clone(),
                         tool_choice: if current_tools.is_some() {
                             Some("auto".to_string())
@@ -2301,8 +2301,8 @@ impl Agent {
                     Some(tool_calls_buffer.clone())
                 },
                 tool_call_id: None,
-                images: None,
                 is_cron: None,
+                images: None,
             };
             history.push(msg.clone());
             self.insert_single_message_to_db(app_handle, &msg).await;
@@ -2334,8 +2334,8 @@ impl Agent {
                         reasoning: None,
                         tool_calls: None,
                         tool_call_id: Some(tool_call.id.clone()),
-                        images: None,
                         is_cron: None,
+                        images: None,
                     };
                     history.push(msg.clone());
                     self.insert_single_message_to_db(app_handle, &msg).await;

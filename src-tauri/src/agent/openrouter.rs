@@ -74,8 +74,11 @@ pub fn to_multimodal_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value
                 "role": msg.role
             });
 
-            if let Some(content) = &msg.content {
-                message["content"] = serde_json::json!(content);
+            // Always include content key (null when absent) — some providers
+            // require `content: null` on assistant messages with tool_calls.
+            match &msg.content {
+                Some(content) => message["content"] = serde_json::json!(content),
+                None => message["content"] = serde_json::Value::Null,
             }
             if let Some(tool_calls) = &msg.tool_calls {
                 message["tool_calls"] = serde_json::to_value(tool_calls).unwrap_or_default();
