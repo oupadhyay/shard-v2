@@ -850,21 +850,6 @@ body {
   transform: translateY(0);
 }
 
-.suggestion-pill.loading-pill {
-  opacity: 0.7;
-  cursor: default;
-  animation: loadingPulse 1.75s ease-in-out infinite;
-}
-
-@keyframes loadingPulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 0.7; }
-}
-
-.suggestion-pills.loading .suggestion-pill {
-  pointer-events: none;
-}
-
 /* ============================================
    Bottom Bar & Input
    ============================================ */

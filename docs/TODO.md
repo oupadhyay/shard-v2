@@ -5,19 +5,13 @@
 - [ ] **Manual config merging** - (Deferred) Using `#[serde(default)]` patterns, full refactor to `figment` deemed too large for this pass.
 - [ ] **Monolithic handleInput** ([main.ts:69-224](../src/main.ts)) - Split into `preparePayload`, `sendChatMessage`, etc.
 
-## P0: OpenClaw Gaps
-
-- [x] **Unified Session Model** - Isolate chat contexts instead of a single global append-only history.
-- [x] **Skills Engine & Pi Runtime** - Expose skills as discoverable "tools" (e.g., `list_skills`, `load_skill`) so the agent can temporarily assume personas or load instructions on-demand, rather than forcing them into the global system prompt.
-- [x] **Automation (Cronjobs, Webhooks, Gmail)** - Background tasks and event-driven agent runs.
-
 ## P0: Password Prompts
 
 - [ ] Still requires 2 passwords prompts (there is always allow but 2 shouldn't be necessary?)
 
 ## P1: Better Screen Context Experience
 
-- [ ] Instead of showing analyzing screen, show no loading and just animate when the suggestions are ready (especially useful when the user just opens the chat window to ask a question unrelated to screen context). This will make the screen context experience feel faster (since no loading state) and more intuitive.
+- [x] Instead of showing analyzing screen, show no loading and just animate when the suggestions are ready (especially useful when the user just opens the chat window to ask a question unrelated to screen context). This will make the screen context experience feel faster (since no loading state) and more intuitive.
 
 ## P1: LaTeX/Markdown Error Detection UI
 

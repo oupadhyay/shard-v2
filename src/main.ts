@@ -1234,8 +1234,7 @@ listen(EVENTS.START_HIDE, () => {
   startHide();
 });
 
-listen<boolean>(EVENTS.START_SHOW, async (event) => {
-  const isResume = event.payload;
+listen(EVENTS.START_SHOW, async () => {
 
   // Restore .app-ui opacity in case we faded it out for the dedicated window transition
   const appUi = document.querySelector(".app-ui") as HTMLElement | null;
@@ -1254,17 +1253,8 @@ listen<boolean>(EVENTS.START_SHOW, async (event) => {
     }, 50);
   }
 
-  // Show loading chips if screen context is enabled and we are not returning from dedicated window
-  if (!isResume) {
-    try {
-      const config = await invoke<{ enable_screen_context?: boolean; incognito_mode?: boolean }>("get_config");
-      if (config.enable_screen_context && !config.incognito_mode) {
-        showLoadingChips();
-      }
-    } catch (e) {
-      console.warn("[ScreenContext] Failed to check config:", e);
-    }
-  }
+  // Remove showing loading chips if screen context is enabled
+  // We no longer show a loading state, suggestions will animate in when ready.
 });
 
 // Screen Context Suggestions
@@ -1330,7 +1320,6 @@ function showSuggestions(suggestions: string[]) {
   });
 
   suggestionsContainer.classList.remove("hidden");
-  suggestionsContainer.classList.remove("loading");
 
   // Force reflow to ensure transition plays on first appearance
   void suggestionsContainer.offsetHeight;
@@ -1345,25 +1334,8 @@ function showSuggestions(suggestions: string[]) {
   state.suggestionTimeout = setTimeout(hideSuggestions, 15000);
 }
 
-function showLoadingChips() {
-  suggestionsContainer.innerHTML = `
-    <span class="suggestion-pill loading-pill">Analyzing screen...</span>
-  `;
-  // Start hidden, force reflow, then show to trigger animation
-  suggestionsContainer.classList.add("hidden");
-  void suggestionsContainer.offsetHeight; // Force reflow
-  suggestionsContainer.classList.remove("hidden");
-  suggestionsContainer.classList.add("loading");
-
-  // Scroll chat to bottom after CSS transition completes (300ms)
-  setTimeout(() => {
-    chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
-  }, 200);
-}
-
 function hideSuggestions() {
   suggestionsContainer.classList.add("hidden");
-  suggestionsContainer.classList.remove("loading");
   if (state.suggestionTimeout) {
     clearTimeout(state.suggestionTimeout);
     state.suggestionTimeout = null;
