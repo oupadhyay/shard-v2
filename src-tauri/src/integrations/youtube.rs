@@ -221,8 +221,26 @@ pub async fn fetch_transcript(
 /// Run `yt-dlp -j <url>` and parse the JSON output.
 /// Times out after 30 seconds to prevent indefinite hangs.
 async fn run_ytdlp(video_url: &str) -> Result<YtDlpMetadata, String> {
+    // Augment PATH so yt-dlp is found in bundled .app builds where macOS
+    // provides only a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin).
+    let path_env = {
+        let system_path = std::env::var("PATH").unwrap_or_default();
+        let extra = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/sbin",
+        ];
+        let mut parts: Vec<&str> = extra.to_vec();
+        if !system_path.is_empty() {
+            parts.push(&system_path);
+        }
+        parts.join(":")
+    };
+
     let mut child = tokio::process::Command::new("yt-dlp")
         .args(["-j", "--no-warnings", "--skip-download", video_url])
+        .env("PATH", &path_env)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
