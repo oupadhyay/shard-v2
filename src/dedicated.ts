@@ -147,26 +147,12 @@ async function handleInput(skipUi = false) {
   stopBtn.dataset.mode = "stop";
 
   try {
+    // Always send image binary data to backend — provider routing happens server-side
     const payload: Record<string, unknown> = { message: skipUi ? state.lastUserMessage : text };
 
     if (imagesToSend.length > 0) {
-      const config = await invoke<AppConfig>("get_config");
-      const selectedModel = config?.selected_model || "";
-      if (!selectedModel.toLowerCase().includes("gemini")) {
-        await Promise.all(
-          imagesToSend.map(async (img) => {
-            if (img.ocrPromise) {
-              try { img.ocrText = await img.ocrPromise; }
-              catch { img.ocrText = "[OCR failed]"; }
-            }
-          })
-        );
-        const ocrTexts = imagesToSend.map((img) => img.ocrText).join("\n---\n");
-        payload.message = `[Image OCR]:\n${ocrTexts}\n\n${payload.message}`;
-      } else {
-        payload.imagesBase64 = imagesToSend.map((img) => img.base64);
-        payload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
-      }
+      payload.imagesBase64 = imagesToSend.map((img) => img.base64);
+      payload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
     }
 
     await invoke("chat", payload);

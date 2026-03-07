@@ -228,6 +228,40 @@ pub fn get_background_models() -> Vec<ModelInfo> {
     ]
 }
 
+/// Check if a model ID corresponds to a Gemini provider model.
+/// Uses the model registry first; falls back to heuristic (no `/`, no `(Cerebras)`, no `(Groq)`).
+pub fn is_gemini_model(model_id: &str) -> bool {
+    // Check all model lists for a registry match
+    let all_models: Vec<ModelInfo> = get_chat_models()
+        .into_iter()
+        .chain(get_vision_models())
+        .chain(get_background_models())
+        .collect();
+
+    if let Some(info) = all_models.iter().find(|m| m.id == model_id) {
+        return info.provider == Provider::Gemini;
+    }
+
+    // Fallback heuristic for unknown model IDs
+    !model_id.contains('/') && !model_id.contains("(Cerebras)") && !model_id.contains("(Groq)")
+}
+
+/// Check if a model ID supports native vision (direct image processing).
+/// Returns false for unknown models (they will use the Vision LLM fallback).
+pub fn model_supports_vision(model_id: &str) -> bool {
+    let all_models: Vec<ModelInfo> = get_chat_models()
+        .into_iter()
+        .chain(get_vision_models())
+        .chain(get_background_models())
+        .collect();
+
+    all_models
+        .iter()
+        .find(|m| m.id == model_id)
+        .map(|m| m.supports_vision)
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

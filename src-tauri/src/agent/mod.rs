@@ -6,7 +6,7 @@ pub(crate) mod openrouter;
 mod types;
 
 pub use gemini::{construct_gemini_messages, parse_gemini_chunk, AgentEvent};
-pub use openrouter::{has_images, supports_tools, to_api_messages, to_multimodal_messages};
+pub use openrouter::{has_images, supports_tools, to_multimodal_messages};
 pub use types::*;
 
 use crate::integrations::{
@@ -491,9 +491,7 @@ impl Agent {
             .clone()
             .unwrap_or("gemini-2.5-flash-lite".to_string());
 
-        let is_gemini = !selected_model.contains("/")
-            && !selected_model.contains("(Cerebras)")
-            && !selected_model.contains("(Groq)");
+        let is_gemini = crate::models::is_gemini_model(&selected_model);
 
         let _continue_turn = if is_gemini {
             let api_key = config.gemini_api_key.as_ref().ok_or("No Gemini API key")?;
@@ -586,15 +584,18 @@ impl Agent {
 
         let mut history = self.history.lock().await;
 
-        // Determine model type
+        // Determine model type using the centralized registry
         let selected_model = config
             .selected_model
             .clone()
             .unwrap_or("gemini-2.5-flash-lite".to_string());
-        let is_gemini = !selected_model.contains("/");
+        let is_gemini = crate::models::is_gemini_model(&selected_model);
+        let has_native_vision = crate::models::model_supports_vision(&selected_model);
 
-        // Process images: upload to Gemini Files API if using Gemini model,
-        // or describe via Vision LLM for other providers
+        // Process images with 3-way routing:
+        //   1. Gemini: Upload via Files API (native multimodal with file URIs)
+        //   2. Vision-capable OpenRouter: Store base64, pass natively via to_multimodal_messages()
+        //   3. Non-vision model: Vision LLM fallback for text description + store base64 for history
         let mut image_descriptions: Vec<String> = Vec::new();
         let uploaded_images: Option<Vec<ImageAttachment>> = if let (Some(bases), Some(mimes)) =
             (images_base64.as_ref(), images_mime_types.as_ref())
@@ -606,7 +607,7 @@ impl Agent {
 
                 for (img_data, mime_type) in bases.iter().zip(mimes.iter()) {
                     let file_uri = if is_gemini {
-                        // Upload to Gemini Files API
+                        // Gemini: Upload to Files API for native multimodal
                         match crate::gemini_files::upload_image_to_gemini_files_api(
                             &self.http_client,
                             img_data,
@@ -629,14 +630,21 @@ impl Agent {
                                 ))
                             }
                         }
+                    } else if has_native_vision {
+                        // Vision-capable OpenRouter model: images will be sent natively
+                        // via to_multimodal_messages() as inline data URIs
+                        log::info!(
+                            "[Agent] Model {} supports vision — sending image natively",
+                            selected_model
+                        );
+                        None
                     } else {
-                        // For non-Gemini providers, use Vision LLM to process image WITH context
-                        // This passes the user's actual question for contextual understanding
+                        // Non-vision model: use Vision LLM to produce text description
                         match crate::integrations::vision_llm::process_image_with_context(
                             &self.http_client,
                             img_data,
                             mime_type,
-                            &message, // Pass user's question for contextual response
+                            &message,
                             config,
                         )
                         .await
@@ -657,9 +665,10 @@ impl Agent {
                                     .push("[Image attached but could not be analyzed]".to_string());
                             }
                         }
-                        None // No file URI for non-Gemini
+                        None
                     };
 
+                    // Always store image data on the attachment for history fidelity
                     attachments.push(ImageAttachment {
                         base64: img_data.clone(),
                         mime_type: mime_type.clone(),
@@ -673,8 +682,9 @@ impl Agent {
             None
         };
 
-        // For non-Gemini providers, prepend contextual image analysis to the message
-        let augmented_message = if !is_gemini && !image_descriptions.is_empty() {
+        // For non-vision models, prepend contextual image analysis to the message
+        let augmented_message = if !is_gemini && !has_native_vision && !image_descriptions.is_empty()
+        {
             let analysis = image_descriptions.join("\n\n");
             format!(
                 "[Visual Analysis]\n{}\n\n[User Message]\n{}",
@@ -934,10 +944,8 @@ impl Agent {
                 .clone()
                 .unwrap_or("gemini-2.5-flash-lite".to_string());
 
-            // Detect provider: Gemini models don't have slash or provider suffixes
-            let is_gemini = !selected_model.contains("/")
-                && !selected_model.contains("(Cerebras)")
-                && !selected_model.contains("(Groq)");
+            // Detect provider using centralized model registry
+            let is_gemini = crate::models::is_gemini_model(&selected_model);
 
             // Inject retry hint if pending (from previous failed attempt)
             if let Some(hint) = pending_retry_hint.take() {

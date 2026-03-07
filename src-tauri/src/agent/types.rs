@@ -80,16 +80,6 @@ pub struct ImageAttachment {
     pub file_uri: Option<String>,
 }
 
-#[derive(Serialize, Debug, Clone)]
-pub struct ApiChatMessage {
-    pub role: String,
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCall>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-}
-
 // ============================================================================
 // Tool Call Types
 // ============================================================================
