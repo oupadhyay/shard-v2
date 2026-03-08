@@ -1568,6 +1568,57 @@ impl Agent {
                     "Failed to access database.".to_string()
                 }
             }
+            "run_python" => {
+                let code = args["code"].as_str().unwrap_or_default();
+                if code.trim().is_empty() {
+                    return "Error: No code provided.".to_string();
+                }
+
+                let resource_dir = app_handle
+                    .path()
+                    .resource_dir()
+                    .unwrap_or_default();
+
+                match crate::sandbox::execute_python(code, resource_dir, 30).await {
+                    Ok(result) => {
+                        let mut output = String::new();
+                        if result.timed_out {
+                            output.push_str("**Execution timed out (30s limit)**\n\n");
+                        }
+                        if result.fuel_exhausted {
+                            output.push_str("**Execution halted: instruction limit reached**\n\n");
+                        }
+                        if !result.stdout.is_empty() {
+                            output.push_str("**stdout:**\n```\n");
+                            if result.stdout.len() > 20_000 {
+                                output.push_str(&result.stdout[..20_000]);
+                                output.push_str(&format!(
+                                    "\n```\n[Truncated at 20,000 chars. Total: {} chars]\n",
+                                    result.stdout.len()
+                                ));
+                            } else {
+                                output.push_str(&result.stdout);
+                                output.push_str("\n```\n");
+                            }
+                        }
+                        if !result.stderr.is_empty() {
+                            output.push_str("**stderr:**\n```\n");
+                            if result.stderr.len() > 5_000 {
+                                output.push_str(&result.stderr[..5_000]);
+                                output.push_str("\n```\n[stderr truncated]\n");
+                            } else {
+                                output.push_str(&result.stderr);
+                                output.push_str("\n```\n");
+                            }
+                        }
+                        if output.is_empty() {
+                            output.push_str("Code executed successfully with no output.");
+                        }
+                        output
+                    }
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
             _ => format!("Unknown tool: {}", function_name),
         }
     }

@@ -23,6 +23,7 @@
 
 ## P1: Improve Tool UX
 
+- [ ] Allow closing tool accordions by clicking bottom and some of the body (some design thought required here) [not just the accordion header], especially for long tool call outputs like youtube transcripts.
 - [ ] Improve weather, stock, and web_search tool output UX. weather should get a full forecast as text for model (show as diagram in UI), stock should give price percentage changes and price history as text for model (show as graph in UI), web_search should show the full results as links and summary for model (show as list of websites visited in UI).
 - [ ] Fix `open_url` tool failing on JS-rendered sites like `f1calendar.com` (currently returns empty or minimal content without JS execution).
 

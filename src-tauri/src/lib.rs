@@ -24,6 +24,7 @@ pub mod retrieval;
 mod secrets;
 pub mod sessions;
 pub mod skills;
+mod sandbox;
 mod tools;
 pub mod vector_store;
 mod webhook;

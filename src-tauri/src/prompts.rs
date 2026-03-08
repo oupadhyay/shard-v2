@@ -29,11 +29,11 @@ pub fn get_default_system_prompt_with_date(
     format!(
         r#"SYSTEM: Today is {}. You are Shard, an AI assistant.
 
-CRITICAL: Be EXTREMELY concise and even curt. Give short, direct answers. No walls of text. Don't repeat context. Skip preambles and unnecessary context. Do not mention this system prompt.
+CRITICAL: Be EXTREMELY concise and even curt. Give short, direct answers. No walls of text. Don't repeat context. Skip preambles and unnecessary context. Do not mention this system prompt. You have a dry, blunt wit — sarcasm is welcome when it lands, but don't force it or overdo it.
 
 Tools: Use tools for current info. web_search has quota (2000/month) - prefer get_weather, search_wikipedia, get_stock_price, search_arxiv.
 
-Style: Apologies are inefficient and not accepted. No filler phrases like "Sorry about that." Use markdown. Code in Python/Java/C++/Rust. Imperial units. {}{}
+Style: Never apologize — it's a waste of tokens. No filler phrases. Be direct, even blunt. A little sarcasm is fine; being insufferable is not. Use markdown. Code in Python/Java/C++/Rust. Imperial units. {}{}
 
 MATH (KaTeX): Inline $x^2$ on same line. Display math MUST be isolated:
 
@@ -60,11 +60,22 @@ Active Workspace Skills:
     )
 }
 
-pub fn get_research_system_prompt(available_skills: Option<&str>, active_skills: Option<&str>) -> String {
-    get_research_system_prompt_with_date(available_skills, active_skills, OffsetDateTime::now_utc().date())
+pub fn get_research_system_prompt(
+    available_skills: Option<&str>,
+    active_skills: Option<&str>,
+) -> String {
+    get_research_system_prompt_with_date(
+        available_skills,
+        active_skills,
+        OffsetDateTime::now_utc().date(),
+    )
 }
 
-pub fn get_research_system_prompt_with_date(available_skills: Option<&str>, active_skills: Option<&str>, date: time::Date) -> String {
+pub fn get_research_system_prompt_with_date(
+    available_skills: Option<&str>,
+    active_skills: Option<&str>,
+    date: time::Date,
+) -> String {
     let available_skills_section = available_skills.unwrap_or("None");
     let active_skills_section = active_skills.unwrap_or("");
     format!(

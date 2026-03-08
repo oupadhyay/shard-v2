@@ -25,6 +25,7 @@ pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
         "list_skills",
         "search_wikipedia",
         "youtube_transcript",
+        "run_python",
     ];
 
     let all_tools = vec![
@@ -301,6 +302,25 @@ pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
                 parameters: json!({
                     "type": "object",
                     "properties": {},
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "run_python".to_string(),
+                description: "Execute Python code in a sandboxed environment and return the output. Use for calculations, data processing, generating text, or any task that benefits from running code. The sandbox has no persistent filesystem — each execution starts fresh. Print results to stdout.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": "Python 3 source code to execute. Use print() to produce output."
+                        }
+                    },
+                    "required": ["code"],
                     "additionalProperties": false
                 }),
                 strict: Some(true),

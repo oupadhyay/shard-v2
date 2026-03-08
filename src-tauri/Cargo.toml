@@ -52,6 +52,9 @@ readability = "0.3.0"
 htmd = "0.5.0"
 axum = { version = "0.8.8", features = ["macros"] }
 tokio-cron-scheduler = "0.15.1"
+tempfile = "3"
+wasmtime = "31"
+wasmtime-wasi = "31"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
@@ -63,7 +66,6 @@ keyring = { version = "3", features = ["apple-native"] }
 keyring = { version = "3" }
 
 [dev-dependencies]
-tempfile = "3"
 criterion = { version = "0.5", features = ["async_tokio"] }
 dotenvy = "0.15"
 rand = "0.8"
