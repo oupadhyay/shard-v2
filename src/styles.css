@@ -985,12 +985,7 @@ body {
 .stop-btn::before {
   content: '';
   position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 34px;
-  height: 34px;
-  margin-top: -17px;
-  margin-left: -17px;
+  inset: -2px;
   border-radius: 50%;
   border: 2px solid transparent;
   border-top-color: var(--text-primary);
