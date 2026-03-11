@@ -57,7 +57,7 @@ pub struct VectorStore {
     pub(crate) conn: Connection,
 }
 
-/// Embedding dimension (Gemini text-embedding-004)
+/// Embedding dimension (Gemini Embedding 2 with output_dimensionality=768)
 const EMBEDDING_DIM: usize = 768;
 
 impl VectorStore {
@@ -91,6 +91,69 @@ impl VectorStore {
 
         // Initialize schema
         conn.execute_batch(include_str!("schema.sql"))?;
+
+        // Auto-migrate: recreate chunks table if CHECK constraint is missing 'session'
+        // SQLite doesn't allow ALTER TABLE to modify CHECK constraints, so we
+        // recreate the table with the correct constraint.
+        {
+            let has_session: bool = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .map(|sql| sql.contains("session"))
+                .unwrap_or(true); // if table doesn't exist yet, schema.sql will create it
+
+            if !has_session {
+                log::info!("[VectorStore] Migrating chunks table to add 'session' source_type");
+                conn.execute_batch(
+                    "
+                    ALTER TABLE chunks RENAME TO chunks_old;
+                    CREATE TABLE chunks (
+                        id TEXT PRIMARY KEY,
+                        source_type TEXT NOT NULL CHECK(source_type IN ('topic', 'insight', 'session')),
+                        source_name TEXT NOT NULL,
+                        heading TEXT,
+                        text TEXT NOT NULL,
+                        start_line INTEGER NOT NULL,
+                        end_line INTEGER NOT NULL,
+                        content_hash TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    INSERT INTO chunks SELECT * FROM chunks_old;
+                    DROP TABLE chunks_old;
+                    ",
+                )?;
+                // Recreate index that was lost with the table rename
+                conn.execute_batch(
+                    "
+                    CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_type, source_name);
+                    CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(content_hash);
+                    ",
+                )?;
+                // Recreate FTS triggers for the new chunks table
+                conn.execute_batch(
+                    "
+                    DROP TRIGGER IF EXISTS chunks_ai;
+                    DROP TRIGGER IF EXISTS chunks_ad;
+                    DROP TRIGGER IF EXISTS chunks_au;
+                    CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+                      INSERT INTO chunks_fts(chunk_id, heading, text) VALUES (new.id, new.heading, new.text);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+                      DELETE FROM chunks_fts WHERE chunk_id = old.id;
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+                      UPDATE chunks_fts SET heading = new.heading, text = new.text WHERE chunk_id = old.id;
+                    END;
+                    ",
+                )?;
+                log::info!("[VectorStore] Chunks table migration complete");
+            }
+        }
 
         // Auto-migrate schema for existing databases (add active_skills)
         if let Err(e) = conn.execute(
@@ -557,6 +620,16 @@ impl VectorStore {
         // Collect with error propagation instead of silently dropping errors
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(VectorStoreError::from)
+    }
+
+    /// Clear the embedding cache (e.g. after switching embedding models)
+    pub fn clear_embedding_cache(&self) -> Result<usize, VectorStoreError> {
+        let deleted = self.conn.execute("DELETE FROM embedding_cache", [])?;
+        log::info!(
+            "[VectorStore] Cleared embedding cache ({} entries)",
+            deleted
+        );
+        Ok(deleted)
     }
 
     /// Clear all data (for testing)

@@ -7,7 +7,7 @@ use crate::retrieval::{
  *
  * Implements Tier 3 of the memory system:
  * - Logs every turn to daily JSONL files
- * - Generates embeddings using gemini-embedding-001
+ * - Generates embeddings using gemini-embedding-2-preview (multimodal)
  * - Performs semantic search for context retrieval
  */
 use chrono::{DateTime, Utc};
@@ -43,8 +43,20 @@ struct EmbeddingContent {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct EmbeddingPart {
-    text: String,
+#[serde(untagged)]
+enum EmbeddingPart {
+    Text {
+        text: String,
+    },
+    InlineData {
+        inline_data: InlineData,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct InlineData {
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -61,27 +73,67 @@ struct EmbeddingValues {
 // Embedding API
 // ============================================================================
 
+const EMBEDDING_MODEL_URL: &str =
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent";
+
 pub async fn generate_embedding(
     client: &reqwest::Client,
     text: &str,
     api_key: &str,
 ) -> Result<Vec<f32>, String> {
-    let url =
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent";
-
     let payload = EmbeddingRequest {
         content: EmbeddingContent {
-            parts: vec![EmbeddingPart {
+            parts: vec![EmbeddingPart::Text {
                 text: text.to_string(),
             }],
         },
         output_dimensionality: Some(768),
     };
 
+    send_embedding_request(client, api_key, &payload).await
+}
+
+/// Generate a multimodal embedding from text + images using gemini-embedding-2-preview.
+/// Images are passed as base64-encoded inline data alongside the text.
+pub async fn generate_multimodal_embedding(
+    client: &reqwest::Client,
+    text: &str,
+    images_base64: &[String],
+    images_mime_types: &[String],
+    api_key: &str,
+) -> Result<Vec<f32>, String> {
+    let mut parts = Vec::with_capacity(1 + images_base64.len());
+
+    parts.push(EmbeddingPart::Text {
+        text: text.to_string(),
+    });
+
+    for (data, mime) in images_base64.iter().zip(images_mime_types.iter()) {
+        parts.push(EmbeddingPart::InlineData {
+            inline_data: InlineData {
+                mime_type: mime.clone(),
+                data: data.clone(),
+            },
+        });
+    }
+
+    let payload = EmbeddingRequest {
+        content: EmbeddingContent { parts },
+        output_dimensionality: Some(768),
+    };
+
+    send_embedding_request(client, api_key, &payload).await
+}
+
+async fn send_embedding_request(
+    client: &reqwest::Client,
+    api_key: &str,
+    payload: &EmbeddingRequest,
+) -> Result<Vec<f32>, String> {
     let res = client
-        .post(url)
+        .post(EMBEDDING_MODEL_URL)
         .header("X-Goog-Api-Key", api_key)
-        .json(&payload)
+        .json(payload)
         .send()
         .await
         .map_err(|e| format!("Embedding API network error: {}", e))?;

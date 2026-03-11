@@ -68,7 +68,7 @@ pub struct Chunk {
     pub start_line: u32,
     /// 1-indexed end line in source file
     pub end_line: u32,
-    /// 768-dim embedding vector
+    /// 768-dim embedding vector (Gemini Embedding 2)
     pub embedding: Vec<f32>,
 }
 

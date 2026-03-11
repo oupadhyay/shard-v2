@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 
 -- vec0 virtual table for vector similarity search
--- 768 dimensions for Gemini text-embedding-004
+-- 768 dimensions for Gemini Embedding 2 (output_dimensionality=768)
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings USING vec0(
     chunk_id TEXT PRIMARY KEY,
     embedding float[768] distance_metric=cosine

@@ -714,13 +714,41 @@ impl Agent {
         // Incognito mode: skip all RAG/memory retrieval and storage
         let incognito = config.incognito_mode.unwrap_or(false);
 
-        // RAG: Generate embedding and retrieve relevant interactions using hybrid search (BM25 + Dense + RRF)
+        // RAG: Generate embedding (multimodal when images present) and retrieve relevant interactions using hybrid search (BM25 + Dense + RRF)
         // Skip in incognito mode to avoid using previous context
         let user_embedding = if !incognito {
             if let Some(api_key) = &config.gemini_api_key {
-                crate::interactions::generate_embedding(&self.http_client, &message, api_key)
+                if let (Some(bases), Some(mimes)) =
+                    (images_base64.as_ref(), images_mime_types.as_ref())
+                {
+                    if !bases.is_empty() {
+                        crate::interactions::generate_multimodal_embedding(
+                            &self.http_client,
+                            &message,
+                            bases,
+                            mimes,
+                            api_key,
+                        )
+                        .await
+                        .ok()
+                    } else {
+                        crate::interactions::generate_embedding(
+                            &self.http_client,
+                            &message,
+                            api_key,
+                        )
+                        .await
+                        .ok()
+                    }
+                } else {
+                    crate::interactions::generate_embedding(
+                        &self.http_client,
+                        &message,
+                        api_key,
+                    )
                     .await
                     .ok()
+                }
             } else {
                 None
             }

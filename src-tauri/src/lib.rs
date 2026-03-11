@@ -521,6 +521,58 @@ async fn rebuild_chunk_index(app_handle: AppHandle) -> Result<usize, String> {
     memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await
 }
 
+/// Rebuild all indexes in one shot: clears embedding cache, then rebuilds
+/// topic index, insight index, BM25 index, and chunk index (with re-embedding).
+#[derive(serde::Serialize)]
+struct RebuildAllResult {
+    topics: usize,
+    insights: usize,
+    bm25_docs: usize,
+    chunks: usize,
+    cache_cleared: usize,
+}
+
+#[tauri::command]
+async fn rebuild_all_indexes(app_handle: AppHandle) -> Result<RebuildAllResult, String> {
+    let config = config::load_config(&app_handle)?;
+    let api_key = config
+        .gemini_api_key
+        .ok_or("No Gemini API key configured for embedding generation")?;
+    let http_client = reqwest::Client::new();
+
+    // 1. Clear embedding cache (old model embeddings are incompatible)
+    let cache_cleared = {
+        let store = memories::get_vector_store(&app_handle)?;
+        store
+            .clear_embedding_cache()
+            .map_err(|e| format!("Failed to clear embedding cache: {}", e))?
+    };
+
+    // 2. Rebuild metadata indexes
+    let topics = memories::rebuild_topic_index(&app_handle)?;
+    let insights = memories::rebuild_insight_index(&app_handle)?;
+
+    // 3. Rebuild BM25 index
+    let bm25_docs = retrieval::rebuild_bm25_index(&app_handle)?;
+
+    // 4. Rebuild chunk index (re-embeds everything with current model)
+    let chunks =
+        memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await?;
+
+    log::info!(
+        "[RebuildAll] Complete: {} topics, {} insights, {} BM25 docs, {} chunks, {} cache entries cleared",
+        topics, insights, bm25_docs, chunks, cache_cleared
+    );
+
+    Ok(RebuildAllResult {
+        topics,
+        insights,
+        bm25_docs,
+        chunks,
+        cache_cleared,
+    })
+}
+
 /// Capture screen context and return suggestions
 /// This is triggered when the window is shown via Ctrl+Space
 #[tauri::command]
@@ -800,6 +852,7 @@ pub fn run() {
             rebuild_insight_index,
             rebuild_bm25_index,
             rebuild_chunk_index,
+            rebuild_all_indexes,
             retry_with_katex_hint,
             capture_screen_context
         ])
