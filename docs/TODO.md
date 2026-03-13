@@ -5,26 +5,14 @@
 - [ ] **Manual config merging** - (Deferred) Using `#[serde(default)]` patterns, full refactor to `figment` deemed too large for this pass.
 - [ ] **Monolithic handleInput** ([main.ts:69-224](../src/main.ts)) - Split into `preparePayload`, `sendChatMessage`, etc.
 
-## P0: Password Prompts
+## P1: Password Prompts
 
 - [ ] Still requires 2 passwords prompts (there is always allow but 2 shouldn't be necessary?)
-
-## P1: LaTeX/Markdown Error Detection UI
-
-- [ ] **Unbalanced delimiter warnings** - Show error hint when `$` or `$$` delimiters are unbalanced (detected by `detectUnrenderedLatex()`)
-- [ ] **Unrendered LaTeX command detection** - Show warning when LaTeX commands (e.g., `\frac`, `\sum`) appear outside of `$...$` delimiters
-- [ ] **Integrate with auto-retry mechanism** - Use detected errors to provide context-aware retry hints (via `getRetryHint()` in prompts.rs)
-
-## P1: New Tools
-
-- [ ] **Switch main Agent logic to multimodal format** - Once `to_multimodal_messages` tests are passing (from Jules PR), integrate it into the main chat loop to support native images via OpenRouter/OpenAI.
-- Code Tool: Run Python Code in Sandbox (one option: WASI via Wasmtime plus a small Rust mediator in a Tauri app?)
-- YouTube Tool: Get Transcript & Summarize
 
 ## P1: Improve Tool UX
 
 - [ ] Allow closing tool accordions by clicking bottom and some of the body (some design thought required here) [not just the accordion header], especially for long tool call outputs like youtube transcripts.
-- [ ] Improve weather, stock, and web_search tool output UX. weather should get a full forecast as text for model (show as diagram in UI), stock should give price percentage changes and price history as text for model (show as graph in UI), web_search should show the full results as links and summary for model (show as list of websites visited in UI).
+- [ ] Improve weather, stock, and web_search tool output UX. weather should get a full forecast as text for model (show as diagram in UI), stock should give price percentage changes and price history as text for model (show as graph in UI), web_search should show the full results as links and summary for model (show as list of websites visited in UI). These are aspirational, please think through how the model will read it (chat history version) v.s. how it should be rendered in the UI.
 - [ ] Fix `open_url` tool failing on JS-rendered sites like `f1calendar.com` (currently returns empty or minimal content without JS execution).
 
 ## P2: Light Mode Theme Support
@@ -51,7 +39,6 @@
 
 ## P2: Multi-Provider Support
 
-- [ ] Model management system that checks for free models from OpenRouter and updates the model list.
 - [ ] Add support for other providers (e.g., Ollama, Anthropic).
 
 ## P2: Distribution & CI/CD
@@ -61,12 +48,6 @@
   - Auto-create releases with `.dmg`, `.msi`, `.AppImage`
 
 ## P2: Future Horizons (Documentation & Stubs)
-
-### 1. Full Browser Control
-
-- [ ] Investigate Playwright/Puppeteer Rust bindings for headful browsing.
-- [ ] Implement a real DOM-interaction agent loop (click, type, scroll).
-- [ ] Add visual reasoning (screenshots to VLM) to handle complex web apps.
 
 ### 2. Mobile App (iOS/Android)
 

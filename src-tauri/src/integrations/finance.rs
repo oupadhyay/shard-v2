@@ -1,5 +1,5 @@
 use log;
-use time::OffsetDateTime;
+use time::Duration;
 use yahoo_finance_api as yfa;
 
 pub async fn perform_finance_lookup(ticker: &str) -> Result<String, String> {
@@ -9,30 +9,52 @@ pub async fn perform_finance_lookup(ticker: &str) -> Result<String, String> {
     let provider = yfa::YahooConnector::new()
         .map_err(|e| format!("Failed to create Yahoo Connector: {}", e))?;
 
-    // Get the latest quotes
-    let response = provider
-        .get_latest_quotes(ticker, "1d")
+    // Get the latest quotes and 1 month history
+    let end = time::OffsetDateTime::now_utc();
+    let start = end - Duration::days(30);
+
+    let hist_response = provider
+        .get_quote_history(ticker, start, end)
         .await
         .map_err(|e| format!("Yahoo Finance API error: {}", e))?;
 
-    let quote = response
-        .last_quote()
+    let quotes = hist_response
+        .quotes()
         .map_err(|e| format!("No quote data found: {}", e))?;
 
-    let price = quote.close;
-    let time = OffsetDateTime::from_unix_timestamp(quote.timestamp as i64)
-        .map_err(|_| "Invalid timestamp")?;
+    if quotes.is_empty() {
+        return Err("No stock data found for ticker".to_string());
+    }
 
-    // Try to get more info if possible, but for now basic price
-    // We could format this nicely
+    let latest = quotes.last().unwrap();
+    let current_price = latest.close;
 
-    let result = format!(
-        "Stock: {}\nPrice: ${:.2}\nTime: {}\nVolume: {}",
-        ticker.to_uppercase(),
-        price,
-        time,
-        quote.volume
-    );
+    // Calculate percent change from last known close (i.e. if quotes has at least 2 entries)
+    let percent_change = if quotes.len() >= 2 {
+        let prev_close = quotes[quotes.len() - 2].close;
+        if prev_close != 0.0 {
+            ((current_price - prev_close) / prev_close) * 100.0
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
 
-    Ok(result)
+    let history: Vec<serde_json::Value> = quotes.iter().map(|q| {
+        serde_json::json!({
+            "timestamp": q.timestamp,
+            "close": q.close
+        })
+    }).collect();
+
+    let result_json = serde_json::json!({
+        "symbol": ticker.to_uppercase(),
+        "current_price": current_price,
+        "percent_change": percent_change,
+        "volume": latest.volume,
+        "history": history
+    });
+
+    Ok(result_json.to_string())
 }

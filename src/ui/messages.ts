@@ -10,6 +10,61 @@ import type { ImageAttachment } from "../types";
 let currentWebSearchContainer: HTMLElement | null = null;
 
 /**
+ * Attaches a smart click listener to a details element to collapse it
+ * when clicking the body, while respecting text selection and double clicks.
+ */
+function attachSmartCollapseListener(details: HTMLDetailsElement) {
+  let isSelecting = false;
+  let clickTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  details.addEventListener("mousedown", () => {
+    isSelecting = false;
+  });
+
+  details.addEventListener("mousemove", (e) => {
+    if (e.buttons === 1) { // Left mouse button is pressed
+      isSelecting = true;
+    }
+  });
+
+  details.addEventListener("click", (e) => {
+    const target = e.target as Element;
+    // Let native behavior handle summary clicks
+    if (target.closest("summary")) return;
+
+    // Don't close if clicking interactive elements
+    if (target.closest("a") || target.closest("button") || target.closest("input")) return;
+
+    if (details.hasAttribute("open")) {
+      const selection = window.getSelection();
+      const hasSelection = selection && selection.toString().trim().length > 0;
+
+      // Don't collapse if dragging to select or text is actively selected
+      if (isSelecting || hasSelection) return;
+
+      if ((e as MouseEvent).detail > 1) {
+        // It's a double/triple click (text selection). Cancel any pending collapse.
+        if (clickTimeout) {
+          clearTimeout(clickTimeout);
+          clickTimeout = null;
+        }
+        return;
+      }
+
+      // Defer closing slightly to allow a double-click to register and abort this.
+      clickTimeout = setTimeout(() => {
+        // Re-check selection just in case they managed to select something super fast
+        const delayedSelection = window.getSelection();
+        if (delayedSelection && delayedSelection.toString().trim().length > 0) return;
+
+        details.removeAttribute("open");
+      }, 200); // 200ms is standard double-click threshold
+      e.preventDefault();
+    }
+  });
+}
+
+/**
  * Create a thinking/reasoning block element
  */
 export function createThinkingElement(content: string, isComplete: boolean = true): HTMLElement {
@@ -33,7 +88,6 @@ export function updateThinkingElement(el: HTMLElement, content: string, isComple
   const summaryText = isComplete ? "Thought" : "Thinking...";
   const openAttr = isComplete ? "" : "open";
 
-  // Use details/summary structure
   let details = el.querySelector("details");
   if (!details) {
     el.innerHTML = `
@@ -43,6 +97,7 @@ export function updateThinkingElement(el: HTMLElement, content: string, isComple
       </details>
     `;
     details = el.querySelector("details");
+    if (details) attachSmartCollapseListener(details);
   } else {
     // Update summary and open state
     const summary = details.querySelector("summary");
@@ -142,6 +197,10 @@ export function createToolCallElement(name: string, argsStr: string, id?: string
       </div>
     </details>
   `;
+
+  const details = toolDiv.querySelector("details");
+  if (details) attachSmartCollapseListener(details);
+
   return toolDiv;
 }
 
@@ -164,6 +223,10 @@ export function createWebSearchQueryElement(query: string, id?: string): HTMLEle
       </div>
     </details>
   `;
+
+  const details = queryDiv.querySelector("details");
+  if (details) attachSmartCollapseListener(details);
+
   return queryDiv;
 }
 
@@ -185,10 +248,169 @@ export function updateWebSearchCount(container: HTMLElement): void {
 export function updateToolResult(toolElement: Element, result: string) {
   const resultSection = toolElement.querySelector('.tool-result') as HTMLElement;
   const resultContent = toolElement.querySelector('.tool-result-content');
+  const toolName = toolElement.getAttribute('data-tool-name');
+
   if (resultSection && resultContent) {
-    resultContent.textContent = result;
+    if (toolName === 'get_weather' || toolName === 'get_stock_price' || toolName === 'web_search') {
+      try {
+        const data = JSON.parse(result);
+        let html = '';
+        if (toolName === 'get_weather') html = renderWeatherWidget(data);
+        else if (toolName === 'get_stock_price') html = renderStockWidget(data);
+        else if (toolName === 'web_search') html = renderWebSearchWidget(data);
+
+        resultContent.innerHTML = DOMPurify.sanitize(html);
+      } catch (e) {
+    // Fallback to plain text if JSON parsing fails
+        resultContent.textContent = result;
+      }
+    } else {
+      resultContent.textContent = result;
+    }
     resultSection.style.display = 'block';
   }
+}
+
+/**
+ * Weather widget renderer
+ */
+function renderWeatherWidget(data: any): string {
+  if (!data.current) return md.utils.escapeHtml(JSON.stringify(data));
+  const escape = md.utils.escapeHtml;
+
+  let html = `<div class="weather-widget">`;
+  html += `<div class="weather-header">`;
+  html += `<div class="weather-location">${escape(data.location)}</div>`;
+  html += `<div class="weather-current">${Math.round(data.current.temperature)}${escape(data.current.unit)}</div>`;
+  html += `</div>`;
+
+  if (data.forecast && Array.isArray(data.forecast)) {
+    html += `<div class="weather-forecast">`;
+    for (const day of data.forecast) {
+      const date = new Date(day.date).toLocaleDateString(undefined, { weekday: 'short' });
+      const emoji = getWeatherEmoji(day.weather_code);
+      html += `<div class="weather-day">
+                 <div class="weather-date">${date}</div>
+                 <div class="weather-icon">${emoji}</div>
+                 <div class="weather-temps">
+                   <span class="weather-max">${Math.round(day.max_temp)}°</span>
+                   <span class="weather-min">${Math.round(day.min_temp)}°</span>
+                 </div>
+               </div>`;
+    }
+    html += `</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+/**
+ * Stock widget renderer
+ */
+function renderStockWidget(data: any): string {
+  if (!data.symbol) return md.utils.escapeHtml(JSON.stringify(data));
+  const escape = md.utils.escapeHtml;
+  const isUp = data.percent_change >= 0;
+  const sign = isUp ? '+' : '';
+  const colorClass = isUp ? 'stock-up' : 'stock-down';
+
+  let svg = '';
+  if (data.history && data.history.length > 1) {
+    const prices = data.history.map((h: any) => h.close);
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    const range = max - min || 1;
+    const width = 100;
+    const height = 30;
+
+    const pts = prices.map((p: number, i: number) => {
+      const x = (i / (prices.length - 1)) * width;
+      const y = height - ((p - min) / range) * height;
+      return `${x},${y}`;
+    }).join(' ');
+
+    // Create gradient fill underneath the sparkline
+    const fillPts = `${pts} ${width},${height} 0,${height}`;
+
+    // Smooth the stroke color a bit for darker neon pop
+    const strokeColor = isUp ? '#4ade80' : '#f87171';
+    const gradientId = `stock-grad-${Math.random().toString(36).substring(2, 9)}`;
+    const stopColor = isUp ? 'rgba(74, 222, 128, 0.2)' : 'rgba(248, 113, 113, 0.2)';
+
+    svg = `
+      <svg viewBox="-2 -2 104 38" class="stock-sparkline" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="${gradientId}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${stopColor}" />
+            <stop offset="100%" stop-color="transparent" />
+          </linearGradient>
+        </defs>
+        <polygon fill="url(#${gradientId})" points="${fillPts}" />
+        <polyline fill="none" class="stock-sparkline-path" stroke="${strokeColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" points="${pts}" />
+      </svg>
+    `;
+  }
+
+  return `
+    <div class="stock-widget">
+      <div class="stock-header">
+        <div class="stock-header-main">
+          <span class="stock-symbol">${escape(data.symbol)}</span>
+          <span class="stock-price">$${data.current_price.toFixed(2)}</span>
+        </div>
+        <div class="stock-header-sub">
+          <span class="stock-change ${colorClass}">${sign}${data.percent_change.toFixed(2)}%</span>
+          <span class="stock-range-label">1M History</span>
+        </div>
+      </div>
+      ${svg ? `<div class="stock-graph-container">${svg}</div>` : ''}
+    </div>
+  `;
+}
+
+/**
+ * Web Search widget renderer
+ */
+function renderWebSearchWidget(results: any[]): string {
+  if (!Array.isArray(results)) return md.utils.escapeHtml(JSON.stringify(results));
+  const escape = md.utils.escapeHtml;
+
+  if (results.length === 0) {
+    return `<div class="web-search-empty">No results found.</div>`;
+  }
+
+  let html = `<ul class="web-search-results">`;
+  for (const r of results) {
+    let urlHostname = r.url;
+    try {
+      urlHostname = new URL(r.url).hostname;
+    } catch (e) { }
+
+    html += `
+      <li class="web-search-item">
+        <a href="${escape(r.url)}" target="_blank" class="web-search-link">
+          <div class="web-search-site">${escape(urlHostname)}</div>
+          <div class="web-search-title">${escape(r.title)}</div>
+        </a>
+        <div class="web-search-snippet">${escape(r.snippet)}</div>
+      </li>
+    `;
+  }
+  html += `</ul>`;
+  return html;
+}
+
+function getWeatherEmoji(code: number): string {
+  if (code === 0) return '☀️';
+  if (code === 1 || code === 2) return '⛅';
+  if (code === 3) return '☁️';
+  if (code >= 45 && code <= 48) return '🌫️';
+  if (code >= 51 && code <= 67) return '🌧️';
+  if (code >= 71 && code <= 77) return '❄️';
+  if (code >= 80 && code <= 82) return '🌦️';
+  if (code >= 85 && code <= 86) return '🌨️';
+  if (code >= 95 && code <= 99) return '⛈️';
+  return '❓';
 }
 
 /**

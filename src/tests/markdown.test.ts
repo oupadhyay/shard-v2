@@ -26,10 +26,7 @@ describe('Markdown Utilities', () => {
       expect(errors).toContain('Unbalanced $$: missing opening or closing delimiter for display math');
     });
 
-    it('should detect unbalanced $ delimiters', () => {
-      const errors = detectUnrenderedLatex('This is $ unbalanced inline');
-      expect(errors).toContain('Unbalanced $: missing opening or closing delimiter for inline math');
-    });
+    // Removed unbalanced single $ test as it causes false positives with currency
 
     it('should detect unrendered LaTeX commands outside delimiters', () => {
       const errors = detectUnrenderedLatex('Check this: \\frac{1}{2}');

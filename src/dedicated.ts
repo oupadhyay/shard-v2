@@ -609,8 +609,12 @@ async function loadChatHistory() {
         }
         if (msg.content) addMessage(fragment, "assistant", msg.content, msg.images);
       } else if (msg.role === "tool" && msg.tool_call_id) {
-        const matched = Array.from(fragment.querySelectorAll(".tool-output"))
+        let matched = Array.from(fragment.querySelectorAll(".web-search-query"))
           .find((el) => el.getAttribute("data-tool-id") === msg.tool_call_id);
+        if (!matched) {
+          matched = Array.from(fragment.querySelectorAll(".tool-output"))
+            .find((el) => el.getAttribute("data-tool-id") === msg.tool_call_id);
+        }
         if (matched && msg.content) updateToolResult(matched, msg.content);
       }
     }
@@ -741,19 +745,8 @@ listen<string>(EVENTS.AGENT_TOOL_RESULT, (event) => {
     }
 
     if (matchingQuery) {
-      const resultSection = matchingQuery.querySelector(".tool-result") as HTMLElement;
-      const resultContent = matchingQuery.querySelector(".tool-result-content");
-      if (resultSection && resultContent) {
-        const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-        const cleanResult = resultText
-          .replace(/^Web Search Results:\n/, "")
-          .split("\n")
-          .filter((line: string) => line.trim().startsWith("-"))
-          .map((line: string) => { const m = line.match(/^(- \[[^\]]+\]\([^)]+\))/); return m ? m[1] : line; })
-          .join("\n");
-        resultContent.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(cleanResult)));
-        resultSection.style.display = "grid";
-      }
+      const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+      updateToolResult(matchingQuery, resultText);
     }
   } else {
     const toolDivs = Array.from(chatArea.querySelectorAll(".tool-output"));

@@ -56,7 +56,8 @@ pub fn make_cache_key(tool_name: &str, args: &serde_json::Value) -> String {
     // Sort args for consistent hashing
     let args_str = serde_json::to_string(args).unwrap_or_default();
     let hash = seahash_str(&args_str);
-    format!("{}:{:x}", tool_name, hash)
+    // Use a version prefix (v2) to invalidate legacy cached strings vs new JSON structures
+    format!("v2:{}:{:x}", tool_name, hash)
 }
 
 /// Simple hash function for argument strings

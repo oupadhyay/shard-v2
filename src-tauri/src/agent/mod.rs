@@ -1202,8 +1202,7 @@ impl Agent {
             "get_weather" => {
                 let location = args["location"].as_str().unwrap_or_default();
                 match perform_weather_lookup(&self.http_client, location).await {
-                    Ok(Some((temp, unit, loc))) => format!("Weather in {}: {} {}", loc, temp, unit),
-                    Ok(None) => "Weather data not found.".to_string(),
+                    Ok(json_str) => json_str,
                     Err(e) => format!("Error: {}", e),
                 }
             }
@@ -1260,12 +1259,8 @@ impl Agent {
                 let query = args["query"].as_str().unwrap_or_default();
                 match perform_web_search(query, config.brave_api_key.as_deref()).await {
                     Ok(results) => {
-                        // Full format with snippets for the model to understand
-                        let snippets: Vec<String> = results
-                            .iter()
-                            .map(|r| format!("- [{}]({}) : {}", r.title, r.url, r.snippet))
-                            .collect();
-                        format!("Web Search Results:\n{}", snippets.join("\n\n"))
+                        serde_json::to_string(&results)
+                            .unwrap_or_else(|_| "Failed to serialize search results to JSON".to_string())
                     }
                     Err(e) => format!("Error: {}", e),
                 }

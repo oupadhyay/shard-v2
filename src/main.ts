@@ -667,20 +667,9 @@ async function loadChatHistory() {
             const resultSection = matchingQuery.querySelector('.tool-result') as HTMLElement;
             const resultContent = matchingQuery.querySelector('.tool-result-content');
             if (resultSection && resultContent) {
-              // Simplify web search results for display (extract just title links)
-              const cleanResult = msg.content
-                .replace(/^Web Search Results:\n/, '')
-                // Extract markdown links and remove snippets after " : "
-                .split('\n')
-                .filter((line: string) => line.trim().startsWith('-'))
-                .map((line: string) => {
-                  // Match "- [title](url) : snippet" and keep just "- [title](url)"
-                  const match = line.match(/^(- \[[^\]]+\]\([^)]+\))/);
-                  return match ? match[1] : line;
-                })
-                .join('\n');
-              resultContent.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(cleanResult)));
-              resultSection.style.display = 'grid';
+              // Since Web Search now returns JSON, we use the standardized updateToolResult function
+              // to parse it into our rich specific widget.
+              updateToolResult(matchingQuery, msg.content);
               matched = true;
             }
           }
@@ -1031,26 +1020,8 @@ listen<string>(EVENTS.AGENT_TOOL_RESULT, (event) => {
     }
 
     if (matchingQuery) {
-      const resultSection = matchingQuery.querySelector('.tool-result') as HTMLElement;
-      const resultContent = matchingQuery.querySelector('.tool-result-content');
-      if (resultSection && resultContent) {
-        // Simplify web search results for display (extract just title links)
-        const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-        // Remove "Web Search Results:" prefix and extract just the links
-        const cleanResult = resultText
-          .replace(/^Web Search Results:\n/, '')
-          // Extract markdown links and remove snippets after " : "
-          .split('\n')
-          .filter((line: string) => line.trim().startsWith('-'))
-          .map((line: string) => {
-            // Match "- [title](url) : snippet" and keep just "- [title](url)"
-            const match = line.match(/^(- \[[^\]]+\]\([^)]+\))/);
-            return match ? match[1] : line;
-          })
-          .join('\n');
-        resultContent.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(cleanResult)));
-        resultSection.style.display = 'grid';
-      }
+      const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+      updateToolResult(matchingQuery, resultText);
     }
   } else {
     // Find the most recent tool-output with matching name
