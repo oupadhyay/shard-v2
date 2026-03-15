@@ -1,11 +1,11 @@
 use crate::agent::{FunctionDefinition, ToolDefinition};
 use serde_json::json;
 
-pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
-    // Collect all required tools from the active skills
+pub fn get_all_tools(active_personas: &[String]) -> Vec<ToolDefinition> {
+    // Collect all required tools from the active personas
     let mut required_tools = std::collections::HashSet::new();
-    for skill in active_skills {
-        for tool in crate::skills::get_skill_required_tools(skill) {
+    for persona in active_personas {
+        for tool in crate::personas::get_persona_required_tools(persona) {
             required_tools.insert(tool);
         }
     }
@@ -20,9 +20,9 @@ pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
         "refresh_memories",
         "read_topic_summary",
         "update_topic_summary",
-        "load_skill",
-        "unload_skill",
-        "list_skills",
+        "load_persona",
+        "unload_persona",
+        "list_personas",
         "search_wikipedia",
         "youtube_transcript",
         "run_python",
@@ -265,12 +265,12 @@ pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
-                name: "load_skill".to_string(),
-                description: "Load a specific dynamic skill into your session context. This adds specialized instructions to your system prompt. You should ONLY load a skill if it is strictly necessary to answer the user's current prompt. You MUST unload the skill when the specific mini-task is complete to avoid context pollution. Please check the 'Available Skills' section in your system prompt to see what skills you can load.".to_string(),
+                name: "load_persona".to_string(),
+                description: "Load a specific dynamic persona into your session context. This adds specialized instructions to your system prompt. You should ONLY load a persona if it is strictly necessary to answer the user's current prompt. You MUST unload the persona when the specific mini-task is complete to avoid context pollution. Please check the 'Available Personas' section in your system prompt to see what personas you can load.".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "name": { "type": "string", "description": "The exact name of the skill to load" },
+                        "name": { "type": "string", "description": "The exact name of the persona to load" },
                     },
                     "required": ["name"],
                     "additionalProperties": false
@@ -281,12 +281,12 @@ pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
-                name: "unload_skill".to_string(),
-                description: "Unload a specific dynamic skill from your session context. You MUST do this immediately after you have finished the specific mini-task that required the skill.".to_string(),
+                name: "unload_persona".to_string(),
+                description: "Unload a specific dynamic persona from your session context. You MUST do this immediately after you have finished the specific mini-task that required the persona.".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "name": { "type": "string", "description": "The name of the skill to unload" },
+                        "name": { "type": "string", "description": "The name of the persona to unload" },
                     },
                     "required": ["name"],
                     "additionalProperties": false
@@ -297,8 +297,8 @@ pub fn get_all_tools(active_skills: &[String]) -> Vec<ToolDefinition> {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
-                name: "list_skills".to_string(),
-                description: "List all dynamically loadable skills available in the workspace. Use this to discover expertise you can adopt.".to_string(),
+                name: "list_personas".to_string(),
+                description: "List all dynamically loadable personas available in the workspace. Use this to discover expertise you can adopt.".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {},

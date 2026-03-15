@@ -1,41 +1,54 @@
 use std::fs;
 use std::path::PathBuf;
 
-/// Gets the directory path where skills are stored.
+/// Gets the directory path where personas are stored.
 /// If it doesn't exist, it attempts to create it.
-pub fn get_skills_dir() -> Result<PathBuf, String> {
+pub fn get_personas_dir() -> Result<PathBuf, String> {
     if let Some(mut base_dir) = dirs::data_local_dir() {
         base_dir.push("dev.ojasw.shard");
-        base_dir.push("skills");
 
-        if !base_dir.exists() {
-            if let Err(e) = fs::create_dir_all(&base_dir) {
-                return Err(format!("Failed to create skills directory: {}", e));
+        // Migration logic: if personas doesn't exist but skills does, rename it.
+        let mut personas_dir = base_dir.clone();
+        personas_dir.push("personas");
+
+        if !personas_dir.exists() {
+            let mut skills_dir = base_dir.clone();
+            skills_dir.push("skills");
+
+            if skills_dir.exists() && skills_dir.is_dir() {
+                if let Err(e) = fs::rename(&skills_dir, &personas_dir) {
+                    return Err(format!("Failed to migrate skills to personas directory: {}", e));
+                }
+            } else {
+                if let Err(e) = fs::create_dir_all(&personas_dir) {
+                    return Err(format!("Failed to create personas directory: {}", e));
+                }
             }
         }
-        Ok(base_dir)
+
+        Ok(personas_dir)
     } else {
-        Err("Could not find local data directory for skills".to_string())
+        Err("Could not find local data directory for personas".to_string())
     }
 }
 
-/// Returns a list of base filenames (skills) found in the skills directory.
-pub fn list_available_skills() -> Vec<String> {
-    let mut skills = Vec::new();
-    if let Ok(dir) = get_skills_dir() {
+/// Returns a list of base filenames (personas) found in the personas directory.
+pub fn list_available_personas() -> Vec<String> {
+    let mut personas = Vec::new();
+    if let Ok(dir) = get_personas_dir() {
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        skills.push(stem.to_string());
+                        personas.push(stem.to_string());
                     }
                 }
             }
         }
     }
-    skills.sort();
-    skills
+    personas.sort();
+    personas
 }
 
 /// Validates a filename to ensure it's a single "normal" path component.
@@ -67,13 +80,13 @@ pub(crate) fn is_safe_filename(name: &str) -> bool {
     }
 }
 
-/// Reads the content of a specific skill by its name.
-pub fn get_skill_content(name: &str) -> Option<String> {
+/// Reads the content of a specific persona by its name.
+pub fn get_persona_content(name: &str) -> Option<String> {
     if !is_safe_filename(name) {
         return None;
     }
 
-    if let Ok(mut path) = get_skills_dir() {
+    if let Ok(mut path) = get_personas_dir() {
         path.push(format!("{}.md", name));
         if path.exists() && path.is_file() {
             return fs::read_to_string(path).ok();
@@ -82,17 +95,17 @@ pub fn get_skill_content(name: &str) -> Option<String> {
     None
 }
 
-/// Parses a skill's Markdown file and extracts the "required_tools" list from its YAML frontmatter.
+/// Parses a persona's Markdown file and extracts the "required_tools" list from its YAML frontmatter.
 /// Example frontmatter:
 /// ---
 /// required_tools:
 ///   - search_arxiv
 ///   - get_weather
 /// ---
-pub fn get_skill_required_tools(name: &str) -> Vec<String> {
+pub fn get_persona_required_tools(name: &str) -> Vec<String> {
     let mut required = Vec::new();
 
-    if let Some(content) = get_skill_content(name) {
+    if let Some(content) = get_persona_content(name) {
         if content.starts_with("---\n") || content.starts_with("---\r\n") {
             let prefix_len = if content.starts_with("---\r\n") { 5 } else { 4 };
             // Find the end of the frontmatter

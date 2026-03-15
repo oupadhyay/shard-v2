@@ -103,5 +103,5 @@ name = "sessions_bench"
 harness = false
 
 [[bench]]
-name = "skills_bench"
+name = "personas_bench"
 harness = false

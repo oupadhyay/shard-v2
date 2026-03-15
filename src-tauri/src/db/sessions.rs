@@ -13,7 +13,8 @@ pub struct SessionRow {
     pub summary: Option<String>,
     pub created_at: String,
     pub updated_at: String,
-    pub active_skills: Option<String>, // JSON array of skill names
+    #[serde(rename = "active_skills")]
+    pub active_personas: Option<String>, // JSON array of persona names
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,14 +38,14 @@ pub fn insert_session(store: &VectorStore, session: &SessionRow) -> Result<(), S
                 session.summary,
                 session.created_at,
                 session.updated_at,
-                session.active_skills.clone().unwrap_or_else(|| "[]".to_string())
+                session.active_personas.clone().unwrap_or_else(|| "[]".to_string())
             ],
         )
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-/// Get active skills for a session
+/// Get active personas for a session
 pub fn get_active_skills(store: &VectorStore, session_id: &str) -> Result<Vec<String>, String> {
     let result: Option<String> = store
         .conn
@@ -63,7 +64,7 @@ pub fn get_active_skills(store: &VectorStore, session_id: &str) -> Result<Vec<St
     }
 }
 
-/// Update active skills for a session (expects a JSON array string)
+/// Update active personas for a session (expects a JSON array string)
 pub fn update_active_skills(store: &VectorStore, session_id: &str, skills_json: &str) -> Result<(), String> {
     store
         .conn
@@ -159,7 +160,7 @@ pub fn run_migration(app_handle: &AppHandle, store: &VectorStore) -> Result<(), 
                     summary: None,
                     created_at: now.clone(),
                     updated_at: now.clone(),
-                    active_skills: Some("[]".to_string()),
+                    active_personas: Some("[]".to_string()),
                 };
 
                 if let Err(e) = insert_session(store, &session) {
@@ -241,7 +242,7 @@ pub fn run_migration(app_handle: &AppHandle, store: &VectorStore) -> Result<(), 
                             summary,
                             created_at: modified_time.clone(),
                             updated_at: modified_time.clone(),
-                            active_skills: Some("[]".to_string()),
+                            active_personas: Some("[]".to_string()),
                         };
 
                         if insert_session(store, &session).is_ok() {

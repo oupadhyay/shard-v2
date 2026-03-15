@@ -23,7 +23,7 @@ mod prompts;
 pub mod retrieval;
 mod secrets;
 pub mod sessions;
-pub mod skills;
+pub mod personas;
 mod sandbox;
 mod tools;
 pub mod vector_store;
@@ -401,7 +401,7 @@ async fn delete_session(
                     summary: None,
                     created_at: now.clone(),
                     updated_at: now,
-                    active_skills: Some("[]".to_string()),
+                    active_personas: Some("[]".to_string()),
                 };
                 let _ = crate::db::sessions::insert_session(&store, &session);
             }

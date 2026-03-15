@@ -117,7 +117,7 @@ impl Agent {
                     summary: None,
                     created_at: now.clone(),
                     updated_at: now.clone(),
-                    active_skills: Some("[]".to_string()),
+                    active_personas: Some("[]".to_string()),
                 };
                 let _ = crate::db::sessions::insert_session(&store, &session);
             }
@@ -230,7 +230,7 @@ impl Agent {
                 summary: None,
                 created_at: now.clone(),
                 updated_at: now.clone(),
-                active_skills: Some("[]".to_string()),
+                active_personas: Some("[]".to_string()),
             };
             let _ = crate::db::sessions::insert_session(&store, &session);
         }
@@ -1539,53 +1539,53 @@ impl Agent {
                     Err(e) => format!("Error: {}", e),
                 }
             }
-            "list_skills" => {
-                let skills = crate::skills::list_available_skills();
-                if skills.is_empty() {
-                    "No dynamic skills are currently available in the workspace.".to_string()
+            "list_personas" => {
+                let personas = crate::personas::list_available_personas();
+                if personas.is_empty() {
+                    "No dynamic personas are currently available in the workspace.".to_string()
                 } else {
-                    format!("Available skills:\n{}", skills.join("\n"))
+                    format!("Available personas:\n{}", personas.join("\n"))
                 }
             }
-            "load_skill" => {
+            "load_persona" => {
                 let name = args["name"].as_str().unwrap_or_default();
-                if let Some(_content) = crate::skills::get_skill_content(name) {
+                if let Some(_content) = crate::personas::get_persona_content(name) {
                     let session_id = self.session_id.lock().await.clone();
                     if let Ok(store) = crate::memories::get_vector_store(app_handle) {
-                        if let Ok(mut active_skills) = crate::db::sessions::get_active_skills(&store, &session_id) {
-                            if !active_skills.contains(&name.to_string()) {
-                                active_skills.push(name.to_string());
-                                let skills_json = serde_json::to_string(&active_skills).unwrap_or_else(|_| "[]".to_string());
+                        if let Ok(mut active_personas) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                            if !active_personas.contains(&name.to_string()) {
+                                active_personas.push(name.to_string());
+                                let skills_json = serde_json::to_string(&active_personas).unwrap_or_else(|_| "[]".to_string());
                                 let _ = crate::db::sessions::update_active_skills(&store, &session_id, &skills_json);
-                                format!("Successfully loaded skill '{}'. The instructions will be active for the rest of this session.", name)
+                                format!("Successfully loaded persona '{}'. The instructions will be active for the rest of this session.", name)
                             } else {
-                                format!("Skill '{}' is already active.", name)
+                                format!("Persona '{}' is already active.", name)
                             }
                         } else {
-                            "Failed to retrieve active session skills.".to_string()
+                            "Failed to retrieve active session personas.".to_string()
                         }
                     } else {
                         "Failed to access database.".to_string()
                     }
                 } else {
-                    format!("Skill '{}' not found. Use `list_skills` to see what is available.", name)
+                    format!("Persona '{}' not found. Use `list_personas` to see what is available.", name)
                 }
             }
-            "unload_skill" => {
+            "unload_persona" => {
                 let name = args["name"].as_str().unwrap_or_default();
                 let session_id = self.session_id.lock().await.clone();
                 if let Ok(store) = crate::memories::get_vector_store(app_handle) {
-                    if let Ok(mut active_skills) = crate::db::sessions::get_active_skills(&store, &session_id) {
-                        if active_skills.contains(&name.to_string()) {
-                            active_skills.retain(|s| s != name);
-                            let skills_json = serde_json::to_string(&active_skills).unwrap_or_else(|_| "[]".to_string());
+                    if let Ok(mut active_personas) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                        if active_personas.contains(&name.to_string()) {
+                            active_personas.retain(|s| s != name);
+                            let skills_json = serde_json::to_string(&active_personas).unwrap_or_else(|_| "[]".to_string());
                             let _ = crate::db::sessions::update_active_skills(&store, &session_id, &skills_json);
-                            format!("Successfully unloaded skill '{}'.", name)
+                            format!("Successfully unloaded persona '{}'.", name)
                         } else {
-                            format!("Skill '{}' is not currently active.", name)
+                            format!("Persona '{}' is not currently active.", name)
                         }
                     } else {
-                        "Failed to retrieve active session skills.".to_string()
+                        "Failed to retrieve active session personas.".to_string()
                     }
                 } else {
                     "Failed to access database.".to_string()
@@ -1858,19 +1858,19 @@ impl Agent {
                 .filter(|s| !s.is_empty())
         };
 
-        let available_skills = crate::skills::list_available_skills();
+        let available_skills = crate::personas::list_available_personas();
         let available_skills_str = if available_skills.is_empty() { None } else { Some(available_skills.join("\n")) };
         let available_skills_opt = available_skills_str.as_deref();
 
         let session_id = self.session_id.lock().await.clone();
         let mut active_skills_opt: Option<String> = None;
         if let Ok(store) = crate::memories::get_vector_store(app_handle) {
-            if let Ok(active_skills) = crate::db::sessions::get_active_skills(&store, &session_id) {
-                if !active_skills.is_empty() {
+            if let Ok(active_personas) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                if !active_personas.is_empty() {
                     let mut active_skills_content = String::new();
-                    for skill in active_skills {
-                        if let Some(content) = crate::skills::get_skill_content(&skill) {
-                            active_skills_content.push_str(&format!("--- SKILL: {} ---\n{}\n\n", skill, content));
+                    for persona in active_personas {
+                        if let Some(content) = crate::personas::get_persona_content(&persona) {
+                            active_skills_content.push_str(&format!("--- PERSONA: {} ---\n{}\n\n", persona, content));
                         }
                     }
                     if !active_skills_content.is_empty() {
@@ -2193,19 +2193,19 @@ impl Agent {
                 .filter(|s| !s.is_empty())
         };
 
-        let available_skills = crate::skills::list_available_skills();
+        let available_skills = crate::personas::list_available_personas();
         let available_skills_str = if available_skills.is_empty() { None } else { Some(available_skills.join("\n")) };
         let available_skills_opt = available_skills_str.as_deref();
 
         let session_id = self.session_id.lock().await.clone();
         let mut active_skills_opt: Option<String> = None;
         if let Ok(store) = crate::memories::get_vector_store(app_handle) {
-            if let Ok(active_skills) = crate::db::sessions::get_active_skills(&store, &session_id) {
-                if !active_skills.is_empty() {
+            if let Ok(active_personas) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                if !active_personas.is_empty() {
                     let mut active_skills_content = String::new();
-                    for skill in active_skills {
-                        if let Some(content) = crate::skills::get_skill_content(&skill) {
-                            active_skills_content.push_str(&format!("--- SKILL: {} ---\n{}\n\n", skill, content));
+                    for persona in active_personas {
+                        if let Some(content) = crate::personas::get_persona_content(&persona) {
+                            active_skills_content.push_str(&format!("--- PERSONA: {} ---\n{}\n\n", persona, content));
                         }
                     }
                     if !active_skills_content.is_empty() {

@@ -16,7 +16,7 @@ mod tests {
         let prompt = get_default_system_prompt_with_date(None, None, None, None, date);
         assert!(prompt.contains(&format!("SYSTEM: Today is {}", date)));
         assert!(prompt.contains("You are Shard, an AI assistant."));
-        assert!(prompt.contains("Available Skills to Load (via `load_skill`):\nNone"));
+        assert!(prompt.contains("Available Personas to Load (via `load_persona`):\nNone"));
         assert!(!prompt.contains("Some("));
     }
 

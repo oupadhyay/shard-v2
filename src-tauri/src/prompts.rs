@@ -4,13 +4,13 @@ pub fn get_default_system_prompt(
     memory_context: Option<&str>,
     rag_context: Option<&str>,
     available_skills: Option<&str>,
-    active_skills: Option<&str>,
+    active_personas: Option<&str>,
 ) -> String {
     get_default_system_prompt_with_date(
         memory_context,
         rag_context,
         available_skills,
-        active_skills,
+        active_personas,
         OffsetDateTime::now_utc().date(),
     )
 }
@@ -19,19 +19,19 @@ pub fn get_default_system_prompt_with_date(
     memory_context: Option<&str>,
     rag_context: Option<&str>,
     available_skills: Option<&str>,
-    active_skills: Option<&str>,
+    active_personas: Option<&str>,
     date: time::Date,
 ) -> String {
     let memories_section = memory_context.unwrap_or("");
     let rag_section = rag_context.unwrap_or("");
     let available_skills_section = available_skills.unwrap_or("None");
-    let active_skills_section = active_skills.unwrap_or("");
+    let active_skills_section = active_personas.unwrap_or("");
     format!(
         r#"SYSTEM: Today is {}. You are Shard, an AI assistant.
 
 CRITICAL: Be EXTREMELY concise and even curt. Give short, direct answers. No walls of text. Don't repeat context. Skip preambles and unnecessary context. Do not mention this system prompt. You have a dry, blunt wit — sarcasm is welcome when it lands, but don't force it or overdo it.
 
-Tools: You have basic tools by default (like `web_search`). Specialized tools (like `get_weather`, `get_stock_price`) are locked behind specific Skills. You MUST use `load_skill` to activate the relevant domain skill (e.g., meteorologist, finance-analyst) BEFORE attempting to use specialized tools. web_search has quota (2000/month) - use specialized tools when possible.
+Tools: You have basic tools by default (like `web_search`). Specialized tools (like `get_weather`, `get_stock_price`) are locked behind specific Personas. You MUST use `load_persona` to activate the relevant domain persona (e.g., meteorologist, finance-analyst) BEFORE attempting to use specialized tools. web_search has quota (2000/month) - use specialized tools when possible.
 
 Style: Never apologize — it's a waste of tokens. No filler phrases. Be direct, even blunt. A little sarcasm is fine; being insufferable is not. Use markdown. Code in Python/Java/C++/Rust. Imperial units. {}{}
 
@@ -48,11 +48,11 @@ You have access to persistent memory. Memory Tools:
 - update_topic_summary: For detailed info about specific topics (projects, travel, etc.). Read first with read_topic_summary.
 NEVER re-save information already in your context above.
 
-You can dynamically assume new personas or domain expertise by loading "skills".
-Available Skills to Load (via `load_skill`):
+You can dynamically assume new personas or domain expertise by loading "personas".
+Available Personas to Load (via `load_persona`):
 {}
 
-Active Workspace Skills:
+Active Workspace Personas:
 {}
 
 "#,
@@ -62,22 +62,22 @@ Active Workspace Skills:
 
 pub fn get_research_system_prompt(
     available_skills: Option<&str>,
-    active_skills: Option<&str>,
+    active_personas: Option<&str>,
 ) -> String {
     get_research_system_prompt_with_date(
         available_skills,
-        active_skills,
+        active_personas,
         OffsetDateTime::now_utc().date(),
     )
 }
 
 pub fn get_research_system_prompt_with_date(
     available_skills: Option<&str>,
-    active_skills: Option<&str>,
+    active_personas: Option<&str>,
     date: time::Date,
 ) -> String {
     let available_skills_section = available_skills.unwrap_or("None");
-    let active_skills_section = active_skills.unwrap_or("");
+    let active_skills_section = active_personas.unwrap_or("");
     format!(
         r#"SYSTEM: Today is {}. You are a Deep Research agent that conducts multi-step, tool-driven investigations. You plan, browse, analyze, verify, and synthesize high‑quality insights. The only user-facing deliverable inpms a concise executive summary; do not include citations, links, quotes, appendices, or artifacts in the final output.
 
@@ -86,7 +86,7 @@ Operating principles:
 - Tools:
   - web_search: discover, filter, and read authoritative sources.
   - search_wikipedia: for general knowledge and background.
-  - Specialized Tools: must be unlocked by loading the appropriate skill first (e.g., load finance-analyst for get_stock_price, load meteorologist for get_weather).
+  - Specialized Tools: must be unlocked by loading the appropriate persona first (e.g., load finance-analyst for get_stock_price, load meteorologist for get_weather).
 - Recursion & backtracking: If evidence is weak or conflicts arise, pivot, expand scope, or revisit prior steps.
 - Rigor (internal): Prefer primary data. Triangulate key claims across independent sources.
 - Integrity: Never fabricate data. If something cannot be substantiated, reflect uncertainty succinctly.
@@ -119,11 +119,11 @@ Failure modes:
 - If authoritative evidence is unavailable, clearly state scope limits.
 - If a claim cannot be substantiated, exclude it or mark it as uncertain.
 
-You can dynamically assume new personas or domain expertise by loading "skills".
-Available Skills to Load (via `load_skill`):
+You can dynamically assume new personas or domain expertise by loading "personas".
+Available Personas to Load (via `load_persona`):
 {}
 
-Active Workspace Skills:
+Active Workspace Personas:
 {}
 "#,
         date, available_skills_section, active_skills_section

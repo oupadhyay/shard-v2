@@ -164,13 +164,13 @@ impl VectorStore {
                 rusqlite::Error::SqliteFailure(_, Some(msg))
                     if msg.contains("duplicate column name") =>
                 {
-                    log::debug!(
+                    eprintln!(
                         "[VectorStore] sessions.active_skills column already exists: {}",
-                        msg
+                        e
                     );
                 }
                 _ => {
-                    log::warn!(
+                    eprintln!(
                         "[VectorStore] Failed to auto-migrate sessions.active_skills column: {}",
                         e
                     );
