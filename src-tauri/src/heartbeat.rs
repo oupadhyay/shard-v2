@@ -2,8 +2,8 @@
  * Heartbeat Engine Module
  *
  * Replaces the old cron_jobs system with file-based heartbeat specs.
- * Each heartbeat is a `.md` file with YAML frontmatter defining schedule,
- * session namespace, optional persona, and rate limits.
+ * Each heartbeat is a `.toml` file defining schedule, session namespace,
+ * optional persona, and rate limits.
  *
  * Key design:
  * - Each heartbeat runs in its own persistent SQLite session (never touches
@@ -25,7 +25,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 // Heartbeat Spec Types
 // ============================================================================
 
-/// A parsed heartbeat specification from a `.md` file.
+/// A parsed heartbeat specification from a `.toml` file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatSpec {
     /// Cron expression (e.g., "0 */2 * * *")
@@ -577,7 +577,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
     for iteration in 0..max_iterations {
         log::info!(
             "[Heartbeat] '{}' tool loop iteration {} / {}",
-            spec.session,
+            spec.filename,
             iteration + 1,
             max_iterations
         );
@@ -643,7 +643,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
                     Ok(msg_id) => {
                         log::info!(
                             "[Heartbeat] '{}': draft created for '{}' (msg_id: {})",
-                            spec.session,
+                            spec.filename,
                             tc.name,
                             msg_id
                         );
@@ -669,7 +669,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
                 let result = execute_safe_tool(app_handle, &http_client, &config, spec, &tc.name, &args).await;
                 log::info!(
                     "[Heartbeat] '{}': executed tool '{}' -> {} chars",
-                    spec.session,
+                    spec.filename,
                     tc.name,
                     result.len()
                 );
@@ -686,7 +686,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
         if draft_created {
             log::info!(
                 "[Heartbeat] '{}': halting tool loop — draft awaiting approval",
-                spec.session
+                spec.filename
             );
             // Set final content to indicate the draft was created
             final_content = Some("Draft action queued for user approval.".to_string());
@@ -697,7 +697,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
         if tool_calls_made >= max_iterations {
             log::info!(
                 "[Heartbeat] '{}': max tool calls ({}) reached",
-                spec.session,
+                spec.filename,
                 max_iterations
             );
             break;
@@ -711,12 +711,12 @@ pub async fn process_heartbeat_turn<R: Runtime>(
     // 7. Determine output
     let trimmed = response_text.trim();
     if trimmed == "HEARTBEAT_OK" || trimmed.is_empty() || trimmed == "Draft action queued for user approval." {
-        log::info!("[Heartbeat] '{}': nothing to report to user", spec.session);
+        log::info!("[Heartbeat] '{}': nothing to report to user", spec.filename);
         Ok(None)
     } else {
         log::info!(
             "[Heartbeat] '{}': produced {} chars of output",
-            spec.session,
+            spec.filename,
             trimmed.len()
         );
 
@@ -864,9 +864,10 @@ async fn execute_safe_tool<R: Runtime>(
             }
         }
         "wake_me_up_in" => {
-            // wake_me_up_in is not supported in the heartbeat safe tool executor
-            // because heartbeats already have cron scheduling.
-            "Tool 'wake_me_up_in' is not available. Use the heartbeat's cron schedule for recurring tasks.".to_string()
+            // TODO: Implement wake_me_up_in for heartbeats — spawn a one-shot delayed
+            // task (similar to agent/mod.rs implementation) so heartbeats can schedule
+            // follow-up actions without requiring a new cron spec.
+            "Tool 'wake_me_up_in' is not yet implemented for heartbeat runs. Use the heartbeat's cron schedule for recurring tasks.".to_string()
         }
         "get_weather" => {
             let location = args["location"].as_str().unwrap_or_default();
@@ -918,7 +919,7 @@ fn ensure_heartbeat_session<R: Runtime>(
             active_personas: Some("[]".to_string()),
         };
         crate::db::sessions::insert_session(&store, &session)?;
-        log::info!("[Heartbeat] Created new session for '{}'", session_id);
+        log::info!("[Heartbeat] Created new session for heartbeat");
     }
 
     Ok(())
@@ -1178,7 +1179,7 @@ pub fn migrate_cron_jobs_to_heartbeats<R: Runtime>(
     let mut migrated = 0;
 
     for (i, job) in cron_jobs.iter().enumerate() {
-        let filename = format!("migrated-cron-{}.md", i + 1);
+        let filename = format!("migrated-cron-{}.toml", i + 1);
         let filepath = dir.join(&filename);
 
         // Don't overwrite if already migrated
@@ -1191,7 +1192,7 @@ pub fn migrate_cron_jobs_to_heartbeats<R: Runtime>(
         }
 
         let content = format!(
-            "---\nschedule: \"{}\"\nsession: \"agent:cron-migrated-{}\"\n---\n{}",
+            "schedule = \"{}\"\nsession = \"agent:cron-migrated-{}\"\nprompt = \"\"\"{}\"\"\"\n",
             job.schedule,
             i + 1,
             job.prompt
@@ -1342,25 +1343,24 @@ async fn execute_draft_gated_tool<R: Runtime>(
             }
 
             let dir = get_heartbeats_dir(app_handle)?;
-            let filepath = dir.join(format!("{}.md", safe_name));
+            let filepath = dir.join(format!("{}.toml", safe_name));
             if filepath.exists() {
                 return Err(format!("Heartbeat '{}' already exists", safe_name));
             }
 
-            let mut frontmatter = format!(
-                "---\nschedule: \"{}\"\nsession: \"{}\"\n",
+            let mut toml_content = format!(
+                "schedule = \"{}\"\nsession = \"{}\"\n",
                 schedule, session
             );
             if let Some(p) = persona {
-                frontmatter.push_str(&format!("persona: \"{}\"\n", p));
+                toml_content.push_str(&format!("persona = \"{}\"\n", p));
             }
             if let Some(m) = max_tool_calls {
-                frontmatter.push_str(&format!("max_tool_calls: {}\n", m));
+                toml_content.push_str(&format!("max_tool_calls = {}\n", m));
             }
-            frontmatter.push_str("---\n");
-            frontmatter.push_str(prompt);
+            toml_content.push_str(&format!("prompt = \"\"\"{}\"\"\"\n", prompt));
 
-            fs::write(&filepath, &frontmatter)
+            fs::write(&filepath, &toml_content)
                 .map_err(|e| format!("Failed to write heartbeat: {}", e))?;
 
             Ok(format!("Created heartbeat '{}' (schedule: {})", safe_name, schedule))
@@ -1377,7 +1377,7 @@ async fn execute_draft_gated_tool<R: Runtime>(
                 .collect();
 
             let dir = get_heartbeats_dir(app_handle)?;
-            let filepath = dir.join(format!("{}.md", safe_name));
+            let filepath = dir.join(format!("{}.toml", safe_name));
             if !filepath.exists() {
                 return Err(format!("Heartbeat '{}' not found", safe_name));
             }
@@ -1399,7 +1399,7 @@ async fn execute_draft_gated_tool<R: Runtime>(
                 .collect();
 
             let dir = get_heartbeats_dir(app_handle)?;
-            let filepath = dir.join(format!("{}.md", safe_name));
+            let filepath = dir.join(format!("{}.toml", safe_name));
             if !filepath.exists() {
                 return Err(format!("Heartbeat '{}' not found", safe_name));
             }
@@ -1423,19 +1423,18 @@ async fn execute_draft_gated_tool<R: Runtime>(
                 spec.max_tool_calls = m as u32;
             }
 
-            // Rewrite the file
+            // Rewrite the file as TOML
             let mut output = format!(
-                "---\nschedule: \"{}\"\nsession: \"{}\"\n",
+                "schedule = \"{}\"\nsession = \"{}\"\n",
                 spec.schedule, spec.session
             );
             if let Some(ref p) = spec.persona {
-                output.push_str(&format!("persona: \"{}\"\n", p));
+                output.push_str(&format!("persona = \"{}\"\n", p));
             }
             if spec.max_tool_calls != 5 {
-                output.push_str(&format!("max_tool_calls: {}\n", spec.max_tool_calls));
+                output.push_str(&format!("max_tool_calls = {}\n", spec.max_tool_calls));
             }
-            output.push_str("---\n");
-            output.push_str(&spec.prompt);
+            output.push_str(&format!("prompt = \"\"\"{}\"\"\"\n", spec.prompt));
 
             fs::write(&filepath, &output)
                 .map_err(|e| format!("Failed to write heartbeat: {}", e))?;
@@ -1488,7 +1487,7 @@ pub fn create_draft_for_tool_call<R: Runtime>(
     log::info!(
         "[DraftAct] Created draft for tool '{}' in heartbeat '{}' (msg_id: {})",
         tool_name,
-        spec.session,
+        spec.filename,
         msg_id
     );
 

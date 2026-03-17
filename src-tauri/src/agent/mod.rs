@@ -1661,7 +1661,7 @@ impl Agent {
 
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(duration).await;
-                    log::info!("[WakeMeUp] Timer fired after {} min for session '{}'", duration_minutes, session_id);
+                    log::info!("[WakeMeUp] Timer fired after {} min for alarm session", duration_minutes);
 
                     let spec = crate::heartbeat::HeartbeatSpec {
                         schedule: String::new(), // One-shot, not cron-scheduled

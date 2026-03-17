@@ -719,7 +719,7 @@ async function loadChatHistory() {
 async function loadProactiveMessages() {
   try {
     const activeSessionId = await invoke<string>("get_current_session_id").catch(() => "");
-    const messages = await invoke<import("./types").ProactiveMessage[]>("get_proactive_messages", { pendingOnly: true });
+    const messages = await invoke<import("./types").ProactiveMessage[]>("get_proactive_messages");
     
     // Only render pending messages that belong to the current active session
     for (const msg of messages) {

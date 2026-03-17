@@ -405,11 +405,11 @@ pub fn get_heartbeat_tools(active_personas: &[String]) -> Vec<ToolDefinition> {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
                 name: "create_heartbeat".to_string(),
-                description: "Create a new heartbeat spec file. Heartbeats are autonomous scheduled tasks. This creates a new .md file in the heartbeats directory. Requires user approval.".to_string(),
+                description: "Create a new heartbeat spec file. Heartbeats are autonomous scheduled tasks. This creates a new .toml file in the heartbeats directory. Requires user approval.".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "name": { "type": "string", "description": "Filename for the heartbeat (without .md extension)" },
+                        "name": { "type": "string", "description": "Filename for the heartbeat (without .toml extension)" },
                         "schedule": { "type": "string", "description": "Cron expression (e.g. '0 */2 * * *' for every 2 hours)" },
                         "session": { "type": "string", "description": "Session namespace (e.g. 'agent:my-task')" },
                         "prompt": { "type": "string", "description": "The prompt/instructions for the heartbeat" },

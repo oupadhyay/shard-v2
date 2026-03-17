@@ -260,13 +260,13 @@ fn test_rate_limiter_default_cap() {
 
 #[test]
 fn test_cron_migration_format() {
-    // Test that the migration produces valid heartbeat spec content
+    // Test that the migration produces valid TOML heartbeat spec content
     let schedule = "0 */6 * * *";
     let prompt = "Check for system updates and report.";
     let session_idx = 1;
 
     let content = format!(
-        "---\nschedule: \"{}\"\nsession: \"agent:cron-migrated-{}\"\n---\n{}",
+        "schedule = \"{}\"\nsession = \"agent:cron-migrated-{}\"\nprompt = \"\"\"{}\"\"\"\n",
         schedule, session_idx, prompt
     );
 
@@ -290,29 +290,29 @@ fn test_load_heartbeat_specs_from_directory() {
 
     // Write valid spec
     fs::write(
-        heartbeats_dir.join("news.md"),
-        "---\nschedule: \"0 */2 * * *\"\nsession: \"agent:news\"\n---\nCheck news.",
+        heartbeats_dir.join("news.toml"),
+        "schedule = \"0 */2 * * *\"\nsession = \"agent:news\"\nprompt = \"Check news.\"\n",
     )
     .unwrap();
 
     // Write another valid spec
     fs::write(
-        heartbeats_dir.join("weather.md"),
-        "---\nschedule: \"0 8 * * *\"\nsession: \"agent:weather\"\npersona: \"meteorologist\"\n---\nGet weather forecast.",
+        heartbeats_dir.join("weather.toml"),
+        "schedule = \"0 8 * * *\"\nsession = \"agent:weather\"\npersona = \"meteorologist\"\nprompt = \"Get weather forecast.\"\n",
     )
     .unwrap();
 
-    // Write invalid file (missing frontmatter)
-    fs::write(heartbeats_dir.join("invalid.md"), "No frontmatter here.").unwrap();
+    // Write invalid file (bad TOML)
+    fs::write(heartbeats_dir.join("invalid.toml"), "No valid toml here.").unwrap();
 
-    // Write non-md file (should be ignored)
+    // Write non-toml file (should be ignored)
     fs::write(heartbeats_dir.join("notes.txt"), "Some notes").unwrap();
 
     // Read them back with our parser directly
     let mut specs = Vec::new();
     for entry in fs::read_dir(&heartbeats_dir).unwrap().flatten() {
         let path = entry.path();
-        if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
+        if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("toml") {
             let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Ok(spec) = parse_heartbeat_spec(&content, &filename) {
@@ -412,10 +412,10 @@ fn test_create_heartbeat_via_draft_tool() {
         .take(64)
         .collect();
 
-    let filepath = heartbeats_dir.join(format!("{}.md", safe_name));
+    let filepath = heartbeats_dir.join(format!("{}.toml", safe_name));
 
     let content = format!(
-        "---\nschedule: \"{}\"\nsession: \"{}\"\n---\n{}",
+        "schedule = \"{}\"\nsession = \"{}\"\nprompt = \"\"\"{}\"\"\"\n",
         schedule, session, prompt
     );
     fs::write(&filepath, &content).unwrap();

@@ -628,7 +628,7 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
       approveBtn.disabled = true;
       rejectBtn.disabled = true;
       try {
-        await invoke("reject_draft", { messageId: msg.id, reason: "Rejected by user via UI" });
+        await invoke("reject_draft", { messageId: msg.id });
         actionsDiv.innerHTML = `<div class="proactive-status" style="color: #f87171;">${CROSS_ICON} Rejected</div>`;
       } catch (e) {
         console.error("Failed to reject:", e);
