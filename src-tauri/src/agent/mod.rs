@@ -1683,7 +1683,8 @@ impl Agent {
                     "Timer set for {} minute(s). Context: '{}'",
                     duration_minutes,
                     if context.len() > 100 {
-                        format!("{}...", &context[..100])
+                        let boundary = context.floor_char_boundary(100);
+                        format!("{}...", &context[..boundary])
                     } else {
                         context
                     }

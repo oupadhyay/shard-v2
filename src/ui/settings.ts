@@ -202,7 +202,7 @@ export async function populateHeartbeatsPanel(settingsModal: HTMLElement) {
     const heartbeats = await invoke<HeartbeatStatusInfo[]>("get_heartbeat_status");
 
     if (heartbeats.length === 0) {
-      listEl.innerHTML = `<div class="heartbeat-empty">No heartbeats configured.<br><span class="setting-hint">Add .toml files to ~/Library/Application Support/dev.ojasw.shard/heartbeats/</span></div>`;
+      listEl.innerHTML = `<div class="heartbeat-empty">No heartbeats configured.<br><span class="setting-hint">Add .toml files to the heartbeats/ folder in the app data directory</span></div>`;
       return;
     }
 

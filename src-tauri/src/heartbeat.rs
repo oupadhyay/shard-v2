@@ -1090,8 +1090,7 @@ pub fn start_heartbeat_engine<R: Runtime>(app_handle: AppHandle<R>) {
                             let spec2 = spec_clone.clone();
                             Box::pin(async move {
                                 log::info!(
-                                    "[Heartbeat] Tick for '{}' (spec: {})",
-                                    spec2.session,
+                                    "[Heartbeat] Tick for spec '{}'",
                                     spec2.filename
                                 );
 
@@ -1105,7 +1104,7 @@ pub fn start_heartbeat_engine<R: Runtime>(app_handle: AppHandle<R>) {
                                         limiter2.record_run(&spec2.session);
                                         log::info!(
                                             "[Heartbeat] '{}' completed successfully",
-                                            spec2.session
+                                            spec2.filename
                                         );
                                     }
                                     Err(e) => {
@@ -1114,7 +1113,7 @@ pub fn start_heartbeat_engine<R: Runtime>(app_handle: AppHandle<R>) {
                                         }
                                         log::error!(
                                             "[Heartbeat] '{}' failed: {}",
-                                            spec2.session,
+                                            spec2.filename,
                                             e
                                         );
                                     }
@@ -1128,13 +1127,13 @@ pub fn start_heartbeat_engine<R: Runtime>(app_handle: AppHandle<R>) {
                             if let Err(e) = sched.add(j).await {
                                 log::error!(
                                     "[Heartbeat] Failed to schedule '{}': {}",
-                                    spec.session,
+                                    spec.filename,
                                     e
                                 );
                             } else {
                                 log::info!(
                                     "[Heartbeat] Scheduled '{}' with cron: '{}'",
-                                    spec.session,
+                                    spec.filename,
                                     spec.schedule
                                 );
                             }
@@ -1142,7 +1141,7 @@ pub fn start_heartbeat_engine<R: Runtime>(app_handle: AppHandle<R>) {
                         Err(e) => log::error!(
                             "[Heartbeat] Invalid cron '{}' for '{}': {}",
                             spec.schedule,
-                            spec.session,
+                            spec.filename,
                             e
                         ),
                     }
@@ -1237,23 +1236,23 @@ pub async fn execute_approved_draft<R: Runtime>(
 ) -> Result<String, String> {
     // 1. Fetch the proactive message to get the draft payload
     let store = crate::memories::get_vector_store(app_handle)?;
-    let row: (String, String) = store
+    let row: (Option<String>, String) = store
         .conn
         .query_row(
-            "SELECT draft_payload, heartbeat_session FROM proactive_queue WHERE id = ?1",
+            "SELECT draft_payload, heartbeat_session FROM proactive_queue WHERE id = ?1 AND draft_payload IS NOT NULL",
             rusqlite::params![message_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
         )
         .map_err(|e| format!("Draft not found: {}", e))?;
 
-    let (draft_json, _session) = row;
+    let (draft_json_opt, _session) = row;
+    let draft_json = draft_json_opt.ok_or("Message has no draft payload — not a draft action")?;
     let draft: DraftPayload =
         serde_json::from_str(&draft_json).map_err(|e| format!("Invalid draft payload: {}", e))?;
 
     log::info!(
-        "[DraftAct] Executing approved draft: {} with args: {}",
-        draft.name,
-        draft.arguments
+        "[DraftAct] Executing approved draft: {}",
+        draft.name
     );
 
     // 2. Execute the tool

@@ -430,7 +430,7 @@ pub fn get_heartbeat_tools(active_personas: &[String]) -> Vec<ToolDefinition> {
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "name": { "type": "string", "description": "Filename of the heartbeat to delete (without .md extension)" }
+                        "name": { "type": "string", "description": "Filename of the heartbeat to delete (without .toml extension)" }
                     },
                     "required": ["name"],
                     "additionalProperties": false
@@ -446,7 +446,7 @@ pub fn get_heartbeat_tools(active_personas: &[String]) -> Vec<ToolDefinition> {
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "name": { "type": "string", "description": "Filename of the heartbeat to edit (without .md extension)" },
+                        "name": { "type": "string", "description": "Filename of the heartbeat to edit (without .toml extension)" },
                         "schedule": { "type": "string", "description": "New cron expression (optional)" },
                         "prompt": { "type": "string", "description": "New prompt body (optional)" },
                         "persona": { "type": "string", "description": "New persona (optional, empty string to clear)" },

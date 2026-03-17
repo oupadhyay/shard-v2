@@ -300,7 +300,7 @@ pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, S
                 match crate::heartbeat::migrate_cron_jobs_to_heartbeats(app_handle, cron_jobs) {
                     Ok(n) if n > 0 => {
                         log::info!("[Config] Migrated {} cron jobs to heartbeat specs", n);
-                        // Clear cron_jobs and re-save to remove them from TOML
+                        // Clear cron_jobs from disk
                         let mut cleared = loaded.clone();
                         cleared.cron_jobs = None;
                         if let Ok(path) = get_config_path(app_handle) {
@@ -315,6 +315,9 @@ pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, S
             }
         }
     });
+
+    // Clear stale cron_jobs from the returned config (already migrated or empty)
+    loaded.cron_jobs = None;
 
     Ok(loaded)
 }
