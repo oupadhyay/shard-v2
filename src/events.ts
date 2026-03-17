@@ -17,4 +17,5 @@ export const EVENTS = {
   TRIGGER_OCR: "trigger-ocr",
   START_HIDE: "start-hide",
   START_SHOW: "start-show",
+  PROACTIVE_MESSAGE: "proactive-message",
 } as const;

@@ -1642,6 +1642,54 @@ impl Agent {
                     Err(e) => format!("Error: {}", e),
                 }
             }
+            "wake_me_up_in" => {
+                let duration_minutes = args["duration_minutes"].as_u64().unwrap_or(0);
+                let context = args["context"].as_str().unwrap_or_default().to_string();
+
+                if duration_minutes == 0 || duration_minutes > 1440 {
+                    return "Error: duration_minutes must be between 1 and 1440 (24 hours).".to_string();
+                }
+
+                if context.trim().is_empty() {
+                    return "Error: context must not be empty.".to_string();
+                }
+
+                let duration = std::time::Duration::from_secs(duration_minutes * 60);
+                let handle = app_handle.clone();
+                let session_id = format!("agent:alarm:{}", uuid::Uuid::new_v4());
+                let ctx = context.clone();
+
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(duration).await;
+                    log::info!("[WakeMeUp] Timer fired after {} min for alarm session", duration_minutes);
+
+                    let spec = crate::heartbeat::HeartbeatSpec {
+                        schedule: String::new(), // One-shot, not cron-scheduled
+                        session: session_id.clone(),
+                        persona: None,
+                        max_tool_calls: 3,
+                        max_runs_per_day: None,
+                        prompt: ctx,
+                        filename: "dynamic-alarm".to_string(),
+                    };
+
+                    match crate::heartbeat::process_heartbeat_turn(&handle, &spec).await {
+                        Ok(_) => log::info!("[WakeMeUp] Alarm processed successfully"),
+                        Err(e) => log::error!("[WakeMeUp] Alarm failed: {}", e),
+                    }
+                });
+
+                format!(
+                    "Timer set for {} minute(s). Context: '{}'",
+                    duration_minutes,
+                    if context.len() > 100 {
+                        let boundary = context.floor_char_boundary(100);
+                        format!("{}...", &context[..boundary])
+                    } else {
+                        context
+                    }
+                )
+            }
             _ => format!("Unknown tool: {}", function_name),
         }
     }

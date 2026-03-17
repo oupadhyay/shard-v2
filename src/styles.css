@@ -137,6 +137,22 @@ body {
   margin-top: auto;
 }
 
+.unread-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  background-color: var(--color-interactive, #ff9900);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.unread-badge.hidden {
+  display: none;
+}
+
 /* ============================================
    Messages
    ============================================ */
@@ -977,6 +993,117 @@ body {
 }
 
 /* ============================================
+   Proactive Messages
+   ============================================ */
+.proactive-message {
+  align-self: flex-start;
+  background: linear-gradient(135deg, rgba(20, 15, 10, 0.9) 0%, rgba(12, 10, 8, 0.92) 100%);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent-warning);
+  padding: 12px 16px;
+  border-radius: 12px;
+  max-width: 94%;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 4px 12px rgba(255, 170, 0, 0.05);
+}
+
+.proactive-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-warning);
+}
+
+.proactive-dismiss-btn {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.proactive-dismiss-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.proactive-content {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.proactive-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 12px;
+}
+
+.proactive-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.proactive-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.proactive-btn.approve {
+  background: rgba(74, 222, 128, 0.1);
+  color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.2);
+}
+
+.proactive-btn.approve:hover:not(:disabled) {
+  background: rgba(74, 222, 128, 0.2);
+  border-color: rgba(74, 222, 128, 0.4);
+}
+
+.proactive-btn.reject {
+  background: rgba(248, 113, 113, 0.1);
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.2);
+}
+
+.proactive-btn.reject:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.2);
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.proactive-status {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ============================================
    Suggestion Pills (Screen Context)
    ============================================ */
 
@@ -1400,6 +1527,115 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* Heartbeat Dashboard */
+.heartbeat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.heartbeat-empty {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px 0;
+}
+
+.heartbeat-card {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.2s ease;
+}
+
+.heartbeat-card:hover {
+  border-color: var(--accent-warning);
+}
+
+.heartbeat-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.heartbeat-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.heartbeat-badges {
+  display: flex;
+  gap: 6px;
+}
+
+.heartbeat-badge {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.heartbeat-badge.persona {
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+}
+
+.heartbeat-badge.cap {
+  background: rgba(255, 191, 0, 0.1);
+  color: var(--accent-warning);
+  border: 1px solid rgba(255, 191, 0, 0.2);
+}
+
+.heartbeat-meta {
+  display: flex;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.heartbeat-meta code {
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.heartbeat-prompt {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.setting-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.setting-group input[type="number"] {
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px 14px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  width: 120px;
+  transition: all var(--transition-fast);
 }
 
 /* Form Groups */
