@@ -20,6 +20,7 @@ import {
   createToolCallElement,
   updateToolResult,
   addMessage,
+  addProactiveMessage,
   getOrCreateWebSearchContainer,
   resetWebSearchContainer,
   isWebSearchTool,
@@ -35,6 +36,7 @@ import {
   SETTINGS_MODAL_HTML,
   SESSIONS_MODAL_HTML,
   initSettingsTabs,
+  populateHeartbeatsPanel,
   resizeImage,
   populateModelDropdown,
   formatSessionDate,
@@ -703,11 +705,30 @@ async function loadChatHistory() {
 
     // Scroll to bottom
     chatArea.scrollTop = chatArea.scrollHeight;
+
+    // Load pending proactive actions at the end of chat history
+    await loadProactiveMessages();
   } catch (e) {
     console.error("Failed to load chat history:", e);
     if (fragment.hasChildNodes()) {
       chatArea.appendChild(fragment);
     }
+  }
+}
+
+async function loadProactiveMessages() {
+  try {
+    const activeSessionId = await invoke<string>("get_current_session_id").catch(() => "");
+    const messages = await invoke<import("./types").ProactiveMessage[]>("get_proactive_messages", { pendingOnly: true });
+    
+    // Only render pending messages that belong to the current active session
+    for (const msg of messages) {
+      if (msg.heartbeat_session === activeSessionId) {
+        addProactiveMessage(chatArea, msg);
+      }
+    }
+  } catch (error) {
+    console.error("Failed to load proactive messages:", error);
   }
 }
 
@@ -775,6 +796,23 @@ listen<string>(EVENTS.AGENT_CRON_STARTED, (event) => {
   const prompt = DOMPurify.sanitize(event.payload);
   resetWebSearchContainer();
   addMessage(chatArea, "cron", prompt, undefined);
+});
+
+// Listen for incoming proactive messages/drafts
+listen<import("./types").ProactiveMessage>(EVENTS.PROACTIVE_MESSAGE, async (event) => {
+  console.log("[Proactive] Received new proactive action:", event.payload);
+  
+  const activeSessionId = await invoke<string>("get_current_session_id").catch(() => "");
+  
+  // Only show the message inline if we are currently viewing the session it belongs to
+  if (event.payload.heartbeat_session === activeSessionId) {
+    addProactiveMessage(chatArea, event.payload);
+  }
+
+  const unreadBadge = document.getElementById("unread-sessions-badge");
+  if (unreadBadge) {
+    unreadBadge.classList.remove("hidden");
+  }
 });
 
 // Listen for agent streaming response chunks
@@ -1338,6 +1376,7 @@ const providerConflictWarning = document.getElementById("provider-conflict-warni
 const enableToolsCheckbox = document.getElementById("enable-tools") as HTMLInputElement;
 const incognitoModeCheckbox = document.getElementById("incognito-mode") as HTMLInputElement;
 const enableScreenContextCheckbox = document.getElementById("enable-screen-context") as HTMLInputElement;
+const heartbeatCooldownInput = document.getElementById("heartbeat-cooldown") as HTMLInputElement;
 const saveSettingsBtn = document.getElementById("save-settings") as HTMLButtonElement;
 const closeSettingsBtn = document.getElementById("close-settings") as HTMLButtonElement;
 
@@ -1420,12 +1459,16 @@ settingsBtn.addEventListener("click", async () => {
     enableToolsCheckbox.checked = config.enable_tools || false;
     incognitoModeCheckbox.checked = config.incognito_mode || false;
     enableScreenContextCheckbox.checked = config.enable_screen_context || false;
+    heartbeatCooldownInput.value = String(config.heartbeat_global_cooldown_secs ?? 60);
 
     // Disable screen context when incognito mode is enabled
     enableScreenContextCheckbox.disabled = incognitoModeCheckbox.checked;
 
     updateToolAvailability(); // Run check on open
     checkProviderConflict(); // Check for provider conflicts
+
+    // Populate heartbeats dashboard (async, non-blocking)
+    populateHeartbeatsPanel(settingsModal);
 
     settingsModal.classList.remove("hidden");
   } catch (e) {
@@ -1451,6 +1494,7 @@ saveSettingsBtn.addEventListener("click", async () => {
     enable_tools: enableToolsCheckbox.checked,
     incognito_mode: incognitoModeCheckbox.checked,
     enable_screen_context: enableScreenContextCheckbox.checked,
+    heartbeat_global_cooldown_secs: parseInt(heartbeatCooldownInput.value) || 60,
   };
 
   try {
@@ -1476,6 +1520,11 @@ const sessionsListContainer = document.getElementById("sessions-list-container")
 
 sessionsBtn.addEventListener("click", async () => {
   sessionsModal.classList.remove("hidden");
+
+  const unreadBadge = document.getElementById("unread-sessions-badge");
+  if (unreadBadge) {
+    unreadBadge.classList.add("hidden");
+  }
 
   sessionsListContainer.innerHTML = '<div class="loading-spinner">Loading sessions...</div>';
   try {

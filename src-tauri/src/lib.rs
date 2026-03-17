@@ -15,6 +15,7 @@ pub mod compaction;
 mod config;
 pub mod db;
 mod gemini_files;
+mod heartbeat;
 mod integrations;
 mod interactions;
 pub mod memories;
@@ -494,6 +495,61 @@ async fn force_summary(app_handle: AppHandle) -> Result<SummaryStats, String> {
     })
 }
 
+// ============================================================================
+// Heartbeat Dashboard Commands
+// ============================================================================
+
+#[tauri::command]
+async fn get_heartbeat_status(
+    app_handle: AppHandle,
+) -> Result<Vec<heartbeat::HeartbeatStatusInfo>, String> {
+    Ok(heartbeat::get_heartbeat_status_list(&app_handle))
+}
+
+// ============================================================================
+// Proactive Queue Commands
+// ============================================================================
+
+#[tauri::command]
+async fn get_proactive_messages(
+    app_handle: AppHandle,
+    limit: Option<usize>,
+) -> Result<Vec<heartbeat::ProactiveMessage>, String> {
+    heartbeat::get_unreviewed_messages(&app_handle, limit.unwrap_or(20))
+}
+
+#[tauri::command]
+async fn review_proactive_message(
+    app_handle: AppHandle,
+    message_id: String,
+) -> Result<(), String> {
+    heartbeat::review_proactive_message(&app_handle, &message_id, None)
+}
+
+#[tauri::command]
+async fn approve_draft(
+    app_handle: AppHandle,
+    message_id: String,
+) -> Result<String, String> {
+    // Execute the draft-gated tool and mark as approved
+    heartbeat::execute_approved_draft(&app_handle, &message_id).await
+}
+
+#[tauri::command]
+async fn reject_draft(
+    app_handle: AppHandle,
+    message_id: String,
+) -> Result<(), String> {
+    heartbeat::review_proactive_message(&app_handle, &message_id, Some(false))
+}
+
+#[tauri::command]
+async fn get_proactive_count(
+    app_handle: AppHandle,
+) -> Result<usize, String> {
+    heartbeat::get_unreviewed_count(&app_handle, None)
+}
+
 #[tauri::command]
 fn rebuild_topic_index(app_handle: AppHandle) -> Result<usize, String> {
     // TopicIndex no longer stores embeddings, just file names
@@ -622,8 +678,11 @@ pub fn run() {
         .setup(|app| {
             let _app_handle = app.handle();
 
-            // Start background jobs
-            background::start_background_jobs(app.handle().clone());
+            // Start maintenance background jobs (Summary + Cleanup)
+            background::start_maintenance_jobs(app.handle().clone());
+
+            // Start heartbeat engine (replaces old cron_jobs)
+            heartbeat::start_heartbeat_engine(app.handle().clone());
 
             let webhook_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -854,7 +913,13 @@ pub fn run() {
             rebuild_chunk_index,
             rebuild_all_indexes,
             retry_with_katex_hint,
-            capture_screen_context
+            capture_screen_context,
+            get_proactive_messages,
+            review_proactive_message,
+            approve_draft,
+            reject_draft,
+            get_proactive_count,
+            get_heartbeat_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

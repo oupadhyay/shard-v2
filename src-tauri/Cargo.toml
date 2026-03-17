@@ -55,6 +55,7 @@ tokio-cron-scheduler = "0.15.1"
 tempfile = "3"
 wasmtime = "31"
 wasmtime-wasi = "31"
+cron = "0.15.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"

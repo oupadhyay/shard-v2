@@ -3,8 +3,9 @@
  */
 import DOMPurify from "dompurify";
 import { md, preprocessMarkdown } from "./markdown";
-import { COPY_ICON, CHECK_ICON } from "./icons";
-import type { ImageAttachment } from "../types";
+import { COPY_ICON, CHECK_ICON, CROSS_ICON } from "./icons";
+import type { ImageAttachment, ProactiveMessage } from "../types";
+import { invoke } from "@tauri-apps/api/core";
 
 // Track the current web search container for grouping
 let currentWebSearchContainer: HTMLElement | null = null;
@@ -516,6 +517,142 @@ export function addMessage(
     copyToClipboard(raw, copyBtn);
   });
   msgDiv.appendChild(copyBtn);
+
+  chatArea.appendChild(msgDiv);
+  if (chatArea instanceof HTMLElement) {
+    chatArea.scrollTop = chatArea.scrollHeight;
+  }
+}
+
+/**
+ * Render a proactive message with optional approve/reject buttons
+ */
+export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, msg: ProactiveMessage) {
+  const msgDiv = document.createElement("div");
+  msgDiv.className = "message proactive-message";
+  msgDiv.setAttribute("data-id", msg.id);
+
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "proactive-header";
+
+  const titleContainer = document.createElement("div");
+  titleContainer.style.display = "flex";
+  titleContainer.style.alignItems = "center";
+  titleContainer.style.gap = "8px";
+  
+  const icon = msg.needs_approval ? "⚡" : "🤖";
+  const title = msg.needs_approval ? "Proactive Action Required" : "Scheduled Task";
+  titleContainer.innerHTML = `<span>${icon}</span><span style="letter-spacing: 0.5px; text-transform: uppercase; font-size: 11px;">${title}</span>`;
+  
+  headerDiv.appendChild(titleContainer);
+
+  if (!msg.needs_approval && !msg.reviewed_at) {
+    const dismissBtn = document.createElement("button");
+    dismissBtn.className = "proactive-dismiss-btn";
+    dismissBtn.title = "Mark as read";
+    dismissBtn.setAttribute("aria-label", "Mark as read");
+    dismissBtn.innerHTML = CHECK_ICON;
+
+    dismissBtn.addEventListener("click", async () => {
+      try {
+        await invoke("review_proactive_message", { messageId: msg.id });
+        msgDiv.style.transition = "opacity 0.2s ease, transform 0.2s ease";
+        msgDiv.style.opacity = "0";
+        msgDiv.style.transform = "scale(0.98)";
+        setTimeout(() => msgDiv.remove(), 200);
+      } catch (e) {
+        console.error("Failed to mark as read:", e);
+      }
+    });
+    headerDiv.appendChild(dismissBtn);
+  }
+
+  msgDiv.appendChild(headerDiv);
+
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "proactive-content markdown-body";
+  contentDiv.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(msg.content)));
+  msgDiv.appendChild(contentDiv);
+
+  // If there's a draft payload, show it as a tool call block
+  if (msg.draft_payload) {
+    let fnName = "Unknown Action";
+    let formattedArgs = msg.draft_payload;
+    try {
+      const parsed = JSON.parse(msg.draft_payload);
+      if (parsed.name) fnName = parsed.name;
+      if (parsed.arguments) formattedArgs = JSON.stringify(parsed.arguments, null, 2);
+    } catch(e) {}
+
+    const draftDiv = document.createElement("div");
+    draftDiv.className = "tool-output";
+    draftDiv.innerHTML = `
+      <details>
+        <summary>
+          <span class="tool-icon">🛠️</span>
+          <span class="tool-name">Draft Action: ${md.utils.escapeHtml(fnName)}</span>
+        </summary>
+        <div class="tool-args">${md.utils.escapeHtml(formattedArgs)}</div>
+      </details>
+    `;
+    msgDiv.appendChild(draftDiv);
+  }
+
+  // Handle Approve / Reject Actions based on state
+  if (msg.needs_approval && !msg.reviewed_at) {
+    const actionsDiv = document.createElement("div");
+    actionsDiv.className = "proactive-actions";
+
+    const approveBtn = document.createElement("button");
+    approveBtn.className = "proactive-btn approve";
+    approveBtn.innerHTML = `${CHECK_ICON} Approve`;
+    
+    const rejectBtn = document.createElement("button");
+    rejectBtn.className = "proactive-btn reject";
+    rejectBtn.innerHTML = `${CROSS_ICON} Reject`;
+
+    approveBtn.addEventListener("click", async () => {
+      approveBtn.disabled = true;
+      rejectBtn.disabled = true;
+      try {
+        await invoke("approve_draft", { messageId: msg.id });
+        actionsDiv.innerHTML = `<div class="proactive-status">${CHECK_ICON} Approved</div>`;
+      } catch (e) {
+        console.error("Failed to approve:", e);
+        approveBtn.disabled = false;
+        rejectBtn.disabled = false;
+      }
+    });
+
+    rejectBtn.addEventListener("click", async () => {
+      approveBtn.disabled = true;
+      rejectBtn.disabled = true;
+      try {
+        await invoke("reject_draft", { messageId: msg.id, reason: "Rejected by user via UI" });
+        actionsDiv.innerHTML = `<div class="proactive-status" style="color: #f87171;">${CROSS_ICON} Rejected</div>`;
+      } catch (e) {
+        console.error("Failed to reject:", e);
+        approveBtn.disabled = false;
+        rejectBtn.disabled = false;
+      }
+    });
+
+    actionsDiv.appendChild(approveBtn);
+    actionsDiv.appendChild(rejectBtn);
+    msgDiv.appendChild(actionsDiv);
+  } else if (msg.reviewed_at) {
+    // Already reviewed
+    const actionsDiv = document.createElement("div");
+    actionsDiv.className = "proactive-actions";
+    if (msg.approved === true) {
+      actionsDiv.innerHTML = `<div class="proactive-status">${CHECK_ICON} Approved on ${new Date(msg.reviewed_at).toLocaleString()}</div>`;
+    } else if (msg.approved === false) {
+      actionsDiv.innerHTML = `<div class="proactive-status" style="color: #f87171;">${CROSS_ICON} Rejected on ${new Date(msg.reviewed_at).toLocaleString()}</div>`;
+    } else {
+      actionsDiv.innerHTML = `<div class="proactive-status">Dismissed</div>`;
+    }
+    msgDiv.appendChild(actionsDiv);
+  }
 
   chatArea.appendChild(msgDiv);
   if (chatArea instanceof HTMLElement) {

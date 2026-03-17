@@ -5,8 +5,10 @@ use tauri::{AppHandle, Manager, Runtime};
 
 const CONFIG_FILENAME: &str = "config.toml";
 
+/// DEPRECATED: Legacy cron job config. Kept only for backward-compatible deserialization
+/// during one-time migration to heartbeat specs. Will be removed in a future version.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct CronJob {
+pub struct LegacyCronJob {
     pub schedule: String,
     pub prompt: String,
 }
@@ -50,9 +52,12 @@ pub struct AppConfig {
     // Fallback model for quota errors
     #[serde(default)]
     pub fallback_model: Option<String>, // Default: openai/gpt-oss-120b:free
-    // Cron jobs
+    // DEPRECATED: Legacy cron jobs — migrated to heartbeat specs on first load, then cleared.
     #[serde(default)]
-    pub cron_jobs: Option<Vec<CronJob>>,
+    pub cron_jobs: Option<Vec<LegacyCronJob>>,
+    // Heartbeat engine configuration
+    #[serde(default)]
+    pub heartbeat_global_cooldown_secs: Option<u64>, // Default: 60
 }
 
 #[derive(Debug, Clone)]
@@ -182,7 +187,8 @@ impl Default for AppConfig {
             compaction_preserve_turns: Some(5),
             // Fallback model for quota errors
             fallback_model: Some("openai/gpt-oss-120b:free".to_string()),
-            cron_jobs: None,
+            cron_jobs: None, // DEPRECATED
+            heartbeat_global_cooldown_secs: Some(60),
         }
     }
 }
@@ -282,6 +288,33 @@ pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, S
     if loaded.compaction_preserve_turns.is_none() {
         loaded.compaction_preserve_turns = defaults.compaction_preserve_turns;
     }
+    if loaded.heartbeat_global_cooldown_secs.is_none() {
+        loaded.heartbeat_global_cooldown_secs = defaults.heartbeat_global_cooldown_secs;
+    }
+
+    // Migrate legacy cron_jobs to heartbeat specs (one-time operation)
+    static CRON_MIGRATION_DONE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    CRON_MIGRATION_DONE.get_or_init(|| {
+        if let Some(cron_jobs) = &loaded.cron_jobs {
+            if !cron_jobs.is_empty() {
+                match crate::heartbeat::migrate_cron_jobs_to_heartbeats(app_handle, cron_jobs) {
+                    Ok(n) if n > 0 => {
+                        log::info!("[Config] Migrated {} cron jobs to heartbeat specs", n);
+                        // Clear cron_jobs and re-save to remove them from TOML
+                        let mut cleared = loaded.clone();
+                        cleared.cron_jobs = None;
+                        if let Ok(path) = get_config_path(app_handle) {
+                            if let Err(e) = save_config_internal(&path, &cleared) {
+                                log::warn!("[Config] Failed to clear cron_jobs after migration: {}", e);
+                            }
+                        }
+                    }
+                    Ok(_) => {} // No new migrations needed
+                    Err(e) => log::warn!("[Config] Cron-to-heartbeat migration failed: {}", e),
+                }
+            }
+        }
+    });
 
     Ok(loaded)
 }

@@ -6,13 +6,16 @@
  * - Cleanup: LLM-filter generic/redundant entries from interaction logs
  *
  * Both jobs run sequentially every 6 hours (Summary first, then Cleanup).
+ *
+ * Note: User-defined scheduled tasks (heartbeats) are handled by the
+ * separate heartbeat engine in heartbeat.rs — not here.
  */
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tokio::time::{self, Duration};
 
 /// Configuration for background jobs
@@ -247,6 +250,347 @@ pub async fn call_llm_oneshot(
     ))
 }
 
+/// Response from a tool-aware LLM call.
+#[derive(Debug, Clone)]
+pub struct LlmToolResponse {
+    /// Text content from the assistant (may be empty if model only returns tool calls)
+    pub content: Option<String>,
+    /// Tool calls requested by the model
+    pub tool_calls: Vec<LlmToolCall>,
+    /// finish_reason from the API ("stop", "tool_calls", etc.)
+    #[allow(dead_code)]
+    pub finish_reason: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct LlmToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String, // raw JSON string
+}
+
+/// Call an LLM with tool definitions.
+/// Automatically selects the correct API format:
+/// - Gemini models: native `generateContent` with `functionDeclarations`
+/// - OpenAI-compatible (Groq/Cerebras/OpenRouter): standard `chat/completions` with `tools`
+pub async fn call_llm_with_tools(
+    http_client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    model: &str,
+    messages: &[serde_json::Value],
+    tools: &[crate::agent::ToolDefinition],
+    max_tokens: u32,
+    temperature: f64,
+) -> Result<LlmToolResponse, String> {
+    if crate::models::is_gemini_model(model) {
+        call_gemini_with_tools(http_client, config, model, messages, tools, max_tokens, temperature).await
+    } else {
+        call_openai_with_tools(http_client, config, model, messages, tools, max_tokens, temperature).await
+    }
+}
+
+/// Gemini native generateContent path with functionDeclarations.
+async fn call_gemini_with_tools(
+    http_client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    model: &str,
+    messages: &[serde_json::Value],
+    tools: &[crate::agent::ToolDefinition],
+    _max_tokens: u32,
+    _temperature: f64,
+) -> Result<LlmToolResponse, String> {
+    let api_key = config
+        .gemini_api_key
+        .as_deref()
+        .ok_or("No Gemini API key configured for heartbeat")?;
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+        model
+    );
+
+    // Convert OpenAI-format messages to Gemini contents
+    let mut contents: Vec<serde_json::Value> = Vec::new();
+    let mut system_instruction: Option<serde_json::Value> = None;
+
+    for msg in messages {
+        let role = msg["role"].as_str().unwrap_or("user");
+        match role {
+            "system" => {
+                system_instruction = Some(serde_json::json!({
+                    "parts": [{ "text": msg["content"].as_str().unwrap_or("") }]
+                }));
+            }
+            "assistant" => {
+                let mut parts: Vec<serde_json::Value> = Vec::new();
+                if let Some(content) = msg["content"].as_str() {
+                    if !content.is_empty() {
+                        parts.push(serde_json::json!({ "text": content }));
+                    }
+                }
+                // Convert tool_calls to functionCall parts
+                if let Some(tc_array) = msg["tool_calls"].as_array() {
+                    for tc in tc_array {
+                        if let Some(func) = tc.get("function") {
+                            let name = func["name"].as_str().unwrap_or("");
+                            let args_str = func["arguments"].as_str().unwrap_or("{}");
+                            let args: serde_json::Value =
+                                serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+                            parts.push(serde_json::json!({
+                                "functionCall": { "name": name, "args": args }
+                            }));
+                        }
+                    }
+                }
+                if !parts.is_empty() {
+                    contents.push(serde_json::json!({ "role": "model", "parts": parts }));
+                }
+            }
+            "tool" => {
+                // Find the tool name from tool_call_id by looking back at previous assistant message
+                let tool_call_id = msg["tool_call_id"].as_str().unwrap_or("");
+                let mut func_name = "unknown".to_string();
+                // Search backwards for the matching tool_call
+                for prev in contents.iter().rev() {
+                    if let Some(parts) = prev["parts"].as_array() {
+                        for part in parts {
+                            if let Some(fc) = part.get("functionCall") {
+                                // Gemini doesn't use IDs — match by position/name
+                                // Best effort: use the name from the most recent assistant message
+                                if let Some(n) = fc["name"].as_str() {
+                                    func_name = n.to_string();
+                                }
+                            }
+                        }
+                    }
+                }
+                // Alternative: look at the original messages for tool_call_id -> name mapping
+                for prev_msg in messages.iter().rev() {
+                    if let Some(tcs) = prev_msg["tool_calls"].as_array() {
+                        for tc in tcs {
+                            if tc["id"].as_str() == Some(tool_call_id) {
+                                if let Some(n) = tc["function"]["name"].as_str() {
+                                    func_name = n.to_string();
+                                }
+                            }
+                        }
+                    }
+                }
+                let result_content = msg["content"].as_str().unwrap_or("");
+                contents.push(serde_json::json!({
+                    "role": "function",
+                    "parts": [{
+                        "functionResponse": {
+                            "name": func_name,
+                            "response": { "result": result_content }
+                        }
+                    }]
+                }));
+            }
+            _ => {
+                // user
+                contents.push(serde_json::json!({
+                    "role": "user",
+                    "parts": [{ "text": msg["content"].as_str().unwrap_or("") }]
+                }));
+            }
+        }
+    }
+
+    // Build Gemini tool format: strip additionalProperties/strict from params
+    let function_declarations: Vec<serde_json::Value> = tools
+        .iter()
+        .map(|t| {
+            let mut params = t.function.parameters.clone();
+            if let Some(obj) = params.as_object_mut() {
+                obj.remove("additionalProperties");
+                obj.remove("strict");
+            }
+            serde_json::json!({
+                "name": t.function.name,
+                "description": t.function.description,
+                "parameters": params
+            })
+        })
+        .collect();
+
+    let mut payload = serde_json::json!({
+        "contents": contents,
+        "tools": [{ "functionDeclarations": function_declarations }]
+    });
+    if let Some(si) = system_instruction {
+        payload["systemInstruction"] = si;
+    }
+
+    let res = http_client
+        .post(&url)
+        .header("X-Goog-Api-Key", api_key)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini heartbeat API error: {}", e))?;
+
+    if !res.status().is_success() {
+        let error_text = res.text().await.unwrap_or_default();
+        return Err(format!("Gemini heartbeat API error: {}", error_text));
+    }
+
+    let body: serde_json::Value = res
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Gemini response: {}", e))?;
+
+    // Parse Gemini response: candidates[0].content.parts[]
+    let parts = body
+        .get("candidates")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|c| c.get("content"))
+        .and_then(|c| c.get("parts"))
+        .and_then(|p| p.as_array());
+
+    let mut content: Option<String> = None;
+    let mut tool_calls: Vec<LlmToolCall> = Vec::new();
+    let mut call_counter = 0u32;
+
+    if let Some(parts) = parts {
+        for part in parts {
+            if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                // Skip thinking/thought parts
+                if part.get("thought").and_then(|t| t.as_bool()).unwrap_or(false) {
+                    continue;
+                }
+                content = Some(text.to_string());
+            }
+            if let Some(fc) = part.get("functionCall") {
+                let name = fc["name"].as_str().unwrap_or("").to_string();
+                let args = fc.get("args").cloned().unwrap_or(serde_json::json!({}));
+                call_counter += 1;
+                tool_calls.push(LlmToolCall {
+                    id: format!("gemini_call_{}", call_counter),
+                    name,
+                    arguments: args.to_string(),
+                });
+            }
+        }
+    }
+
+    let finish_reason = if tool_calls.is_empty() { "stop" } else { "tool_calls" }.to_string();
+
+    Ok(LlmToolResponse {
+        content,
+        tool_calls,
+        finish_reason,
+    })
+}
+
+/// OpenAI-compatible chat/completions path (Groq/Cerebras/OpenRouter).
+async fn call_openai_with_tools(
+    http_client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    model: &str,
+    messages: &[serde_json::Value],
+    tools: &[crate::agent::ToolDefinition],
+    max_tokens: u32,
+    temperature: f64,
+) -> Result<LlmToolResponse, String> {
+    let (provider_config, api_key) = config.get_model_provider_config(model, "heartbeat")?;
+
+    let tools_json: Vec<serde_json::Value> = tools
+        .iter()
+        .filter_map(|t| serde_json::to_value(t).ok())
+        .collect();
+
+    let payload = serde_json::json!({
+        "model": provider_config.model_id,
+        "messages": messages,
+        "tools": tools_json,
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    });
+
+    let res = http_client
+        .post(provider_config.full_url())
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Heartbeat LLM API network error: {}", e))?;
+
+    if !res.status().is_success() {
+        let error_text = res.text().await.unwrap_or_default();
+        return Err(format!("Heartbeat LLM API error: {}", error_text));
+    }
+
+    let body: serde_json::Value = res.json().await.map_err(|e| {
+        format!(
+            "Failed to parse {} response: {}",
+            provider_config.provider_name, e
+        )
+    })?;
+
+    // Parse the first choice
+    let choice = body
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .ok_or_else(|| format!("No choices in {} response", provider_config.provider_name))?;
+
+    let message = choice.get("message").ok_or("No message in choice")?;
+    let finish_reason = choice
+        .get("finish_reason")
+        .and_then(|f| f.as_str())
+        .unwrap_or("stop")
+        .to_string();
+
+    let content = message
+        .get("content")
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
+
+    // Parse tool_calls if present
+    let mut tool_calls = Vec::new();
+    if let Some(tc_array) = message.get("tool_calls").and_then(|tc| tc.as_array()) {
+        for tc in tc_array {
+            let id = tc
+                .get("id")
+                .and_then(|i| i.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            if let Some(func) = tc.get("function") {
+                let name = func
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = func
+                    .get("arguments")
+                    .map(|a| {
+                        if let Some(s) = a.as_str() {
+                            s.to_string()
+                        } else {
+                            a.to_string()
+                        }
+                    })
+                    .unwrap_or_default();
+                tool_calls.push(LlmToolCall {
+                    id,
+                    name,
+                    arguments,
+                });
+            }
+        }
+    }
+
+    Ok(LlmToolResponse {
+        content,
+        tool_calls,
+        finish_reason,
+    })
+}
+
 /// Parse topic updates from LLM JSON response
 pub fn parse_topic_updates(llm_response: &str) -> Result<Vec<TopicUpdate>, String> {
     // Try to find JSON array in response (LLM might include extra text)
@@ -295,8 +639,9 @@ pub fn parse_cleanup_decision(llm_response: &str) -> Result<CleanupDecision, Str
 // Background Job Runner
 // ============================================================================
 
-/// Start all background jobs (sequential: Summary first, then Cleanup)
-pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
+/// Start maintenance background jobs (Summary + Cleanup, 6-hour interval).
+/// Heartbeat-based scheduled tasks are handled separately by heartbeat::start_heartbeat_engine.
+pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
     let summary_cleanup_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         let mut job_interval = time::interval(Duration::from_secs(JOB_INTERVAL_HOURS * 3600));
@@ -392,67 +737,6 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                 "[Background] All jobs complete. Next run in {} hours.",
                 JOB_INTERVAL_HOURS
             );
-        }
-    });
-
-    // Start user-defined cron jobs
-    let cron_handle = app_handle.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Ok(config) = crate::config::load_config(&cron_handle) {
-            if let Some(cron_jobs) = config.cron_jobs {
-                if !cron_jobs.is_empty() {
-                    match tokio_cron_scheduler::JobScheduler::new().await {
-                        Ok(sched) => {
-                            for job_cfg in cron_jobs {
-                                let app_h = cron_handle.clone();
-                                let prompt = job_cfg.prompt.clone();
-                                let schedule = job_cfg.schedule.clone();
-
-                                let job = tokio_cron_scheduler::Job::new_async(schedule.as_str(), move |_uuid, mut _l| {
-                                    let app_h2 = app_h.clone();
-                                    let prompt2 = prompt.clone();
-                                    Box::pin(async move {
-                                        let sanitized_prompt = prompt2.replace(&['\n', '\r'][..], " ");
-                                        log::info!("[Cron] Triggering background task: {}", sanitized_prompt);
-                                        let state = app_h2.state::<crate::AppState>();
-                                        if let Ok(cfg) = crate::config::load_config(&app_h2) {
-                                            app_h2.emit("agent-cron-started", &prompt2).ok();
-                                            // Directly hook into the agent pipe
-                                            let _ = state.agent.process_message(
-                                                &app_h2,
-                                                prompt2,
-                                                None,
-                                                None,
-                                                &cfg,
-                                                true
-                                            ).await;
-                                        }
-                                    })
-                                });
-
-                                match job {
-                                    Ok(j) => {
-                                        if let Err(e) = sched.add(j).await {
-                                            log::error!("[Cron] Failed to add job: {}", e);
-                                        } else {
-                                            log::info!("[Cron] Scheduled background job: '{}'", schedule);
-                                        }
-                                    }
-                                    Err(e) => log::error!("[Cron] Invalid cron schedule '{}': {}", schedule, e),
-                                }
-                            }
-
-                            if let Err(e) = sched.start().await {
-                                log::error!("[Cron] Failed to start scheduler: {}", e);
-                            } else {
-                                log::info!("[Cron] Scheduler started successfully");
-                                std::future::pending::<()>().await;
-                            }
-                        }
-                        Err(e) => log::error!("[Cron] Failed to create JobScheduler: {}", e),
-                    }
-                }
-            }
         }
     });
 }

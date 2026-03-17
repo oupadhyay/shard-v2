@@ -26,6 +26,7 @@ pub fn get_all_tools(active_personas: &[String]) -> Vec<ToolDefinition> {
         "search_wikipedia",
         "youtube_transcript",
         "run_python",
+        "wake_me_up_in",
     ];
 
     let all_tools = vec![
@@ -234,11 +235,11 @@ pub fn get_all_tools(active_personas: &[String]) -> Vec<ToolDefinition> {
                     "type": "object",
                     "properties": {
                         "query": { "type": "string", "description": "Natural language search query describing what to find in memory" },
-                        "max_results": { "type": "integer", "description": "Maximum number of results to return (default: 5)" },
-                        "min_score": { "type": "number", "description": "Minimum similarity score 0.0-1.0 (default: 0.3)." },
-                        "time_filter": { "type": "string", "description": "Optional: 'last_conversation', 'yesterday', 'last_week', or specific YYYY-MM-DD date" }
+                        "max_results": { "type": ["integer", "null"], "description": "Maximum number of results to return (default: 5)" },
+                        "min_score": { "type": ["number", "null"], "description": "Minimum similarity score 0.0-1.0 (default: 0.3)." },
+                        "time_filter": { "type": ["string", "null"], "description": "Optional: 'last_conversation', 'yesterday', 'last_week', or specific YYYY-MM-DD date" }
                     },
-                    "required": ["query"],
+                    "required": ["query", "max_results", "min_score", "time_filter"],
                     "additionalProperties": false
                 }),
                 strict: Some(true),
@@ -252,11 +253,12 @@ pub fn get_all_tools(active_personas: &[String]) -> Vec<ToolDefinition> {
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "path": { "type": "string", "description": "Relative path to the memory file (e.g. 'topics/SHARD.md')" },
-                        "session_id": { "type": "string", "description": "Session UUID to fetch the full transcript." },
-                        "from": { "type": "integer", "description": "Starting line number, 1-indexed (default: 1)" },
-                        "lines": { "type": "integer", "description": "Number of lines to read (default: 50, max: 200)" }
+                        "path": { "type": ["string", "null"], "description": "Relative path to the memory file (e.g. 'topics/SHARD.md')" },
+                        "session_id": { "type": ["string", "null"], "description": "Session UUID to fetch the full transcript." },
+                        "from": { "type": ["integer", "null"], "description": "Starting line number, 1-indexed (default: 1)" },
+                        "lines": { "type": ["integer", "null"], "description": "Number of lines to read (default: 50, max: 200)" }
                     },
+                    "required": ["path", "session_id", "from", "lines"],
                     "additionalProperties": false
                 }),
                 strict: Some(true),
@@ -326,6 +328,29 @@ pub fn get_all_tools(active_personas: &[String]) -> Vec<ToolDefinition> {
                 strict: Some(true),
             },
         },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "wake_me_up_in".to_string(),
+                description: "Set a one-shot timer that triggers a heartbeat-like callback after the specified duration. Use this to schedule follow-up checks, reminders, or delayed actions. The context string is passed back as the prompt when the timer fires.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "duration_minutes": {
+                            "type": "integer",
+                            "description": "Number of minutes to wait before triggering the callback. Minimum 1, maximum 1440 (24 hours)."
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": "Context/prompt to pass when the timer fires. Include enough detail to resume the task."
+                        }
+                    },
+                    "required": ["duration_minutes", "context"],
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
     ];
 
     all_tools
@@ -335,4 +360,105 @@ pub fn get_all_tools(active_personas: &[String]) -> Vec<ToolDefinition> {
                 || required_tools.contains(&t.function.name)
         })
         .collect()
+}
+
+/// Tools that require draft-before-act approval when called during heartbeat runs.
+/// These mutate Shard's own config or heartbeat state.
+pub const DRAFT_GATED_TOOLS: &[&str] = &[
+    "edit_config",
+    "create_heartbeat",
+    "delete_heartbeat",
+    "edit_heartbeat",
+];
+
+/// Returns whether a tool name requires draft approval during heartbeat execution.
+pub fn is_draft_gated(tool_name: &str) -> bool {
+    DRAFT_GATED_TOOLS.contains(&tool_name)
+}
+
+/// Returns the subset of tools available during heartbeat runs.
+/// Includes all global tools plus the draft-gated tools. Also loads persona-specific tools if personas are active.
+pub fn get_heartbeat_tools(active_personas: &[String]) -> Vec<ToolDefinition> {
+    // Heartbeat tools = global tools + draft-gated tools + persona-specific tools
+    let mut tools = get_all_tools(active_personas);
+
+    // Add draft-gated tools that aren't in the global set
+    tools.extend(vec![
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "edit_config".to_string(),
+                description: "Edit Shard's configuration values. Can change the selected model, toggle features, or update settings. This is a high-risk action that requires user approval.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "key": { "type": "string", "description": "Configuration key to modify (e.g. 'selected_model', 'enable_tools', 'research_mode')" },
+                        "value": { "type": "string", "description": "New value for the configuration key" }
+                    },
+                    "required": ["key", "value"],
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "create_heartbeat".to_string(),
+                description: "Create a new heartbeat spec file. Heartbeats are autonomous scheduled tasks. This creates a new .md file in the heartbeats directory. Requires user approval.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Filename for the heartbeat (without .md extension)" },
+                        "schedule": { "type": "string", "description": "Cron expression (e.g. '0 */2 * * *' for every 2 hours)" },
+                        "session": { "type": "string", "description": "Session namespace (e.g. 'agent:my-task')" },
+                        "prompt": { "type": "string", "description": "The prompt/instructions for the heartbeat" },
+                        "persona": { "type": "string", "description": "Optional persona to load for this heartbeat" },
+                        "max_tool_calls": { "type": "integer", "description": "Optional max tool calls per run (default: 5)" }
+                    },
+                    "required": ["name", "schedule", "session", "prompt"],
+                    "additionalProperties": false
+                }),
+                strict: None,
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "delete_heartbeat".to_string(),
+                description: "Delete an existing heartbeat spec file. Permanently removes the scheduled task. Requires user approval.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Filename of the heartbeat to delete (without .md extension)" }
+                    },
+                    "required": ["name"],
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "edit_heartbeat".to_string(),
+                description: "Edit an existing heartbeat spec's schedule, prompt, persona, or other fields. Requires user approval.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Filename of the heartbeat to edit (without .md extension)" },
+                        "schedule": { "type": "string", "description": "New cron expression (optional)" },
+                        "prompt": { "type": "string", "description": "New prompt body (optional)" },
+                        "persona": { "type": "string", "description": "New persona (optional, empty string to clear)" },
+                        "max_tool_calls": { "type": "integer", "description": "New max tool calls (optional)" }
+                    },
+                    "required": ["name"],
+                    "additionalProperties": false
+                }),
+                strict: None,
+            },
+        },
+    ]);
+
+    tools
 }
