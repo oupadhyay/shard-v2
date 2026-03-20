@@ -21,6 +21,67 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::Mutex;
 
+/// Normalize a JSON Schema Value so it is compatible with Gemini's proto-backed
+/// function declaration schema.
+///
+/// Gemini's API uses a proto3 Schema message where `type` is a scalar enum field.
+/// OpenAI's JSON Schema extension allows `"type": ["X", "null"]` to represent
+/// nullable types, but proto3 scalars cannot start a JSON array — Gemini rejects
+/// the request with "Proto field is not repeating, cannot start list."
+///
+/// This function recursively:
+/// 1. Collapses `"type": ["X", "null"]` → `"type": "X"` (picks the non-null type).
+/// 2. Removes OpenAI-only fields (`additionalProperties`, `strict`) that Gemini
+///    does not recognize and would cause unknown-field errors.
+pub(crate) fn normalize_gemini_schema(schema: &mut Value) {
+    let obj = match schema.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+
+    // 1. Strip OpenAI-only top-level fields.
+    obj.remove("additionalProperties");
+    obj.remove("strict");
+
+    // 2. Collapse `"type": ["primary", "null"]` → `"type": "primary"`.
+    if let Some(type_val) = obj.get("type") {
+        if let Some(arr) = type_val.as_array() {
+            // Pick the first non-"null" element as the canonical type.
+            let primary = arr
+                .iter()
+                .find(|v| v.as_str().map_or(true, |s| s != "null"))
+                .or_else(|| arr.first())
+                .cloned();
+            if let Some(canonical) = primary {
+                obj.insert("type".to_string(), canonical);
+            }
+        }
+    }
+
+    // 3. Recurse into nested schemas (properties values, items, etc.).
+    let keys: Vec<String> = obj.keys().cloned().collect();
+    for key in keys {
+        if let Some(child) = obj.get_mut(&key) {
+            if key == "properties" {
+                // properties is an object whose values are sub-schemas.
+                if let Some(props) = child.as_object_mut() {
+                    for prop_schema in props.values_mut() {
+                        normalize_gemini_schema(prop_schema);
+                    }
+                }
+            } else if matches!(key.as_str(), "items" | "additionalItems" | "not") {
+                normalize_gemini_schema(child);
+            } else if matches!(key.as_str(), "allOf" | "anyOf" | "oneOf") {
+                if let Some(arr) = child.as_array_mut() {
+                    for sub in arr.iter_mut() {
+                        normalize_gemini_schema(sub);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The main AI Agent managing chat history and API interactions
 pub struct Agent {
     history: Mutex<Vec<ChatMessage>>,
@@ -489,7 +550,7 @@ impl Agent {
         let selected_model = config
             .selected_model
             .clone()
-            .unwrap_or("gemini-3.1-flash-lite".to_string());
+            .unwrap_or("gemini-3.1-flash-lite-preview".to_string());
 
         let is_gemini = crate::models::is_gemini_model(&selected_model);
 
@@ -588,7 +649,7 @@ impl Agent {
         let selected_model = config
             .selected_model
             .clone()
-            .unwrap_or("gemini-3.1-flash-lite".to_string());
+            .unwrap_or("gemini-3.1-flash-lite-preview".to_string());
         let is_gemini = crate::models::is_gemini_model(&selected_model);
         let has_native_vision = crate::models::model_supports_vision(&selected_model);
 
@@ -827,7 +888,7 @@ impl Agent {
             let selected_model = config
                 .selected_model
                 .clone()
-                .unwrap_or("gemini-3.1-flash-lite".to_string());
+                .unwrap_or("gemini-3.1-flash-lite-preview".to_string());
             let threshold = config.compaction_threshold;
 
             let current_tokens = crate::compaction::estimate_history_tokens(&history);
@@ -970,7 +1031,7 @@ impl Agent {
             let selected_model = config
                 .selected_model
                 .clone()
-                .unwrap_or("gemini-3.1-flash-lite".to_string());
+                .unwrap_or("gemini-3.1-flash-lite-preview".to_string());
 
             // Detect provider using centralized model registry
             let is_gemini = crate::models::is_gemini_model(&selected_model);
@@ -1695,7 +1756,7 @@ impl Agent {
     }
 
     async fn classify_intent(&self, query: &str, api_key: &str) -> Result<bool, String> {
-        let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
+        let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent";
 
         let payload = serde_json::json!({
             "contents": [{
@@ -1961,12 +2022,12 @@ impl Agent {
                 function_declarations: crate::tools::get_all_tools(&active_skills_list)
                     .iter()
                     .map(|t| {
-                        // Strip OpenAI-specific fields from parameters
+                        // Strip OpenAI-specific fields and normalize schemas for Gemini.
+                        // Gemini's proto schema uses a scalar `type` enum — it cannot accept
+                        // the OpenAI nullable union format `"type": ["X", "null"]`. We
+                        // recursively collapse those arrays to just the primary type string.
                         let mut params = t.function.parameters.clone();
-                        if let Some(obj) = params.as_object_mut() {
-                            obj.remove("additionalProperties");
-                            obj.remove("strict");
-                        }
+                        normalize_gemini_schema(&mut params);
                         GeminiFunctionDefinition {
                             name: t.function.name.clone(),
                             description: t.function.description.clone(),
@@ -2217,7 +2278,7 @@ impl Agent {
         let selected_model = config
             .selected_model
             .clone()
-            .unwrap_or("gemini-3.1-flash-lite".to_string());
+            .unwrap_or("gemini-3.1-flash-lite-preview".to_string());
         let enable_tools = config.enable_tools.unwrap_or(true);
 
         // Detect provider from model name and configure accordingly

@@ -397,15 +397,13 @@ async fn call_gemini_with_tools(
         }
     }
 
-    // Build Gemini tool format: strip additionalProperties/strict from params
+    // Build Gemini tool format: normalize schemas for Gemini proto compatibility
+    // (strips additionalProperties/strict and collapses nullable union types).
     let function_declarations: Vec<serde_json::Value> = tools
         .iter()
         .map(|t| {
             let mut params = t.function.parameters.clone();
-            if let Some(obj) = params.as_object_mut() {
-                obj.remove("additionalProperties");
-                obj.remove("strict");
-            }
+            crate::agent::normalize_gemini_schema(&mut params);
             serde_json::json!({
                 "name": t.function.name,
                 "description": t.function.description,
