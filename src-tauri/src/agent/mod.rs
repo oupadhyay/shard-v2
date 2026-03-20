@@ -489,7 +489,7 @@ impl Agent {
         let selected_model = config
             .selected_model
             .clone()
-            .unwrap_or("gemini-2.5-flash-lite".to_string());
+            .unwrap_or("gemini-3.1-flash-lite".to_string());
 
         let is_gemini = crate::models::is_gemini_model(&selected_model);
 
@@ -588,7 +588,7 @@ impl Agent {
         let selected_model = config
             .selected_model
             .clone()
-            .unwrap_or("gemini-2.5-flash-lite".to_string());
+            .unwrap_or("gemini-3.1-flash-lite".to_string());
         let is_gemini = crate::models::is_gemini_model(&selected_model);
         let has_native_vision = crate::models::model_supports_vision(&selected_model);
 
@@ -827,7 +827,7 @@ impl Agent {
             let selected_model = config
                 .selected_model
                 .clone()
-                .unwrap_or("gemini-2.5-flash-lite".to_string());
+                .unwrap_or("gemini-3.1-flash-lite".to_string());
             let threshold = config.compaction_threshold;
 
             let current_tokens = crate::compaction::estimate_history_tokens(&history);
@@ -970,7 +970,7 @@ impl Agent {
             let selected_model = config
                 .selected_model
                 .clone()
-                .unwrap_or("gemini-2.5-flash-lite".to_string());
+                .unwrap_or("gemini-3.1-flash-lite".to_string());
 
             // Detect provider using centralized model registry
             let is_gemini = crate::models::is_gemini_model(&selected_model);
@@ -1695,7 +1695,7 @@ impl Agent {
     }
 
     async fn classify_intent(&self, query: &str, api_key: &str) -> Result<bool, String> {
-        let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
+        let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
 
         let payload = serde_json::json!({
             "contents": [{
@@ -2217,7 +2217,7 @@ impl Agent {
         let selected_model = config
             .selected_model
             .clone()
-            .unwrap_or("gemini-2.5-flash-lite".to_string());
+            .unwrap_or("gemini-3.1-flash-lite".to_string());
         let enable_tools = config.enable_tools.unwrap_or(true);
 
         // Detect provider from model name and configure accordingly

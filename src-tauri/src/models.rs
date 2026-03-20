@@ -57,8 +57,8 @@ pub fn get_chat_models() -> Vec<ModelInfo> {
     vec![
         // Gemini
         ModelInfo {
-            id: "gemini-2.5-flash-lite".to_string(),
-            display_name: "2.5 Flash Lite".to_string(),
+            id: "gemini-3.1-flash-lite".to_string(),
+            display_name: "3.1 Flash Lite".to_string(),
             provider: Provider::Gemini,
             category: Category::Chat,
             supports_tools: true,

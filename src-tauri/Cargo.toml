@@ -54,7 +54,7 @@ axum = { version = "0.8.8", features = ["macros"] }
 tokio-cron-scheduler = "0.15.1"
 tempfile = "3"
 wasmtime = "36"
-wasmtime-wasi = "31"
+wasmtime-wasi = "36"
 cron = "0.15.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]

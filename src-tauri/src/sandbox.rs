@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use tokio::process::Command;
 use wasmtime::*;
-use wasmtime_wasi::pipe::MemoryOutputPipe;
+use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 use wasmtime_wasi::preview1::{self, WasiP1Ctx};
 use wasmtime_wasi::WasiCtxBuilder;
 
@@ -33,7 +33,11 @@ pub async fn execute_python(
     resource_dir: PathBuf,
     timeout_secs: u64,
 ) -> Result<ExecutionResult, String> {
-    let timeout = if timeout_secs == 0 { DEFAULT_TIMEOUT_SECS } else { timeout_secs };
+    let timeout = if timeout_secs == 0 {
+        DEFAULT_TIMEOUT_SECS
+    } else {
+        timeout_secs
+    };
 
     // Try system Python first (fast, no WASM overhead)
     if let Some(python_path) = find_system_python().await {
@@ -49,11 +53,7 @@ pub async fn execute_python(
 /// Search for a usable Python 3 interpreter on the system.
 async fn find_system_python() -> Option<PathBuf> {
     for candidate in &["python3", "python"] {
-        if let Ok(output) = Command::new(candidate)
-            .arg("--version")
-            .output()
-            .await
-        {
+        if let Ok(output) = Command::new(candidate).arg("--version").output().await {
             if output.status.success() {
                 let version = String::from_utf8_lossy(&output.stdout);
                 // Ensure it's Python 3.x
@@ -79,8 +79,7 @@ async fn execute_python_subprocess(
 ) -> Result<ExecutionResult, String> {
     let scratch = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
     let script_path = scratch.path().join("main.py");
-    std::fs::write(&script_path, code)
-        .map_err(|e| format!("Failed to write script: {}", e))?;
+    std::fs::write(&script_path, code).map_err(|e| format!("Failed to write script: {}", e))?;
 
     let child = Command::new(python_path)
         .arg(&script_path)
@@ -150,8 +149,8 @@ fn get_or_compile_module(resource_dir: &PathBuf) -> Result<&'static (Engine, Mod
     config.consume_fuel(true);
     config.epoch_interruption(true);
 
-    let engine = Engine::new(&config)
-        .map_err(|e| format!("Failed to create Wasmtime engine: {}", e))?;
+    let engine =
+        Engine::new(&config).map_err(|e| format!("Failed to create Wasmtime engine: {}", e))?;
     let module = Module::from_file(&engine, &wasm_path)
         .map_err(|e| format!("Failed to compile python.wasm: {}", e))?;
 
@@ -215,15 +214,13 @@ fn execute_python_wasi_sync(
     let (engine, module) = get_or_compile_module(resource_dir)?;
 
     // Create scratch directory
-    let scratch = tempfile::tempdir()
-        .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    let scratch = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
     let script_path = scratch.path().join("main.py");
-    std::fs::write(&script_path, code)
-        .map_err(|e| format!("Failed to write script: {}", e))?;
+    std::fs::write(&script_path, code).map_err(|e| format!("Failed to write script: {}", e))?;
 
     // Capture pipes
     let stdout_pipe = MemoryOutputPipe::new(1024 * 1024); // 1MB buffer
-    let stderr_pipe = MemoryOutputPipe::new(256 * 1024);  // 256KB buffer
+    let stderr_pipe = MemoryOutputPipe::new(256 * 1024); // 256KB buffer
 
     // Build WASI preview1 context
     let wasi_p1 = WasiCtxBuilder::new()
@@ -271,7 +268,7 @@ fn execute_python_wasi_sync(
 
     // Link WASI preview1 and instantiate
     let mut linker = Linker::<SandboxState>::new(engine);
-    preview1::add_to_linker_sync(&mut linker, |state| &mut state.wasi)
+    preview1::add_to_linker_sync(&mut linker, |state: &mut SandboxState| &mut state.wasi)
         .map_err(|e| format!("Failed to link WASI: {}", e))?;
 
     let instance = linker
@@ -301,14 +298,12 @@ fn execute_python_wasi_sync(
                 // Normal Python exit (e.g., sys.exit(0)) — not an error
             } else {
                 // Other trap (e.g., memory OOB)
-                let stdout = String::from_utf8_lossy(
-                    &stdout_pipe.try_into_inner().unwrap_or_default(),
-                )
-                .to_string();
-                let mut stderr = String::from_utf8_lossy(
-                    &stderr_pipe.try_into_inner().unwrap_or_default(),
-                )
-                .to_string();
+                let stdout =
+                    String::from_utf8_lossy(&stdout_pipe.try_into_inner().unwrap_or_default())
+                        .to_string();
+                let mut stderr =
+                    String::from_utf8_lossy(&stderr_pipe.try_into_inner().unwrap_or_default())
+                        .to_string();
                 stderr.push_str(&format!("\nWasm trap: {}", err_str));
 
                 let _ = timeout_handle;
@@ -323,14 +318,10 @@ fn execute_python_wasi_sync(
     }
 
     // Extract captured output
-    let stdout = String::from_utf8_lossy(
-        &stdout_pipe.try_into_inner().unwrap_or_default(),
-    )
-    .to_string();
-    let stderr = String::from_utf8_lossy(
-        &stderr_pipe.try_into_inner().unwrap_or_default(),
-    )
-    .to_string();
+    let stdout =
+        String::from_utf8_lossy(&stdout_pipe.try_into_inner().unwrap_or_default()).to_string();
+    let stderr =
+        String::from_utf8_lossy(&stderr_pipe.try_into_inner().unwrap_or_default()).to_string();
 
     // Clean up timeout thread (it'll finish on its own, harmless)
     let _ = timeout_handle;
