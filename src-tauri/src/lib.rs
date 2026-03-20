@@ -27,8 +27,11 @@ pub mod sessions;
 pub mod personas;
 mod sandbox;
 mod tools;
+pub mod tool_registry;
+pub mod observations;
 pub mod vector_store;
 mod webhook;
+pub mod context;
 
 #[cfg(test)]
 mod tests;

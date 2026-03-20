@@ -14,3 +14,6 @@ mod sessions_tests;
 pub mod tools_tests;
 pub mod personas_tests;
 mod heartbeat_tests;
+mod tool_registry_tests;
+mod observations_tests;
+mod context_tests;

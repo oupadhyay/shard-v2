@@ -36,6 +36,10 @@ const SKIP_INTERVAL_FRACTION: f64 = 0.5;
 struct LastRunInfo {
     summary_last_run: Option<String>,
     cleanup_last_run: Option<String>,
+    #[serde(default)]
+    deriver_last_run: Option<String>,
+    #[serde(default)]
+    dream_last_run: Option<String>,
 }
 
 /// Get the path to the last_run.json file
@@ -103,6 +107,56 @@ pub struct CleanupResult {
     pub deleted_count: usize,
     pub bytes_freed: u64,
     pub llm_reasoning: Option<String>,
+}
+
+/// Result of observation extraction (deriver pipeline)
+#[derive(Debug, Serialize, Clone)]
+pub struct ExtractionResult {
+    pub sessions_processed: usize,
+    pub observations_created: usize,
+    pub llm_reasoning: Option<String>,
+}
+
+/// Result of the dream phase (deduction + induction)
+#[derive(Debug, Serialize, Clone)]
+pub struct DreamResult {
+    pub deductions_created: usize,
+    pub inductions_created: usize,
+    pub contradictions_found: usize,
+    pub peer_card_updated: bool,
+    pub llm_reasoning: Option<String>,
+}
+
+/// Individual fact extracted by the deriver LLM
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ExtractedFact {
+    pub fact: String,
+    /// Optional session ID it was extracted from
+    #[serde(default)]
+    pub session: Option<String>,
+}
+
+/// LLM response for observation extraction
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct DeriverResponse {
+    pub facts: Vec<ExtractedFact>,
+}
+
+/// Individual deduction from the dream phase
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct DreamDeduction {
+    pub content: String,
+    pub source_ids: Vec<String>,
+    /// "deductive", "inductive", or "contradiction"
+    pub level: String,
+}
+
+/// LLM response for the dream phase
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct DreamResponse {
+    pub observations: Vec<DreamDeduction>,
+    #[serde(default)]
+    pub peer_card_facts: Vec<String>,
 }
 
 /// Result of summary analysis
@@ -731,6 +785,47 @@ pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                 }
             }
 
+            // Deriver job (observation extraction) with skip check
+            if should_skip_job(last_run_info.deriver_last_run.as_deref()) {
+                log::info!(
+                    "[Background] Skipping deriver job - less than {} hours since last run",
+                    (JOB_INTERVAL_HOURS as f64 * SKIP_INTERVAL_FRACTION) as u64
+                );
+            } else {
+                log::info!("[Background] Running deriver job (observation extraction)...");
+                match run_deriver_job(&summary_cleanup_handle).await {
+                    Ok(result) => {
+                        log::info!(
+                            "[Deriver] Complete. {} sessions processed, {} observations created.",
+                            result.sessions_processed,
+                            result.observations_created
+                        );
+                        last_run_info.deriver_last_run = Some(Utc::now().to_rfc3339());
+                        save_last_run_info(&summary_cleanup_handle, &last_run_info);
+
+                        // Trigger dream phase if enough new observations accumulated
+                        if result.observations_created >= 5 {
+                            log::info!("[Background] Enough new observations — triggering dream phase...");
+                            match run_dream_job(&summary_cleanup_handle).await {
+                                Ok(dream) => {
+                                    log::info!(
+                                        "[Dream] Complete. {} deductions, {} inductions, {} contradictions, card_updated={}",
+                                        dream.deductions_created, dream.inductions_created,
+                                        dream.contradictions_found, dream.peer_card_updated
+                                    );
+                                    last_run_info.dream_last_run = Some(Utc::now().to_rfc3339());
+                                    save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                                }
+                                Err(e) => log::error!("[Background] Dream job failed: {}", e),
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("[Background] Deriver job failed: {}", e);
+                    }
+                }
+            }
+
             log::info!(
                 "[Background] All jobs complete. Next run in {} hours.",
                 JOB_INTERVAL_HOURS
@@ -1265,6 +1360,480 @@ Interaction Entries:
             }
             Ok(result)
         }
+    }
+}
+
+// ============================================================================
+// Deriver Job (Observation Extraction)
+// ============================================================================
+
+/// Extract explicit observations from recent session transcripts.
+/// Processes sessions updated since the last deriver run.
+async fn run_deriver_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<ExtractionResult, String> {
+    let config = crate::config::load_config(app_handle)?;
+    let background_model = config
+        .background_model
+        .as_deref()
+        .unwrap_or(DEFAULT_BACKGROUND_MODEL);
+    let _ = config.get_model_provider_config(background_model, "deriver")?;
+
+    let gemini_key = config
+        .gemini_api_key
+        .as_ref()
+        .ok_or("Gemini API key required for deriver embeddings")?
+        .clone();
+
+    // Determine cutoff: sessions updated since last deriver run (or last 12h)
+    let last_run_info = load_last_run_info(app_handle);
+    let cutoff = last_run_info
+        .deriver_last_run
+        .as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|| Utc::now() - ChronoDuration::hours(LOOKBACK_HOURS));
+    let cutoff_str = cutoff.to_rfc3339();
+
+    // Fetch recent session transcripts
+    let handle = app_handle.clone();
+    let cutoff_str_clone = cutoff_str.clone();
+    let transcripts: Vec<(String, String)> = tokio::task::spawn_blocking(move || {
+        let store = crate::memories::get_vector_store(&handle)?;
+        let mut stmt = store
+            .conn
+            .prepare(
+                "SELECT id, title FROM sessions \
+                 WHERE updated_at > ? \
+                 ORDER BY updated_at ASC LIMIT 10",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let session_ids: Vec<(String, String)> = stmt
+            .query_map([&cutoff_str_clone], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut results = Vec::new();
+        for (sid, title) in session_ids {
+            if let Ok(transcript) = crate::db::sessions::get_session_transcript(&store, &sid) {
+                if transcript.len() > 50 {
+                    // Skip trivially short sessions
+                    results.push((sid, format!("Session: {}\n{}", title, transcript)));
+                }
+            }
+        }
+        Ok::<_, String>(results)
+    })
+    .await
+    .map_err(|e| format!("Deriver blocking task panicked: {}", e))??;
+
+    if transcripts.is_empty() {
+        log::info!("[Deriver] No new sessions to process since {}", cutoff_str);
+        return Ok(ExtractionResult {
+            sessions_processed: 0,
+            observations_created: 0,
+            llm_reasoning: None,
+        });
+    }
+
+    // Build combined transcript for LLM
+    let combined: String = transcripts
+        .iter()
+        .map(|(_, t)| t.as_str())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+
+    let prompt = format!(
+        r#"Extract atomic facts about the USER from these chat transcripts.
+Focus ONLY on facts the user explicitly stated or clearly implied about themselves.
+
+Rules:
+1. Each fact must be a single, self-contained statement
+2. Focus on: preferences, biographical info, habits, opinions, technical stack, work details
+3. Ignore the assistant's responses unless they confirm a user fact
+4. Ignore generic greetings, one-off queries, and ephemeral requests
+5. Do NOT extract facts about the assistant or about external topics
+6. Deduplicate: if the same fact appears multiple times, include it only once
+
+TRANSCRIPTS:
+{}
+
+Return a JSON object:
+{{
+  "facts": [
+    {{"fact": "User prefers Rust for backend development"}},
+    {{"fact": "User has a cat named Luna"}}
+  ]
+}}
+
+Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
+        combined
+    );
+
+    let http_client = reqwest::Client::new();
+    let llm_response = call_background_llm(&http_client, &config, background_model, &prompt).await;
+
+    let mut observations_created = 0usize;
+    let llm_reasoning = match llm_response {
+        Ok(response) => {
+            log::debug!("[Deriver] LLM response: {}", response);
+
+            // Parse facts
+            let facts = parse_deriver_response(&response);
+
+            if !facts.is_empty() {
+                let handle = app_handle.clone();
+                let gemini_key_clone = gemini_key.clone();
+                let http = http_client.clone();
+
+                observations_created = tokio::task::spawn_blocking(move || {
+                    let store = crate::memories::get_vector_store(&handle)
+                        .map_err(|e| format!("Failed to open vector store: {}", e))?;
+                    let mut created = 0usize;
+
+                    for fact in &facts {
+                        // Check for duplicate by content hash
+                        let hash = crate::vector_store::compute_content_hash(&fact.fact);
+                        let exists: bool = store
+                            .conn
+                            .query_row(
+                                "SELECT COUNT(*) FROM observations WHERE content_hash = ? AND deleted_at IS NULL",
+                                [&hash],
+                                |row| row.get::<_, i64>(0),
+                            )
+                            .unwrap_or(0) > 0;
+
+                        if exists {
+                            log::debug!("[Deriver] Skipping duplicate: {}", &fact.fact);
+                            continue;
+                        }
+
+                        let obs = crate::observations::make_observation(
+                            &fact.fact,
+                            crate::observations::ObservationLevel::Explicit,
+                            vec![],
+                            fact.session.clone(),
+                        );
+
+                        // Generate embedding (sync wrapper around async)
+                        let embedding = {
+                            let client = http.clone();
+                            let text = fact.fact.clone();
+                            let key = gemini_key_clone.clone();
+                            // Use cached embedding if available
+                            let hash = crate::vector_store::compute_content_hash(&text);
+                            match store.get_cached_embedding(&hash) {
+                                Ok(Some(emb)) => Some(emb),
+                                _ => {
+                                    // Can't call async from blocking — skip embedding, it'll be generated later
+                                    let _ = (client, key);
+                                    None
+                                }
+                            }
+                        };
+
+                        match crate::observations::insert_observation(
+                            &store,
+                            &obs,
+                            embedding.as_deref(),
+                        ) {
+                            Ok(()) => {
+                                log::info!("[Deriver] Created observation: {}", &fact.fact);
+                                created += 1;
+                            }
+                            Err(e) => log::warn!("[Deriver] Failed to insert observation: {}", e),
+                        }
+                    }
+                    Ok::<_, String>(created)
+                })
+                .await
+                .map_err(|e| format!("Deriver save panicked: {}", e))?
+                .unwrap_or(0);
+            }
+
+            Some(response)
+        }
+        Err(e) => {
+            log::warn!("[Deriver] LLM call failed: {}", e);
+            None
+        }
+    };
+
+    Ok(ExtractionResult {
+        sessions_processed: transcripts.len(),
+        observations_created,
+        llm_reasoning,
+    })
+}
+
+/// Parse the deriver LLM response into extracted facts.
+fn parse_deriver_response(response: &str) -> Vec<ExtractedFact> {
+    let json_start = response.find('{');
+    let json_end = response.rfind('}');
+
+    if let (Some(start), Some(end)) = (json_start, json_end) {
+        let json_str = &response[start..=end];
+        if let Ok(parsed) = serde_json::from_str::<DeriverResponse>(json_str) {
+            return parsed.facts;
+        }
+    }
+
+    Vec::new()
+}
+
+// ============================================================================
+// Dream Job (Deduction + Induction)
+// ============================================================================
+
+/// Analyze existing explicit observations to derive higher-level insights.
+/// - Deductions: logical implications from 1+ explicit observations
+/// - Inductions: behavioral patterns across multiple observations
+/// - Contradictions: flagged conflicts between observations
+/// - Peer card: curated biographical summary updated from all levels
+async fn run_dream_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<DreamResult, String> {
+    let config = crate::config::load_config(app_handle)?;
+    let background_model = config
+        .background_model
+        .as_deref()
+        .unwrap_or(DEFAULT_BACKGROUND_MODEL);
+    let _ = config.get_model_provider_config(background_model, "dream")?;
+
+    // Gather recent explicit observations for the dream phase
+    let handle = app_handle.clone();
+    let (explicit_obs, existing_deductive, existing_inductive) =
+        tokio::task::spawn_blocking(move || {
+            let store = crate::memories::get_vector_store(&handle)?;
+            let explicit = crate::observations::get_observations_by_level(
+                &store,
+                "user",
+                crate::observations::ObservationLevel::Explicit,
+                50,
+            )?;
+            let deductive = crate::observations::get_observations_by_level(
+                &store,
+                "user",
+                crate::observations::ObservationLevel::Deductive,
+                20,
+            )?;
+            let inductive = crate::observations::get_observations_by_level(
+                &store,
+                "user",
+                crate::observations::ObservationLevel::Inductive,
+                20,
+            )?;
+            Ok::<_, String>((explicit, deductive, inductive))
+        })
+        .await
+        .map_err(|e| format!("Dream blocking task panicked: {}", e))??;
+
+    if explicit_obs.is_empty() {
+        log::info!("[Dream] No explicit observations to analyze");
+        return Ok(DreamResult {
+            deductions_created: 0,
+            inductions_created: 0,
+            contradictions_found: 0,
+            peer_card_updated: false,
+            llm_reasoning: None,
+        });
+    }
+
+    // Format observations for LLM
+    let mut explicit_text = String::new();
+    for obs in &explicit_obs {
+        explicit_text.push_str(&format!("- [{}] {}\n", obs.id, obs.content));
+    }
+
+    let mut existing_text = String::new();
+    if !existing_deductive.is_empty() {
+        existing_text.push_str("Existing Deductions:\n");
+        for obs in &existing_deductive {
+            existing_text.push_str(&format!("- {}\n", obs.content));
+        }
+    }
+    if !existing_inductive.is_empty() {
+        existing_text.push_str("Existing Inductions/Patterns:\n");
+        for obs in &existing_inductive {
+            existing_text.push_str(&format!("- {}\n", obs.content));
+        }
+    }
+
+    let prompt = format!(
+        r#"Analyze these explicit facts about the user and derive higher-level observations.
+
+EXPLICIT OBSERVATIONS (source facts):
+{}
+
+EXISTING HIGHER-LEVEL OBSERVATIONS (avoid duplicates):
+{}
+
+Tasks:
+1. DEDUCTIONS: Identify logical implications from 1+ explicit facts. Include the source observation IDs.
+   Example: If user "lives in SF" and "commutes daily" → "User likely commutes in the Bay Area"
+2. INDUCTIONS: Identify behavioral patterns across multiple observations.
+   Example: If user prefers Rust, uses Tauri, avoids JavaScript → "User favors systems-level typed languages"
+3. CONTRADICTIONS: Flag any conflicts between observations.
+   Example: "User said they live in SF" vs "User said they live in NYC"
+4. PEER CARD: Produce a curated list of 5-10 key biographical facts (one sentence each) for a quick user profile.
+
+Return a JSON object:
+{{
+  "observations": [
+    {{"content": "User likely commutes in Bay Area", "source_ids": ["id1", "id2"], "level": "deductive"}},
+    {{"content": "User favors typed systems languages", "source_ids": ["id3", "id4", "id5"], "level": "inductive"}}
+  ],
+  "peer_card_facts": [
+    "Software engineer who prefers Rust",
+    "Lives in San Francisco"
+  ]
+}}
+
+Rules:
+- Only create observations that add NEW knowledge not already in the existing set
+- Each source_id must reference an actual observation ID from the EXPLICIT list above
+- The level field must be "deductive", "inductive", or "contradiction"
+- Return at most 10 observations and 10 peer card facts
+- If nothing meaningful can be derived, return {{"observations": [], "peer_card_facts": []}}"#,
+        explicit_text, existing_text
+    );
+
+    let http_client = reqwest::Client::new();
+    let llm_response = call_background_llm(&http_client, &config, background_model, &prompt).await;
+
+    let mut deductions_created = 0usize;
+    let mut inductions_created = 0usize;
+    let mut contradictions_found = 0usize;
+    let mut peer_card_updated = false;
+
+    let llm_reasoning = match llm_response {
+        Ok(response) => {
+            log::debug!("[Dream] LLM response: {}", response);
+
+            let parsed = parse_dream_response(&response);
+
+            if !parsed.observations.is_empty() || !parsed.peer_card_facts.is_empty() {
+                let handle = app_handle.clone();
+                let dream_data = parsed.clone();
+
+                let result = tokio::task::spawn_blocking(move || {
+                    let store = crate::memories::get_vector_store(&handle)?;
+
+                    let mut deductions = 0usize;
+                    let mut inductions = 0usize;
+                    let mut contradictions = 0usize;
+
+                    for dream_obs in &dream_data.observations {
+                        let level = match dream_obs.level.as_str() {
+                            "deductive" => crate::observations::ObservationLevel::Deductive,
+                            "inductive" => crate::observations::ObservationLevel::Inductive,
+                            "contradiction" => {
+                                crate::observations::ObservationLevel::Contradiction
+                            }
+                            _ => continue,
+                        };
+
+                        // Deduplicate by content hash
+                        let hash = crate::vector_store::compute_content_hash(&dream_obs.content);
+                        let exists: bool = store
+                            .conn
+                            .query_row(
+                                "SELECT COUNT(*) FROM observations WHERE content_hash = ? AND deleted_at IS NULL",
+                                [&hash],
+                                |row| row.get::<_, i64>(0),
+                            )
+                            .unwrap_or(0) > 0;
+
+                        if exists {
+                            continue;
+                        }
+
+                        let obs = crate::observations::make_observation(
+                            &dream_obs.content,
+                            level,
+                            dream_obs.source_ids.clone(),
+                            None,
+                        );
+
+                        match crate::observations::insert_observation(&store, &obs, None) {
+                            Ok(()) => {
+                                match level {
+                                    crate::observations::ObservationLevel::Deductive => {
+                                        deductions += 1
+                                    }
+                                    crate::observations::ObservationLevel::Inductive => {
+                                        inductions += 1
+                                    }
+                                    crate::observations::ObservationLevel::Contradiction => {
+                                        contradictions += 1
+                                    }
+                                    _ => {}
+                                }
+                                log::info!("[Dream] Created {:?} observation: {}", level, &dream_obs.content);
+                            }
+                            Err(e) => log::warn!("[Dream] Failed to insert: {}", e),
+                        }
+                    }
+
+                    // Update peer card
+                    let card_updated = if !dream_data.peer_card_facts.is_empty() {
+                        crate::observations::upsert_peer_card(
+                            &store,
+                            "shard",
+                            "user",
+                            &dream_data.peer_card_facts,
+                        )
+                        .is_ok()
+                    } else {
+                        false
+                    };
+
+                    Ok::<_, String>((deductions, inductions, contradictions, card_updated))
+                })
+                .await
+                .map_err(|e| format!("Dream save panicked: {}", e))??;
+
+                deductions_created = result.0;
+                inductions_created = result.1;
+                contradictions_found = result.2;
+                peer_card_updated = result.3;
+            }
+
+            Some(response)
+        }
+        Err(e) => {
+            log::warn!("[Dream] LLM call failed: {}", e);
+            None
+        }
+    };
+
+    Ok(DreamResult {
+        deductions_created,
+        inductions_created,
+        contradictions_found,
+        peer_card_updated,
+        llm_reasoning,
+    })
+}
+
+/// Parse the dream LLM response.
+fn parse_dream_response(response: &str) -> DreamResponse {
+    let json_start = response.find('{');
+    let json_end = response.rfind('}');
+
+    if let (Some(start), Some(end)) = (json_start, json_end) {
+        let json_str = &response[start..=end];
+        if let Ok(parsed) = serde_json::from_str::<DreamResponse>(json_str) {
+            return parsed;
+        }
+    }
+
+    DreamResponse {
+        observations: Vec::new(),
+        peer_card_facts: Vec::new(),
     }
 }
 

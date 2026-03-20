@@ -85,3 +85,72 @@ CREATE TABLE IF NOT EXISTS messages (
 
 -- Initialize migration flag to false
 INSERT OR IGNORE INTO metadata (key, value) VALUES ('session_migration_completed', 'false');
+
+-- ============================================================================
+-- Honcho-style Peer-Centric Observations
+-- ============================================================================
+-- Observations are leveled facts about entities (typically the user).
+-- Inspired by Honcho's Collection(observer, observed) + Document(level, source_ids) model.
+--
+-- Levels form a DAG:
+--   explicit  — Direct extraction from a message ("User said they live in SF")
+--   deductive — Logical implication from 1+ explicit ("User likely commutes in Bay Area")
+--   inductive — Pattern across 2+ observations ("User prefers West Coast cities")
+--   contradiction — Flagged conflict between observations
+--
+-- No migration needed: all statements use IF NOT EXISTS.
+
+CREATE TABLE IF NOT EXISTS observations (
+    id TEXT PRIMARY KEY,
+    observer TEXT NOT NULL DEFAULT 'shard',
+    observed TEXT NOT NULL DEFAULT 'user',
+    content TEXT NOT NULL,
+    level TEXT NOT NULL CHECK(level IN ('explicit', 'deductive', 'inductive', 'contradiction')),
+    source_ids TEXT NOT NULL DEFAULT '[]',
+    times_derived INTEGER NOT NULL DEFAULT 0,
+    session_name TEXT,
+    content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    deleted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_obs_observed ON observations(observed, level, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_obs_observer ON observations(observer, observed);
+CREATE INDEX IF NOT EXISTS idx_obs_session ON observations(session_name);
+CREATE INDEX IF NOT EXISTS idx_obs_hash ON observations(content_hash);
+
+-- sqlite-vec virtual table for observation embedding search (768-dim Gemini Embedding 2)
+CREATE VIRTUAL TABLE IF NOT EXISTS observation_embeddings USING vec0(
+    observation_id TEXT PRIMARY KEY,
+    embedding float[768] distance_metric=cosine
+);
+
+-- FTS5 for keyword search over observations
+CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(
+    content,
+    observation_id UNINDEXED,
+    tokenize='porter'
+);
+
+-- Auto-sync triggers for observations → observations_fts
+CREATE TRIGGER IF NOT EXISTS obs_fts_ai AFTER INSERT ON observations BEGIN
+  INSERT INTO observations_fts(observation_id, content) VALUES (new.id, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS obs_fts_ad AFTER DELETE ON observations BEGIN
+  DELETE FROM observations_fts WHERE observation_id = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS obs_fts_au AFTER UPDATE ON observations BEGIN
+  UPDATE observations_fts SET content = new.content WHERE observation_id = old.id;
+END;
+
+-- Peer card: curated biographical summary per observer×observed pair.
+-- Mirrors Honcho's Collection.internal_metadata.peer_card.
+CREATE TABLE IF NOT EXISTS peer_cards (
+    observer TEXT NOT NULL DEFAULT 'shard',
+    observed TEXT NOT NULL DEFAULT 'user',
+    facts TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (observer, observed)
+);

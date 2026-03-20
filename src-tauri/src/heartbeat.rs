@@ -569,7 +569,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
     } else {
         vec![]
     };
-    let tools = crate::tools::get_heartbeat_tools(&active_personas);
+    let tools = crate::tool_registry::ToolRegistry::new().get_heartbeat_definitions(&active_personas);
     let max_iterations = spec.max_tool_calls as usize;
     let mut final_content: Option<String> = None;
     let mut tool_calls_made = 0usize;
