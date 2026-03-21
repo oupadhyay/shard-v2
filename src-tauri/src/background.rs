@@ -138,13 +138,13 @@ pub struct ExtractedFact {
 
 /// LLM response for observation extraction
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct DeriverResponse {
+pub struct DeriverResponse {
     pub facts: Vec<ExtractedFact>,
 }
 
 /// Individual deduction from the dream phase
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct DreamDeduction {
+pub struct DreamDeduction {
     pub content: String,
     pub source_ids: Vec<String>,
     /// "deductive", "inductive", or "contradiction"
@@ -153,7 +153,7 @@ struct DreamDeduction {
 
 /// LLM response for the dream phase
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct DreamResponse {
+pub struct DreamResponse {
     pub observations: Vec<DreamDeduction>,
     #[serde(default)]
     pub peer_card_facts: Vec<String>,
@@ -803,9 +803,11 @@ pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                         last_run_info.deriver_last_run = Some(Utc::now().to_rfc3339());
                         save_last_run_info(&summary_cleanup_handle, &last_run_info);
 
-                        // Trigger dream phase if enough new observations accumulated
-                        if result.observations_created >= 5 {
-                            log::info!("[Background] Enough new observations — triggering dream phase...");
+                        // Trigger dream phase if enough observations exist and haven't been dreamed recently
+                        let should_dream = result.observations_created >= 5
+                            || !should_skip_job(last_run_info.dream_last_run.as_deref());
+                        if should_dream && result.observations_created > 0 {
+                            log::info!("[Background] Triggering dream phase ({} new observations)...", result.observations_created);
                             match run_dream_job(&summary_cleanup_handle).await {
                                 Ok(dream) => {
                                     log::info!(
@@ -1441,12 +1443,30 @@ async fn run_deriver_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Extrac
         });
     }
 
-    // Build combined transcript for LLM
-    let combined: String = transcripts
-        .iter()
-        .map(|(_, t)| t.as_str())
-        .collect::<Vec<_>>()
-        .join("\n---\n");
+    // Build combined transcript for LLM, respecting token budget.
+    // Background models (e.g. gpt-oss-20b on Groq) often have small TPM limits.
+    // Rough heuristic: 1 token ≈ 4 chars. Reserve ~1500 tokens for prompt + response.
+    const MAX_TRANSCRIPT_CHARS: usize = 20_000; // ~5000 tokens
+    let mut combined = String::new();
+    for (_, t) in &transcripts {
+        if combined.len() + t.len() + 4 > MAX_TRANSCRIPT_CHARS {
+            // Truncate the current transcript to fit
+            let remaining = MAX_TRANSCRIPT_CHARS.saturating_sub(combined.len() + 4);
+            if remaining > 100 {
+                if !combined.is_empty() {
+                    combined.push_str("\n---\n");
+                }
+                let boundary = t.floor_char_boundary(remaining);
+                combined.push_str(&t[..boundary]);
+                combined.push_str("...");
+            }
+            break;
+        }
+        if !combined.is_empty() {
+            combined.push_str("\n---\n");
+        }
+        combined.push_str(t);
+    }
 
     let prompt = format!(
         r#"Extract atomic facts about the USER from these chat transcripts.
@@ -1572,7 +1592,7 @@ Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
 }
 
 /// Parse the deriver LLM response into extracted facts.
-fn parse_deriver_response(response: &str) -> Vec<ExtractedFact> {
+pub fn parse_deriver_response(response: &str) -> Vec<ExtractedFact> {
     let json_start = response.find('{');
     let json_end = response.rfind('}');
 
@@ -1820,7 +1840,7 @@ Rules:
 }
 
 /// Parse the dream LLM response.
-fn parse_dream_response(response: &str) -> DreamResponse {
+pub fn parse_dream_response(response: &str) -> DreamResponse {
     let json_start = response.find('{');
     let json_end = response.rfind('}');
 

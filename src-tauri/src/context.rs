@@ -121,8 +121,10 @@ pub async fn build_session_context<R: Runtime>(
         .unwrap_or_default();
 
         if relevant.is_empty() {
+            log::info!("[Context] No relevant past interactions found");
             None
         } else {
+            log::info!("[Context] Found {} relevant past interactions", relevant.len());
             let mut s = String::from("\n\nRelevant Past Interactions:\n");
             for entry in relevant {
                 s.push_str(&format!(
@@ -156,20 +158,27 @@ pub async fn build_session_context<R: Runtime>(
         match context_res {
             Ok(Some((name, content, is_insight))) => {
                 if is_insight {
-                    log::debug!("[Context] Using insight: {}", name);
+                    log::info!("[Context] Using insight: {}", name);
                     Some(format!(
                         "\n\nRelevant Insight:\n### Insight: {}\n{}\n\n",
                         name, content
                     ))
                 } else {
-                    log::debug!("[Context] Using topic: {}", name);
+                    log::info!("[Context] Using topic: {}", name);
                     Some(format!(
                         "\n\nRelevant Topic Summary:\n### Topic: {}\n{}\n\n",
                         name, content
                     ))
                 }
             }
-            _ => None,
+            Ok(None) => {
+                log::info!("[Context] No relevant topic or insight found");
+                None
+            }
+            Err(e) => {
+                log::warn!("[Context] Topic/insight lookup failed: {}", e);
+                None
+            }
         }
     };
 
@@ -194,6 +203,14 @@ pub async fn build_session_context<R: Runtime>(
             }
         }
     };
+
+    log::info!(
+        "[Context] Assembled: interactions={}, topic/insight={}, peer_card={}, peer_rep={}",
+        interactions.is_some(),
+        topic_or_insight.is_some(),
+        peer_card.is_some(),
+        peer_representation.is_some(),
+    );
 
     SessionContext {
         interactions,

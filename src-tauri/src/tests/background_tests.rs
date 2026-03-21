@@ -6,6 +6,7 @@
  */
 use crate::background::{
     analyze_interactions_in_dir, cleanup_interactions_in_dir, parse_cleanup_decision,
+    parse_deriver_response, parse_dream_response,
     parse_topic_updates, LOG_RETENTION_DAYS, LOOKBACK_HOURS,
 };
 use chrono::{Duration as ChronoDuration, Utc};
@@ -313,4 +314,98 @@ fn test_cleanup_ignores_sessions() {
     // Cleanup interactions only targets .jsonl files, so .md files should be ignored completely
     assert_eq!(result.deleted_count, 0, "Should not delete .md files");
     assert!(session_path.exists(), "Session file should remain untouched");
+}
+
+// ============================================================================
+// Deriver Pipeline Tests
+// ============================================================================
+
+#[test]
+fn test_parse_deriver_response_valid() {
+    let response = r#"Here are the facts: {"facts": [{"fact": "User prefers Rust"}, {"fact": "User lives in SF"}]}"#;
+    let facts = parse_deriver_response(response);
+    assert_eq!(facts.len(), 2);
+    assert_eq!(facts[0].fact, "User prefers Rust");
+    assert_eq!(facts[1].fact, "User lives in SF");
+}
+
+#[test]
+fn test_parse_deriver_response_with_session() {
+    let response = r#"{"facts": [{"fact": "User has a cat", "session": "session-123"}]}"#;
+    let facts = parse_deriver_response(response);
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].session.as_deref(), Some("session-123"));
+}
+
+#[test]
+fn test_parse_deriver_response_empty_facts() {
+    let response = r#"{"facts": []}"#;
+    let facts = parse_deriver_response(response);
+    assert!(facts.is_empty());
+}
+
+#[test]
+fn test_parse_deriver_response_no_json() {
+    let response = "I couldn't find any facts about the user.";
+    let facts = parse_deriver_response(response);
+    assert!(facts.is_empty());
+}
+
+#[test]
+fn test_parse_deriver_response_wrapped_in_markdown() {
+    let response = "```json\n{\"facts\": [{\"fact\": \"User uses Tauri\"}]}\n```";
+    let facts = parse_deriver_response(response);
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].fact, "User uses Tauri");
+}
+
+// ============================================================================
+// Dream Phase Tests
+// ============================================================================
+
+#[test]
+fn test_parse_dream_response_valid() {
+    let response = r#"{"observations": [{"content": "User favors typed languages", "source_ids": ["id1", "id2"], "level": "inductive"}], "peer_card_facts": ["Software engineer", "Lives in SF"]}"#;
+    let dream = parse_dream_response(response);
+    assert_eq!(dream.observations.len(), 1);
+    assert_eq!(dream.observations[0].content, "User favors typed languages");
+    assert_eq!(dream.observations[0].level, "inductive");
+    assert_eq!(dream.observations[0].source_ids, vec!["id1", "id2"]);
+    assert_eq!(dream.peer_card_facts.len(), 2);
+}
+
+#[test]
+fn test_parse_dream_response_empty() {
+    let response = r#"{"observations": [], "peer_card_facts": []}"#;
+    let dream = parse_dream_response(response);
+    assert!(dream.observations.is_empty());
+    assert!(dream.peer_card_facts.is_empty());
+}
+
+#[test]
+fn test_parse_dream_response_no_peer_card() {
+    let response = r#"{"observations": [{"content": "Test", "source_ids": [], "level": "deductive"}]}"#;
+    let dream = parse_dream_response(response);
+    assert_eq!(dream.observations.len(), 1);
+    assert!(dream.peer_card_facts.is_empty()); // serde default
+}
+
+#[test]
+fn test_parse_dream_response_no_json() {
+    let response = "Nothing to derive here.";
+    let dream = parse_dream_response(response);
+    assert!(dream.observations.is_empty());
+    assert!(dream.peer_card_facts.is_empty());
+}
+
+#[test]
+fn test_parse_dream_response_with_contradictions() {
+    let response = r#"{"observations": [
+        {"content": "User lives in both SF and NYC", "source_ids": ["a", "b"], "level": "contradiction"},
+        {"content": "User commutes daily", "source_ids": ["c"], "level": "deductive"}
+    ], "peer_card_facts": []}"#;
+    let dream = parse_dream_response(response);
+    assert_eq!(dream.observations.len(), 2);
+    assert_eq!(dream.observations[0].level, "contradiction");
+    assert_eq!(dream.observations[1].level, "deductive");
 }
