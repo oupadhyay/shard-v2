@@ -6,7 +6,7 @@
  */
 use crate::background::{
     analyze_interactions_in_dir, cleanup_interactions_in_dir, parse_cleanup_decision,
-    parse_deriver_response, parse_dream_response,
+    parse_deriver_response, parse_dream_response, parse_rate_limit_wait,
     parse_topic_updates, LOG_RETENTION_DAYS, LOOKBACK_HOURS,
 };
 use chrono::{Duration as ChronoDuration, Utc};
@@ -408,4 +408,69 @@ fn test_parse_dream_response_with_contradictions() {
     assert_eq!(dream.observations.len(), 2);
     assert_eq!(dream.observations[0].level, "contradiction");
     assert_eq!(dream.observations[1].level, "deductive");
+}
+
+// ============================================================================
+// Rate Limit Parser Tests
+// ============================================================================
+
+#[test]
+fn test_parse_rate_limit_seconds() {
+    let error = r#"Background LLM API error: {"error":{"message":"Rate limit reached for model `openai/gpt-oss-20b` ... Please try again in 18.48s.","type":"tokens","code":"rate_limit_exceeded"}}"#;
+    let wait = parse_rate_limit_wait(error).unwrap();
+    assert!((wait - 19.48).abs() < 0.1); // 18.48 + 1.0 buffer
+}
+
+#[test]
+fn test_parse_rate_limit_minutes_and_seconds() {
+    let error = r#"{"error":{"message":"Rate limit exceeded. Please try again in 1m30s","code":"rate_limit_exceeded"}}"#;
+    let wait = parse_rate_limit_wait(error).unwrap();
+    assert!((wait - 91.0).abs() < 0.1); // 60 + 30 + 1.0 buffer
+}
+
+#[test]
+fn test_parse_rate_limit_minutes_only() {
+    let error = r#"{"error":{"message":"Rate limit. Please try again in 2m","code":"rate_limit_exceeded"}}"#;
+    let wait = parse_rate_limit_wait(error).unwrap();
+    assert!((wait - 121.0).abs() < 0.1); // 120 + 1.0 buffer
+}
+
+#[test]
+fn test_parse_rate_limit_generic() {
+    let error = r#"{"error":{"message":"Rate limit exceeded","code":"rate_limit_exceeded"}}"#;
+    let wait = parse_rate_limit_wait(error).unwrap();
+    assert_eq!(wait, 30.0); // default fallback
+}
+
+#[test]
+fn test_parse_rate_limit_not_rate_limited() {
+    let error = "Background LLM API error: Internal server error";
+    assert!(parse_rate_limit_wait(error).is_none());
+}
+
+#[test]
+fn test_parse_rate_limit_daily_not_retried() {
+    let error = r#"{"error":{"message":"Rate limit: 100 requests per day exceeded","code":"rate_limit_exceeded"}}"#;
+    assert!(parse_rate_limit_wait(error).is_none());
+}
+
+#[test]
+fn test_parse_rate_limit_http_429() {
+    let error = "HTTP 429 Too Many Requests. Please try again in 5s.";
+    let wait = parse_rate_limit_wait(error).unwrap();
+    assert!((wait - 6.0).abs() < 0.1); // 5 + 1.0 buffer
+}
+
+#[test]
+fn test_parse_rate_limit_real_groq_error() {
+    let error = r#"Background LLM API error: {"error":{"message":"Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kcgcb5zwf40vq0ck1ghb6wcv` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Used 7980, Requested 2484. Please try again in 18.48s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing","type":"tokens","code":"rate_limit_exceeded"}}"#;
+    let wait = parse_rate_limit_wait(error).unwrap();
+    assert!((wait - 19.48).abs() < 0.1);
+}
+
+#[test]
+fn test_parse_rate_limit_real_groq_error_13s() {
+    let error = r#"Background LLM API error: {"error":{"message":"Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kcgcb5zwf40vq0ck1ghb6wcv` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Used 7961, Requested 1873. Please try again in 13.755s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing","type":"tokens","code":"rate_limit_exceeded"}}"#;
+    let wait = parse_rate_limit_wait(error).unwrap();
+    assert!((wait - 14.755).abs() < 0.1); // 13.755 + 1.0 buffer
 }

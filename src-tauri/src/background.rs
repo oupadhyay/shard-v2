@@ -213,6 +213,73 @@ pub struct CleanupDecision {
 // LLM Integration
 // ============================================================================
 
+// ============================================================================
+// Rate Limit Handling
+// ============================================================================
+
+/// Maximum number of retries for rate-limited requests.
+const RATE_LIMIT_MAX_RETRIES: u32 = 3;
+
+/// Parse a rate limit error message and extract the wait time in seconds.
+/// Handles Groq/OpenRouter/Cerebras error formats:
+/// - "Please try again in 18.48s"
+/// - "Please try again in 1m30s"
+/// - "Rate limit" without specific wait → returns a default backoff
+///
+/// Returns `None` if the error is not a rate limit error.
+pub fn parse_rate_limit_wait(error: &str) -> Option<f64> {
+    let lower = error.to_lowercase();
+
+    // Must be a rate limit error
+    if !lower.contains("rate_limit") && !lower.contains("rate limit") && !lower.contains("429") {
+        return None;
+    }
+
+    // Try to extract "try again in Xs" or "try again in XmYs"
+    if let Some(idx) = lower.find("try again in ") {
+        let after = &error[idx + "try again in ".len()..];
+        // Parse "18.48s" or "1m30s" or "2m" or "90s"
+        let mut seconds = 0.0f64;
+        let mut num_buf = String::new();
+
+        for c in after.chars() {
+            if c.is_ascii_digit() || c == '.' {
+                num_buf.push(c);
+            } else if c == 'm' {
+                if let Ok(mins) = num_buf.parse::<f64>() {
+                    seconds += mins * 60.0;
+                }
+                num_buf.clear();
+            } else if c == 's' {
+                if let Ok(secs) = num_buf.parse::<f64>() {
+                    seconds += secs;
+                }
+                break;
+            } else {
+                break;
+            }
+        }
+
+        if seconds > 0.0 {
+            // Add a small buffer to ensure the limit resets
+            return Some(seconds + 1.0);
+        }
+    }
+
+    // Check for daily/request limit (non-retryable within a short window)
+    if lower.contains("per day") || lower.contains("requests per") {
+        return None; // Don't retry daily limits
+    }
+
+    // Generic rate limit without specific wait time — use 30s default
+    Some(30.0)
+}
+
+/// Check if an error is a rate limit error that's worth retrying.
+fn is_rate_limit_error(error: &str) -> bool {
+    parse_rate_limit_wait(error).is_some()
+}
+
 /// Make an LLM call for background processing
 /// Routes to the appropriate provider based on the model name
 pub async fn call_background_llm(
@@ -236,8 +303,52 @@ pub async fn call_background_llm(
 /// General-purpose one-shot LLM call with a custom system prompt.
 ///
 /// Uses the background model provider (OpenRouter/Groq/Cerebras).
+/// Automatically retries on rate limit errors with the wait time from the error message.
 /// Returns the text content of the first response choice.
 pub async fn call_llm_oneshot(
+    http_client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    model: &str,
+    system_prompt: &str,
+    user_message: &str,
+    max_tokens: u32,
+    temperature: f64,
+) -> Result<String, String> {
+    let mut last_err = String::new();
+
+    for attempt in 0..=RATE_LIMIT_MAX_RETRIES {
+        if attempt > 0 {
+            log::info!("[LLM] Retry attempt {}/{}", attempt, RATE_LIMIT_MAX_RETRIES);
+        }
+
+        match call_llm_oneshot_inner(
+            http_client, config, model, system_prompt, user_message, max_tokens, temperature,
+        )
+        .await
+        {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                if let Some(wait_secs) = parse_rate_limit_wait(&e) {
+                    if attempt < RATE_LIMIT_MAX_RETRIES {
+                        log::info!(
+                            "[LLM] Rate limited, waiting {:.1}s before retry...",
+                            wait_secs
+                        );
+                        tokio::time::sleep(Duration::from_secs_f64(wait_secs)).await;
+                        last_err = e;
+                        continue;
+                    }
+                }
+                return Err(e);
+            }
+        }
+    }
+
+    Err(last_err)
+}
+
+/// Inner one-shot LLM call (no retry logic).
+async fn call_llm_oneshot_inner(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,
     model: &str,
@@ -327,6 +438,8 @@ pub struct LlmToolCall {
 /// Automatically selects the correct API format:
 /// - Gemini models: native `generateContent` with `functionDeclarations`
 /// - OpenAI-compatible (Groq/Cerebras/OpenRouter): standard `chat/completions` with `tools`
+///
+/// Automatically retries on rate limit errors with the wait time from the error message.
 pub async fn call_llm_with_tools(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,
@@ -336,11 +449,39 @@ pub async fn call_llm_with_tools(
     max_tokens: u32,
     temperature: f64,
 ) -> Result<LlmToolResponse, String> {
-    if crate::models::is_gemini_model(model) {
-        call_gemini_with_tools(http_client, config, model, messages, tools, max_tokens, temperature).await
-    } else {
-        call_openai_with_tools(http_client, config, model, messages, tools, max_tokens, temperature).await
+    let mut last_err = String::new();
+
+    for attempt in 0..=RATE_LIMIT_MAX_RETRIES {
+        if attempt > 0 {
+            log::info!("[LLM] Tool call retry attempt {}/{}", attempt, RATE_LIMIT_MAX_RETRIES);
+        }
+
+        let result = if crate::models::is_gemini_model(model) {
+            call_gemini_with_tools(http_client, config, model, messages, tools, max_tokens, temperature).await
+        } else {
+            call_openai_with_tools(http_client, config, model, messages, tools, max_tokens, temperature).await
+        };
+
+        match result {
+            Ok(response) => return Ok(response),
+            Err(e) => {
+                if let Some(wait_secs) = parse_rate_limit_wait(&e) {
+                    if attempt < RATE_LIMIT_MAX_RETRIES {
+                        log::info!(
+                            "[LLM] Rate limited (tools), waiting {:.1}s before retry...",
+                            wait_secs
+                        );
+                        tokio::time::sleep(Duration::from_secs_f64(wait_secs)).await;
+                        last_err = e;
+                        continue;
+                    }
+                }
+                return Err(e);
+            }
+        }
     }
+
+    Err(last_err)
 }
 
 /// Gemini native generateContent path with functionDeclarations.
@@ -723,8 +864,10 @@ pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                             result.topics_updated.len()
                         );
                         // Update last run time on success
-                        last_run_info.summary_last_run = Some(now.clone());
-                        save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                        if result.llm_reasoning.is_some() || result.total_interactions == 0 {
+                            last_run_info.summary_last_run = Some(now.clone());
+                            save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                        }
 
                         if !result.topics_updated.is_empty() || !result.insights_created.is_empty()
                         {
@@ -776,8 +919,10 @@ pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                             result.bytes_freed
                         );
                         // Update last run time on success
-                        last_run_info.cleanup_last_run = Some(Utc::now().to_rfc3339());
-                        save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                        if result.llm_reasoning.is_some() {
+                            last_run_info.cleanup_last_run = Some(Utc::now().to_rfc3339());
+                            save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                        }
                     }
                     Err(e) => {
                         log::error!("[Background] Cleanup job failed: {}", e);
@@ -800,8 +945,10 @@ pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                             result.sessions_processed,
                             result.observations_created
                         );
-                        last_run_info.deriver_last_run = Some(Utc::now().to_rfc3339());
-                        save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                        if result.llm_reasoning.is_some() || result.sessions_processed == 0 {
+                            last_run_info.deriver_last_run = Some(Utc::now().to_rfc3339());
+                            save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                        }
 
                         // Trigger dream phase if enough observations exist and haven't been dreamed recently
                         let should_dream = result.observations_created >= 5
@@ -815,8 +962,10 @@ pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                                         dream.deductions_created, dream.inductions_created,
                                         dream.contradictions_found, dream.peer_card_updated
                                     );
-                                    last_run_info.dream_last_run = Some(Utc::now().to_rfc3339());
-                                    save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                                    if dream.llm_reasoning.is_some() {
+                                        last_run_info.dream_last_run = Some(Utc::now().to_rfc3339());
+                                        save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                                    }
                                 }
                                 Err(e) => log::error!("[Background] Dream job failed: {}", e),
                             }
@@ -1868,9 +2017,11 @@ pub async fn force_summary<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summ
     let result = run_summary_job(app_handle).await?;
 
     // Update last run time on success
-    let mut last_run_info = load_last_run_info(app_handle);
-    last_run_info.summary_last_run = Some(Utc::now().to_rfc3339());
-    save_last_run_info(app_handle, &last_run_info);
+    if result.llm_reasoning.is_some() || result.total_interactions == 0 {
+        let mut last_run_info = load_last_run_info(app_handle);
+        last_run_info.summary_last_run = Some(Utc::now().to_rfc3339());
+        save_last_run_info(app_handle, &last_run_info);
+    }
 
     Ok(result)
 }
@@ -1891,9 +2042,39 @@ pub async fn force_cleanup<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Clea
     let result = run_cleanup_job(app_handle).await?;
 
     // Update last run time on success
-    let mut last_run_info = load_last_run_info(app_handle);
-    last_run_info.cleanup_last_run = Some(Utc::now().to_rfc3339());
-    save_last_run_info(app_handle, &last_run_info);
+    if result.llm_reasoning.is_some() {
+        let mut last_run_info = load_last_run_info(app_handle);
+        last_run_info.cleanup_last_run = Some(Utc::now().to_rfc3339());
+        save_last_run_info(app_handle, &last_run_info);
+    }
+
+    Ok(result)
+}
+
+/// Force-trigger the deriver job (observation extraction)
+pub async fn force_deriver<R: Runtime>(app_handle: &AppHandle<R>) -> Result<ExtractionResult, String> {
+    log::info!("[Background] Force-triggered deriver job");
+    let result = run_deriver_job(app_handle).await?;
+
+    if result.llm_reasoning.is_some() || result.sessions_processed == 0 {
+        let mut last_run_info = load_last_run_info(app_handle);
+        last_run_info.deriver_last_run = Some(Utc::now().to_rfc3339());
+        save_last_run_info(app_handle, &last_run_info);
+    }
+
+    Ok(result)
+}
+
+/// Force-trigger the dream phase (deduction + induction)
+pub async fn force_dream<R: Runtime>(app_handle: &AppHandle<R>) -> Result<DreamResult, String> {
+    log::info!("[Background] Force-triggered dream job");
+    let result = run_dream_job(app_handle).await?;
+
+    if result.llm_reasoning.is_some() {
+        let mut last_run_info = load_last_run_info(app_handle);
+        last_run_info.dream_last_run = Some(Utc::now().to_rfc3339());
+        save_last_run_info(app_handle, &last_run_info);
+    }
 
     Ok(result)
 }

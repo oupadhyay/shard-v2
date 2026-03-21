@@ -498,6 +498,16 @@ async fn force_summary(app_handle: AppHandle) -> Result<SummaryStats, String> {
     })
 }
 
+#[tauri::command]
+async fn force_deriver(app_handle: AppHandle) -> Result<background::ExtractionResult, String> {
+    background::force_deriver(&app_handle).await
+}
+
+#[tauri::command]
+async fn force_dream(app_handle: AppHandle) -> Result<background::DreamResult, String> {
+    background::force_dream(&app_handle).await
+}
+
 // ============================================================================
 // Heartbeat Dashboard Commands
 // ============================================================================
@@ -910,6 +920,8 @@ pub fn run() {
             get_current_session_id,
             force_cleanup,
             force_summary,
+            force_deriver,
+            force_dream,
             rebuild_topic_index,
             rebuild_insight_index,
             rebuild_bm25_index,
