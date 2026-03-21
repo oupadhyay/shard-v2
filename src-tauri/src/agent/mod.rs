@@ -146,25 +146,6 @@ impl Agent {
                     }
                 }
 
-                // Dynamic fallback for legacy markdown migrations
-                if history.len() == 1 {
-                    let first_msg = &history[0];
-                    if first_msg.role == "assistant"
-                        && first_msg
-                            .content
-                            .as_deref()
-                            .unwrap_or("")
-                            .starts_with("# Session Transcript")
-                    {
-                        let parsed = crate::db::sessions::parse_legacy_markdown_transcript(
-                            first_msg.content.as_deref().unwrap(),
-                        );
-                        if !parsed.is_empty() {
-                            history = parsed;
-                        }
-                    }
-                }
-
                 log::info!(
                     "Loaded {} messages from SQLite for session {}",
                     history.len(),
@@ -406,25 +387,6 @@ impl Agent {
                     for msg_res in msg_iter {
                         if let Ok(msg) = msg_res {
                             history.push(msg);
-                        }
-                    }
-                }
-
-                // Dynamic fallback for legacy markdown migrations
-                if history.len() == 1 {
-                    let first_msg = &history[0];
-                    if first_msg.role == "assistant"
-                        && first_msg
-                            .content
-                            .as_deref()
-                            .unwrap_or("")
-                            .starts_with("# Session Transcript")
-                    {
-                        let parsed = crate::db::sessions::parse_legacy_markdown_transcript(
-                            first_msg.content.as_deref().unwrap(),
-                        );
-                        if !parsed.is_empty() {
-                            history = parsed;
                         }
                     }
                 }

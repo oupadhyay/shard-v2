@@ -16,22 +16,11 @@ pub fn get_personas_dir() -> Result<PathBuf, String> {
     if let Some(mut base_dir) = dirs::data_local_dir() {
         base_dir.push("dev.ojasw.shard");
 
-        // Migration logic: if personas doesn't exist but skills does, rename it.
-        let mut personas_dir = base_dir.clone();
-        personas_dir.push("personas");
+        let personas_dir = base_dir.join("personas");
 
         if !personas_dir.exists() {
-            let mut skills_dir = base_dir.clone();
-            skills_dir.push("skills");
-
-            if skills_dir.exists() && skills_dir.is_dir() {
-                if let Err(e) = fs::rename(&skills_dir, &personas_dir) {
-                    return Err(format!("Failed to migrate skills to personas directory: {}", e));
-                }
-            } else {
-                if let Err(e) = fs::create_dir_all(&personas_dir) {
-                    return Err(format!("Failed to create personas directory: {}", e));
-                }
+            if let Err(e) = fs::create_dir_all(&personas_dir) {
+                return Err(format!("Failed to create personas directory: {}", e));
             }
         }
 

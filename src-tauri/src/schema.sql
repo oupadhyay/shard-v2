@@ -83,9 +83,6 @@ CREATE TABLE IF NOT EXISTS messages (
     FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
--- Initialize migration flag to false
-INSERT OR IGNORE INTO metadata (key, value) VALUES ('session_migration_completed', 'false');
-
 -- ============================================================================
 -- Honcho-style Peer-Centric Observations
 -- ============================================================================

@@ -702,12 +702,6 @@ pub fn run() {
                 crate::webhook::start_webhook_server(webhook_handle).await;
             });
 
-            if let Ok(store) = memories::get_vector_store(&app.handle().clone()) {
-                if let Err(e) = crate::db::sessions::run_migration(&app.handle().clone(), &store) {
-                    log::warn!("[Startup] Session migration failed: {}", e);
-                }
-            }
-
             let agent = Arc::new(Agent::new(app.handle().clone()));
             // Initialize memory store cache
             let memory_store = Arc::new(RwLock::new(None));

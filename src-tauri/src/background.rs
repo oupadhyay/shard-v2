@@ -275,11 +275,6 @@ pub fn parse_rate_limit_wait(error: &str) -> Option<f64> {
     Some(30.0)
 }
 
-/// Check if an error is a rate limit error that's worth retrying.
-fn is_rate_limit_error(error: &str) -> bool {
-    parse_rate_limit_wait(error).is_some()
-}
-
 /// Make an LLM call for background processing
 /// Routes to the appropriate provider based on the model name
 pub async fn call_background_llm(

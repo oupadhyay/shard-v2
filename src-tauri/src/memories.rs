@@ -292,37 +292,8 @@ fn load_topic_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<TopicIndex,
     match serde_json::from_str::<TopicIndex>(&content) {
         Ok(index) => Ok(index),
         Err(_) => {
-            // Backward-compat path: try to interpret the file as the old format.
-            // Old format could be either:
-            //   1. { "topics": { "topic_a": [...], "topic_b": [...] } } (wrapped)
-            //   2. { "topic_a": [...], "topic_b": [...] } (flat map)
-            let old_format: Result<HashMap<String, serde_json::Value>, _> =
-                serde_json::from_str(&content);
-
-            match old_format {
-                Ok(map) => {
-                    // Check if this is the wrapped format { "topics": { ... } }
-                    if map.len() == 1 && map.contains_key("topics") {
-                        if let Some(serde_json::Value::Object(inner)) = map.get("topics") {
-                            log::info!(
-                                "[Memories] Migrated topic index from wrapped legacy format"
-                            );
-                            let topics = inner.keys().cloned().collect();
-                            return Ok(TopicIndex { topics });
-                        }
-                    }
-                    // Otherwise, treat top-level keys as topic names (flat format)
-                    log::info!("[Memories] Migrated topic index from flat legacy format");
-                    let topics = map.keys().cloned().collect();
-                    Ok(TopicIndex { topics })
-                }
-                Err(_) => {
-                    // If we cannot parse the index in either format, treat it as invalid
-                    // and reset to an empty index, allowing the file to be rebuilt.
-                    log::warn!("[Memories] Failed to parse topic index, resetting to default");
-                    Ok(TopicIndex::default())
-                }
-            }
+            log::warn!("[Memories] Failed to parse topic index, resetting to default");
+            Ok(TopicIndex::default())
         }
     }
 }

@@ -1161,57 +1161,6 @@ pub fn start_heartbeat_engine<R: Runtime>(app_handle: AppHandle<R>) {
 }
 
 // ============================================================================
-// Cron Job Migration
-// ============================================================================
-
-/// Migrate legacy `cron_jobs` from config.toml to heartbeat spec files.
-/// Called once during `load_config()` when `cron_jobs` field is present.
-pub fn migrate_cron_jobs_to_heartbeats<R: Runtime>(
-    app_handle: &AppHandle<R>,
-    cron_jobs: &[crate::config::LegacyCronJob],
-) -> Result<usize, String> {
-    if cron_jobs.is_empty() {
-        return Ok(0);
-    }
-
-    let dir = get_heartbeats_dir(app_handle)?;
-    let mut migrated = 0;
-
-    for (i, job) in cron_jobs.iter().enumerate() {
-        let filename = format!("migrated-cron-{}.toml", i + 1);
-        let filepath = dir.join(&filename);
-
-        // Don't overwrite if already migrated
-        if filepath.exists() {
-            log::info!(
-                "[Heartbeat] Migration: '{}' already exists, skipping",
-                filename
-            );
-            continue;
-        }
-
-        let content = format!(
-            "schedule = \"{}\"\nsession = \"agent:cron-migrated-{}\"\nprompt = \"\"\"{}\"\"\"\n",
-            job.schedule,
-            i + 1,
-            job.prompt
-        );
-
-        fs::write(&filepath, &content)
-            .map_err(|e| format!("Failed to write migrated heartbeat '{}': {}", filename, e))?;
-
-        log::info!(
-            "[Heartbeat] Migrated cron job #{} to '{}'",
-            i + 1,
-            filename
-        );
-        migrated += 1;
-    }
-
-    Ok(migrated)
-}
-
-// ============================================================================
 // Draft-Before-Act Orchestrator
 // ============================================================================
 
