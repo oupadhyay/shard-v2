@@ -1541,7 +1541,7 @@ impl Agent {
             }
             "load_persona" => {
                 let name = args["name"].as_str().unwrap_or_default();
-                if let Some(_content) = crate::personas::get_persona_content(name) {
+                if let Some(_content) = crate::personas::resolve_persona_content(name) {
                     let session_id = self.session_id.lock().await.clone();
                     if let Ok(store) = crate::memories::get_vector_store(app_handle) {
                         if let Ok(mut active_personas) = crate::db::sessions::get_active_skills(&store, &session_id) {
@@ -1911,7 +1911,7 @@ impl Agent {
                 if !active_personas.is_empty() {
                     let mut active_skills_content = String::new();
                     for persona in active_personas {
-                        if let Some(content) = crate::personas::get_persona_content(&persona) {
+                        if let Some(content) = crate::personas::resolve_persona_content(&persona) {
                             active_skills_content.push_str(&format!("--- PERSONA: {} ---\n{}\n\n", persona, content));
                         }
                     }
@@ -2250,7 +2250,7 @@ impl Agent {
                 if !active_personas.is_empty() {
                     let mut active_skills_content = String::new();
                     for persona in active_personas {
-                        if let Some(content) = crate::personas::get_persona_content(&persona) {
+                        if let Some(content) = crate::personas::resolve_persona_content(&persona) {
                             active_skills_content.push_str(&format!("--- PERSONA: {} ---\n{}\n\n", persona, content));
                         }
                     }

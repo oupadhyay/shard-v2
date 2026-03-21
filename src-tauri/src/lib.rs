@@ -752,6 +752,23 @@ pub fn run() {
                 }
             });
 
+            // One-time: migrate MEMORIES.json entries to observations
+            let app_handle_clone = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Ok(store) = memories::get_vector_store(&app_handle_clone) {
+                    let obs_count = crate::observations::count_observations(&store, "user").unwrap_or(0);
+                    if obs_count == 0 {
+                        // Only migrate if no observations exist yet
+                        drop(store); // Release the connection before migrating
+                        match memories::migrate_memories_to_observations(&app_handle_clone) {
+                            Ok(n) if n > 0 => log::info!("[Setup] Migrated {} memories to observations", n),
+                            Ok(_) => {}
+                            Err(e) => log::warn!("[Setup] Memory migration failed: {}", e),
+                        }
+                    }
+                }
+            });
+
             // Setup Panel (macOS)
             #[cfg(target_os = "macos")]
             {

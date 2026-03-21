@@ -1932,7 +1932,13 @@ Rules:
                                         inductions += 1
                                     }
                                     crate::observations::ObservationLevel::Contradiction => {
-                                        contradictions += 1
+                                        contradictions += 1;
+                                        // Auto-resolve: soft-delete the older source observations
+                                        // that this contradiction supersedes
+                                        for source_id in &dream_obs.source_ids {
+                                            let _ = crate::observations::soft_delete_observation(&store, source_id);
+                                            log::info!("[Dream] Soft-deleted conflicting observation: {}", source_id);
+                                        }
                                     }
                                     _ => {}
                                 }
