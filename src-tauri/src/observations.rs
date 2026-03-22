@@ -325,10 +325,10 @@ pub fn search_observations_by_keyword(
     let mut stmt = store
         .conn
         .prepare(
-            "SELECT observation_id, rank \
+            "SELECT observation_id \
              FROM observations_fts \
              WHERE observations_fts MATCH ?1 \
-             ORDER BY rank \
+             ORDER BY bm25(observations_fts) \
              LIMIT ?2",
         )
         .map_err(|e| e.to_string())?;

@@ -1954,7 +1954,7 @@ impl Agent {
 
         let gemini_tools = if enable_tools {
             Some(vec![GeminiTool {
-                function_declarations: crate::tool_registry::ToolRegistry::new().get_definitions(&active_skills_list)
+                function_declarations: crate::tool_registry::global().get_definitions(&active_skills_list)
                     .iter()
                     .map(|t| {
                         // Strip OpenAI-specific fields and normalize schemas for Gemini.
@@ -2394,7 +2394,7 @@ impl Agent {
 
         let current_tools = if enable_tools && !is_olmo_think {
             Some(
-                crate::tool_registry::ToolRegistry::new().get_definitions(&active_skills_list)
+                crate::tool_registry::global().get_definitions(&active_skills_list)
                     .iter()
                     .map(|t| ToolDefinition {
                         tool_type: t.tool_type.clone(),

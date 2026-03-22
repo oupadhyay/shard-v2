@@ -569,7 +569,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
     } else {
         vec![]
     };
-    let tools = crate::tool_registry::ToolRegistry::new().get_heartbeat_definitions(&active_personas);
+    let tools = crate::tool_registry::global().get_heartbeat_definitions(&active_personas);
     let max_iterations = spec.max_tool_calls as usize;
     let mut final_content: Option<String> = None;
     let mut tool_calls_made = 0usize;
@@ -630,7 +630,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
             let args: serde_json::Value =
                 serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
 
-            if crate::tools::is_draft_gated(&tc.name) {
+            if crate::tool_registry::global().is_draft_gated(&tc.name) {
                 // Draft-gated tool: build justification from the tool call arguments,
                 // since content is often None when the model returns tool_calls.
                 let justification = format!(

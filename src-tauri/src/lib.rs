@@ -26,7 +26,6 @@ mod secrets;
 pub mod sessions;
 pub mod personas;
 mod sandbox;
-mod tools;
 pub mod tool_registry;
 pub mod observations;
 pub mod vector_store;
@@ -755,17 +754,23 @@ pub fn run() {
             // One-time: migrate MEMORIES.json entries to observations
             let app_handle_clone = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                if let Ok(store) = memories::get_vector_store(&app_handle_clone) {
+                let handle = app_handle_clone.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let store = memories::get_vector_store(&handle)?;
                     let obs_count = crate::observations::count_observations(&store, "user").unwrap_or(0);
                     if obs_count == 0 {
-                        // Only migrate if no observations exist yet
-                        drop(store); // Release the connection before migrating
-                        match memories::migrate_memories_to_observations(&app_handle_clone) {
-                            Ok(n) if n > 0 => log::info!("[Setup] Migrated {} memories to observations", n),
-                            Ok(_) => {}
-                            Err(e) => log::warn!("[Setup] Memory migration failed: {}", e),
-                        }
+                        drop(store);
+                        memories::migrate_memories_to_observations(&handle)
+                    } else {
+                        Ok(0)
                     }
+                }).await;
+
+                match result {
+                    Ok(Ok(n)) if n > 0 => log::info!("[Setup] Migrated {} memories to observations", n),
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => log::warn!("[Setup] Memory migration failed: {}", e),
+                    Err(e) => log::warn!("[Setup] Memory migration task panicked: {}", e),
                 }
             });
 

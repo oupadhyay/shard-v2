@@ -9,6 +9,13 @@ use crate::agent::{FunctionDefinition, ToolDefinition};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
+static REGISTRY: std::sync::OnceLock<ToolRegistry> = std::sync::OnceLock::new();
+
+/// Returns a reference to the global singleton `ToolRegistry`.
+pub fn global() -> &'static ToolRegistry {
+    REGISTRY.get_or_init(ToolRegistry::new)
+}
+
 // ============================================================================
 // ToolEntry — Hermes-style metadata per tool
 // ============================================================================
@@ -463,7 +470,7 @@ impl ToolRegistry {
             .flat_map(|p| crate::personas::get_persona_required_tools(p))
             .collect();
 
-        self.tools
+        let mut defs: Vec<_> = self.tools
             .values()
             .filter(|e| {
                 let is_global = GLOBAL_TOOLS.contains(&e.name);
@@ -473,7 +480,9 @@ impl ToolRegistry {
                 (is_global || is_required) && !is_draft
             })
             .map(|e| e.schema.clone())
-            .collect()
+            .collect();
+        defs.sort_by(|a, b| a.function.name.cmp(&b.function.name));
+        defs
     }
 
     /// Get tool definitions for heartbeat/cron runs (includes draft-gated tools).
@@ -483,7 +492,7 @@ impl ToolRegistry {
             .flat_map(|p| crate::personas::get_persona_required_tools(p))
             .collect();
 
-        self.tools
+        let mut defs: Vec<_> = self.tools
             .values()
             .filter(|e| {
                 let is_global = GLOBAL_TOOLS.contains(&e.name);
@@ -492,7 +501,9 @@ impl ToolRegistry {
                 is_global || is_required || is_draft
             })
             .map(|e| e.schema.clone())
-            .collect()
+            .collect();
+        defs.sort_by(|a, b| a.function.name.cmp(&b.function.name));
+        defs
     }
 
     /// Look up a tool entry by name.

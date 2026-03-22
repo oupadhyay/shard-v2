@@ -83,47 +83,6 @@ mod tests {
         assert!(names.contains(&"web_search".to_string()));
     }
 
-    #[test]
-    fn test_parity_with_old_get_all_tools() {
-        // Verify that the registry produces the same global tool set as the old tools.rs
-        let reg = ToolRegistry::new();
-        let registry_defs = reg.get_definitions(&[]);
-        let old_defs = crate::tools::get_all_tools(&[]);
-
-        let mut registry_names: Vec<String> =
-            registry_defs.iter().map(|d| d.function.name.clone()).collect();
-        let mut old_names: Vec<String> =
-            old_defs.iter().map(|d| d.function.name.clone()).collect();
-
-        registry_names.sort();
-        old_names.sort();
-
-        assert_eq!(
-            registry_names, old_names,
-            "Registry definitions should match old get_all_tools() for no-persona case"
-        );
-    }
-
-    #[test]
-    fn test_parity_with_old_get_heartbeat_tools() {
-        let reg = ToolRegistry::new();
-        let registry_defs = reg.get_heartbeat_definitions(&[]);
-        let old_defs = crate::tools::get_heartbeat_tools(&[]);
-
-        let mut registry_names: Vec<String> =
-            registry_defs.iter().map(|d| d.function.name.clone()).collect();
-        let mut old_names: Vec<String> =
-            old_defs.iter().map(|d| d.function.name.clone()).collect();
-
-        registry_names.sort();
-        old_names.sort();
-
-        assert_eq!(
-            registry_names, old_names,
-            "Registry heartbeat definitions should match old get_heartbeat_tools()"
-        );
-    }
-
     // ── Toolset grouping ─────────────────────────────────────────────
 
     #[test]

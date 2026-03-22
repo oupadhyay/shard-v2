@@ -935,21 +935,23 @@ pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                 log::info!("[Background] Running deriver job (observation extraction)...");
                 match run_deriver_job(&summary_cleanup_handle).await {
                     Ok(result) => {
-                        log::info!(
+                        let sessions_processed = result.sessions_processed;
+                        let observations_created = result.observations_created;
+                        log::debug!(
                             "[Deriver] Complete. {} sessions processed, {} observations created.",
-                            result.sessions_processed,
-                            result.observations_created
+                            sessions_processed,
+                            observations_created
                         );
-                        if result.llm_reasoning.is_some() || result.sessions_processed == 0 {
+                        if result.llm_reasoning.is_some() || sessions_processed == 0 {
                             last_run_info.deriver_last_run = Some(Utc::now().to_rfc3339());
                             save_last_run_info(&summary_cleanup_handle, &last_run_info);
                         }
 
                         // Trigger dream phase if enough observations exist and haven't been dreamed recently
-                        let should_dream = result.observations_created >= 5
+                        let should_dream = observations_created >= 5
                             || !should_skip_job(last_run_info.dream_last_run.as_deref());
-                        if should_dream && result.observations_created > 0 {
-                            log::info!("[Background] Triggering dream phase ({} new observations)...", result.observations_created);
+                        if should_dream && observations_created > 0 {
+                            log::debug!("[Background] Triggering dream phase ({} new observations)...", observations_created);
                             match run_dream_job(&summary_cleanup_handle).await {
                                 Ok(dream) => {
                                     log::info!(
@@ -1525,8 +1527,6 @@ async fn run_deriver_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Extrac
 
     let gemini_key = config
         .gemini_api_key
-        .as_ref()
-        .ok_or("Gemini API key required for deriver embeddings")?
         .clone();
 
     // Determine cutoff: sessions updated since last deriver run (or last 12h)
@@ -1651,16 +1651,34 @@ Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
             let facts = parse_deriver_response(&response);
 
             if !facts.is_empty() {
+                // Pre-compute embeddings asynchronously before entering spawn_blocking
+                let mut precomputed_embeddings: Vec<Option<Vec<f32>>> = Vec::with_capacity(facts.len());
+                for fact in &facts {
+                    let hash = crate::vector_store::compute_content_hash(&fact.fact);
+                    // Try generating embedding via API if we have a Gemini key
+                    if let Some(ref key) = gemini_key {
+                        match crate::interactions::generate_embedding(&http_client, &fact.fact, key).await {
+                            Ok(emb) => {
+                                precomputed_embeddings.push(Some(emb));
+                                continue;
+                            }
+                            Err(e) => {
+                                log::warn!("[Deriver] Embedding generation failed for fact, will try cache: {}", e);
+                            }
+                        }
+                    }
+                    precomputed_embeddings.push(None);
+                    let _ = hash;
+                }
+
                 let handle = app_handle.clone();
-                let gemini_key_clone = gemini_key.clone();
-                let http = http_client.clone();
 
                 observations_created = tokio::task::spawn_blocking(move || {
                     let store = crate::memories::get_vector_store(&handle)
                         .map_err(|e| format!("Failed to open vector store: {}", e))?;
                     let mut created = 0usize;
 
-                    for fact in &facts {
+                    for (fact, precomputed) in facts.iter().zip(precomputed_embeddings.into_iter()) {
                         // Check for duplicate by content hash
                         let hash = crate::vector_store::compute_content_hash(&fact.fact);
                         let exists: bool = store
@@ -1684,22 +1702,11 @@ Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
                             fact.session.clone(),
                         );
 
-                        // Generate embedding (sync wrapper around async)
-                        let embedding = {
-                            let client = http.clone();
-                            let text = fact.fact.clone();
-                            let key = gemini_key_clone.clone();
-                            // Use cached embedding if available
-                            let hash = crate::vector_store::compute_content_hash(&text);
-                            match store.get_cached_embedding(&hash) {
-                                Ok(Some(emb)) => Some(emb),
-                                _ => {
-                                    // Can't call async from blocking — skip embedding, it'll be generated later
-                                    let _ = (client, key);
-                                    None
-                                }
-                            }
-                        };
+                        // Use pre-computed embedding, fall back to cache
+                        let embedding = precomputed.or_else(|| {
+                            let hash = crate::vector_store::compute_content_hash(&fact.fact);
+                            store.get_cached_embedding(&hash).ok().flatten()
+                        });
 
                         match crate::observations::insert_observation(
                             &store,
