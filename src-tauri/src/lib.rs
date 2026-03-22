@@ -26,9 +26,11 @@ mod secrets;
 pub mod sessions;
 pub mod personas;
 mod sandbox;
-mod tools;
+pub mod tool_registry;
+pub mod observations;
 pub mod vector_store;
 mod webhook;
+pub mod context;
 
 #[cfg(test)]
 mod tests;
@@ -495,6 +497,16 @@ async fn force_summary(app_handle: AppHandle) -> Result<SummaryStats, String> {
     })
 }
 
+#[tauri::command]
+async fn force_deriver(app_handle: AppHandle) -> Result<background::ExtractionResult, String> {
+    background::force_deriver(&app_handle).await
+}
+
+#[tauri::command]
+async fn force_dream(app_handle: AppHandle) -> Result<background::DreamResult, String> {
+    background::force_dream(&app_handle).await
+}
+
 // ============================================================================
 // Heartbeat Dashboard Commands
 // ============================================================================
@@ -689,12 +701,6 @@ pub fn run() {
                 crate::webhook::start_webhook_server(webhook_handle).await;
             });
 
-            if let Ok(store) = memories::get_vector_store(&app.handle().clone()) {
-                if let Err(e) = crate::db::sessions::run_migration(&app.handle().clone(), &store) {
-                    log::warn!("[Startup] Session migration failed: {}", e);
-                }
-            }
-
             let agent = Arc::new(Agent::new(app.handle().clone()));
             // Initialize memory store cache
             let memory_store = Arc::new(RwLock::new(None));
@@ -742,6 +748,29 @@ pub fn run() {
                             }
                         }
                     }
+                }
+            });
+
+            // One-time: migrate MEMORIES.json entries to observations
+            let app_handle_clone = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let handle = app_handle_clone.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let store = memories::get_vector_store(&handle)?;
+                    let obs_count = crate::observations::count_observations(&store, "user").unwrap_or(0);
+                    if obs_count == 0 {
+                        drop(store);
+                        memories::migrate_memories_to_observations(&handle)
+                    } else {
+                        Ok(0)
+                    }
+                }).await;
+
+                match result {
+                    Ok(Ok(n)) if n > 0 => log::info!("[Setup] Migrated {} memories to observations", n),
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => log::warn!("[Setup] Memory migration failed: {}", e),
+                    Err(e) => log::warn!("[Setup] Memory migration task panicked: {}", e),
                 }
             });
 
@@ -907,6 +936,8 @@ pub fn run() {
             get_current_session_id,
             force_cleanup,
             force_summary,
+            force_deriver,
+            force_dream,
             rebuild_topic_index,
             rebuild_insight_index,
             rebuild_bm25_index,

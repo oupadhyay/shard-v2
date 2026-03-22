@@ -92,89 +92,6 @@ impl VectorStore {
         // Initialize schema
         conn.execute_batch(include_str!("schema.sql"))?;
 
-        // Auto-migrate: recreate chunks table if CHECK constraint is missing 'session'
-        // SQLite doesn't allow ALTER TABLE to modify CHECK constraints, so we
-        // recreate the table with the correct constraint.
-        {
-            let has_session: bool = conn
-                .query_row(
-                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?
-                .map(|sql| sql.contains("session"))
-                .unwrap_or(true); // if table doesn't exist yet, schema.sql will create it
-
-            if !has_session {
-                log::info!("[VectorStore] Migrating chunks table to add 'session' source_type");
-                conn.execute_batch(
-                    "
-                    ALTER TABLE chunks RENAME TO chunks_old;
-                    CREATE TABLE chunks (
-                        id TEXT PRIMARY KEY,
-                        source_type TEXT NOT NULL CHECK(source_type IN ('topic', 'insight', 'session')),
-                        source_name TEXT NOT NULL,
-                        heading TEXT,
-                        text TEXT NOT NULL,
-                        start_line INTEGER NOT NULL,
-                        end_line INTEGER NOT NULL,
-                        content_hash TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL
-                    );
-                    INSERT INTO chunks SELECT * FROM chunks_old;
-                    DROP TABLE chunks_old;
-                    ",
-                )?;
-                // Recreate index that was lost with the table rename
-                conn.execute_batch(
-                    "
-                    CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_type, source_name);
-                    CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(content_hash);
-                    ",
-                )?;
-                // Recreate FTS triggers for the new chunks table
-                conn.execute_batch(
-                    "
-                    DROP TRIGGER IF EXISTS chunks_ai;
-                    DROP TRIGGER IF EXISTS chunks_ad;
-                    DROP TRIGGER IF EXISTS chunks_au;
-                    CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
-                      INSERT INTO chunks_fts(chunk_id, heading, text) VALUES (new.id, new.heading, new.text);
-                    END;
-                    CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
-                      DELETE FROM chunks_fts WHERE chunk_id = old.id;
-                    END;
-                    CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
-                      UPDATE chunks_fts SET heading = new.heading, text = new.text WHERE chunk_id = old.id;
-                    END;
-                    ",
-                )?;
-                log::info!("[VectorStore] Chunks table migration complete");
-            }
-        }
-
-        // Auto-migrate schema for existing databases (add active_skills)
-        if let Err(e) = conn.execute(
-            "ALTER TABLE sessions ADD COLUMN active_skills TEXT DEFAULT '[]';",
-            [],
-        ) {
-            match &e {
-                rusqlite::Error::SqliteFailure(_, Some(msg))
-                    if msg.contains("duplicate column name") =>
-                {
-                    // Expected error after first run; silently ignore
-                }
-                _ => {
-                    eprintln!(
-                        "[VectorStore] Failed to auto-migrate sessions.active_skills column: {}",
-                        e
-                    );
-                }
-            }
-        }
-
         log::info!("[VectorStore] Opened database at {:?}", db_path);
 
         Ok(Self { conn })
@@ -190,12 +107,6 @@ impl VectorStore {
         let result = f(self, &tx)?;
         tx.commit()?;
         Ok(result)
-    }
-
-    /// Compute SHA256 hash of content for cache key
-    #[deprecated(since = "1.0.0", note = "use compute_content_hash instead")]
-    pub fn content_hash(text: &str) -> String {
-        compute_content_hash(text)
     }
 
     /// Get the number of chunks in the store

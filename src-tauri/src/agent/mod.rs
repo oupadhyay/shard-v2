@@ -146,25 +146,6 @@ impl Agent {
                     }
                 }
 
-                // Dynamic fallback for legacy markdown migrations
-                if history.len() == 1 {
-                    let first_msg = &history[0];
-                    if first_msg.role == "assistant"
-                        && first_msg
-                            .content
-                            .as_deref()
-                            .unwrap_or("")
-                            .starts_with("# Session Transcript")
-                    {
-                        let parsed = crate::db::sessions::parse_legacy_markdown_transcript(
-                            first_msg.content.as_deref().unwrap(),
-                        );
-                        if !parsed.is_empty() {
-                            history = parsed;
-                        }
-                    }
-                }
-
                 log::info!(
                     "Loaded {} messages from SQLite for session {}",
                     history.len(),
@@ -410,25 +391,6 @@ impl Agent {
                     }
                 }
 
-                // Dynamic fallback for legacy markdown migrations
-                if history.len() == 1 {
-                    let first_msg = &history[0];
-                    if first_msg.role == "assistant"
-                        && first_msg
-                            .content
-                            .as_deref()
-                            .unwrap_or("")
-                            .starts_with("# Session Transcript")
-                    {
-                        let parsed = crate::db::sessions::parse_legacy_markdown_transcript(
-                            first_msg.content.as_deref().unwrap(),
-                        );
-                        if !parsed.is_empty() {
-                            history = parsed;
-                        }
-                    }
-                }
-
                 history
             } else {
                 return Err("Failed to open database".to_string());
@@ -564,11 +526,13 @@ impl Agent {
                 &selected_model,
                 api_key,
                 None,  // No RAG context for retry
+                None,  // No peer card for retry
+                None,  // No peer representation for retry
                 false, // Not research mode
             )
             .await?
         } else {
-            self.process_openrouter_turn(app_handle, config, &mut history, stream_id, None, false)
+            self.process_openrouter_turn(app_handle, config, &mut history, stream_id, None, None, None, false)
                 .await?
         };
 
@@ -817,61 +781,24 @@ impl Agent {
             None
         };
 
-        let relevant_interactions = if let Some(emb) = &user_embedding {
-            // Use hybrid search with RRF fusion of BM25 and dense results
-            crate::interactions::hybrid_search_interactions(
-                app_handle, &message, emb, /* limit= */ 5,
+        // RAG + Honcho-style context assembly (replaces inline interaction/topic/insight search)
+        let (rag_context_str, peer_card_ctx, peer_rep_ctx) = if let Some(emb) = &user_embedding {
+            let session_ctx = crate::context::build_session_context(
+                app_handle,
+                &self.http_client,
+                config,
+                &message,
+                emb,
             )
-            .unwrap_or_default()
+            .await;
+            (
+                session_ctx.rag_context_str(),
+                session_ctx.peer_card_str().map(String::from),
+                session_ctx.peer_representation_str().map(String::from),
+            )
         } else {
-            Vec::new()
+            (None, None, None)
         };
-
-        let mut rag_context_str = if !relevant_interactions.is_empty() {
-            let mut s = String::from("\n\nRelevant Past Interactions:\n");
-            for entry in relevant_interactions {
-                s.push_str(&format!(
-                    "- [{}] {}: {}\n",
-                    entry.ts.format("%Y-%m-%d"),
-                    entry.role,
-                    entry.content
-                ));
-            }
-            Some(s)
-        } else {
-            None
-        };
-
-        // RAG: Context from Topics or Insights (Hybrid Vector/FTS)
-        if let Some(emb) = &user_embedding {
-            let handle = app_handle.clone();
-            let msg = message.clone();
-            let embedding = emb.clone();
-            let context_res = match tokio::task::spawn_blocking(move || {
-                crate::memories::find_relevant_context(&handle, &msg, &embedding)
-            })
-            .await
-            {
-                Ok(res) => res,
-                Err(e) => {
-                    log::error!("[Agent] Context lookup task panicked: {}", e);
-                    Ok(None) // Gracefully degrade — continue without context
-                }
-            };
-
-            if let Ok(Some((name, content, is_insight))) = context_res {
-                let s = rag_context_str.get_or_insert_with(String::new);
-                if is_insight {
-                    s.push_str("\n\nRelevant Insight:\n");
-                    s.push_str(&format!("### Insight: {}\n{}\n\n", name, content));
-                    log::debug!("[Agent] Using insight: {}", name);
-                } else {
-                    s.push_str("\n\nRelevant Topic Summary:\n");
-                    s.push_str(&format!("### Topic: {}\n{}\n\n", name, content));
-                    log::debug!("[Agent] Using topic: {}", name);
-                }
-            }
-        }
 
         // ====================================================================
         // Compaction: Check if we're approaching context window limits
@@ -1061,6 +988,8 @@ impl Agent {
                     &selected_model,
                     api_key,
                     rag_context_str.as_deref(),
+                    peer_card_ctx.as_deref(),
+                    peer_rep_ctx.as_deref(),
                     is_research_mode,
                 )
                 .await?
@@ -1072,6 +1001,8 @@ impl Agent {
                     &mut history,
                     stream_id,
                     rag_context_str.as_deref(),
+                    peer_card_ctx.as_deref(),
+                    peer_rep_ctx.as_deref(),
                     is_research_mode,
                 )
                 .await?
@@ -1610,7 +1541,7 @@ impl Agent {
             }
             "load_persona" => {
                 let name = args["name"].as_str().unwrap_or_default();
-                if let Some(_content) = crate::personas::get_persona_content(name) {
+                if let Some(_content) = crate::personas::resolve_persona_content(name) {
                     let session_id = self.session_id.lock().await.clone();
                     if let Ok(store) = crate::memories::get_vector_store(app_handle) {
                         if let Ok(mut active_personas) = crate::db::sessions::get_active_skills(&store, &session_id) {
@@ -1949,6 +1880,8 @@ impl Agent {
         selected_model: &str,
         api_key: &str,
         rag_context: Option<&str>,
+        peer_card: Option<&str>,
+        peer_representation: Option<&str>,
         is_research_mode: bool,
     ) -> Result<bool, String> {
         let enable_tools = config.enable_tools.unwrap_or(true);
@@ -1978,7 +1911,7 @@ impl Agent {
                 if !active_personas.is_empty() {
                     let mut active_skills_content = String::new();
                     for persona in active_personas {
-                        if let Some(content) = crate::personas::get_persona_content(&persona) {
+                        if let Some(content) = crate::personas::resolve_persona_content(&persona) {
                             active_skills_content.push_str(&format!("--- PERSONA: {} ---\n{}\n\n", persona, content));
                         }
                     }
@@ -1990,7 +1923,7 @@ impl Agent {
         }
 
         let system_prompt_content = if incognito_mode {
-            crate::prompts::get_default_system_prompt(None, None, available_skills_opt, active_skills_opt.as_deref())
+            crate::prompts::get_default_system_prompt(None, None, None, None, available_skills_opt, active_skills_opt.as_deref())
         } else if is_research_mode {
             crate::prompts::get_research_system_prompt(available_skills_opt, active_skills_opt.as_deref())
         } else {
@@ -1998,6 +1931,8 @@ impl Agent {
                 crate::prompts::get_default_system_prompt(
                     memory_context.as_deref(),
                     rag_context,
+                    peer_card,
+                    peer_representation,
                     available_skills_opt,
                     active_skills_opt.as_deref(),
                 )
@@ -2019,7 +1954,7 @@ impl Agent {
 
         let gemini_tools = if enable_tools {
             Some(vec![GeminiTool {
-                function_declarations: crate::tools::get_all_tools(&active_skills_list)
+                function_declarations: crate::tool_registry::global().get_definitions(&active_skills_list)
                     .iter()
                     .map(|t| {
                         // Strip OpenAI-specific fields and normalize schemas for Gemini.
@@ -2273,6 +2208,8 @@ impl Agent {
         history: &mut Vec<ChatMessage>,
         stream_id: u64,
         rag_context: Option<&str>,
+        peer_card: Option<&str>,
+        peer_representation: Option<&str>,
         is_research_mode: bool,
     ) -> Result<bool, String> {
         let selected_model = config
@@ -2313,7 +2250,7 @@ impl Agent {
                 if !active_personas.is_empty() {
                     let mut active_skills_content = String::new();
                     for persona in active_personas {
-                        if let Some(content) = crate::personas::get_persona_content(&persona) {
+                        if let Some(content) = crate::personas::resolve_persona_content(&persona) {
                             active_skills_content.push_str(&format!("--- PERSONA: {} ---\n{}\n\n", persona, content));
                         }
                     }
@@ -2325,7 +2262,7 @@ impl Agent {
         }
 
         let system_prompt_content = if incognito_mode {
-            crate::prompts::get_default_system_prompt(None, None, available_skills_opt, active_skills_opt.as_deref())
+            crate::prompts::get_default_system_prompt(None, None, None, None, available_skills_opt, active_skills_opt.as_deref())
         } else if is_research_mode {
             crate::prompts::get_research_system_prompt(available_skills_opt, active_skills_opt.as_deref())
         } else {
@@ -2333,6 +2270,8 @@ impl Agent {
                 crate::prompts::get_default_system_prompt(
                     memory_context.as_deref(),
                     rag_context,
+                    peer_card,
+                    peer_representation,
                     available_skills_opt,
                     active_skills_opt.as_deref(),
                 )
@@ -2455,7 +2394,7 @@ impl Agent {
 
         let current_tools = if enable_tools && !is_olmo_think {
             Some(
-                crate::tools::get_all_tools(&active_skills_list)
+                crate::tool_registry::global().get_definitions(&active_skills_list)
                     .iter()
                     .map(|t| ToolDefinition {
                         tool_type: t.tool_type.clone(),

@@ -569,7 +569,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
     } else {
         vec![]
     };
-    let tools = crate::tools::get_heartbeat_tools(&active_personas);
+    let tools = crate::tool_registry::global().get_heartbeat_definitions(&active_personas);
     let max_iterations = spec.max_tool_calls as usize;
     let mut final_content: Option<String> = None;
     let mut tool_calls_made = 0usize;
@@ -630,7 +630,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
             let args: serde_json::Value =
                 serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
 
-            if crate::tools::is_draft_gated(&tc.name) {
+            if crate::tool_registry::global().is_draft_gated(&tc.name) {
                 // Draft-gated tool: build justification from the tool call arguments,
                 // since content is often None when the model returns tool_calls.
                 let justification = format!(
@@ -1158,57 +1158,6 @@ pub fn start_heartbeat_engine<R: Runtime>(app_handle: AppHandle<R>) {
             Err(e) => log::error!("[Heartbeat] Failed to create JobScheduler: {}", e),
         }
     });
-}
-
-// ============================================================================
-// Cron Job Migration
-// ============================================================================
-
-/// Migrate legacy `cron_jobs` from config.toml to heartbeat spec files.
-/// Called once during `load_config()` when `cron_jobs` field is present.
-pub fn migrate_cron_jobs_to_heartbeats<R: Runtime>(
-    app_handle: &AppHandle<R>,
-    cron_jobs: &[crate::config::LegacyCronJob],
-) -> Result<usize, String> {
-    if cron_jobs.is_empty() {
-        return Ok(0);
-    }
-
-    let dir = get_heartbeats_dir(app_handle)?;
-    let mut migrated = 0;
-
-    for (i, job) in cron_jobs.iter().enumerate() {
-        let filename = format!("migrated-cron-{}.toml", i + 1);
-        let filepath = dir.join(&filename);
-
-        // Don't overwrite if already migrated
-        if filepath.exists() {
-            log::info!(
-                "[Heartbeat] Migration: '{}' already exists, skipping",
-                filename
-            );
-            continue;
-        }
-
-        let content = format!(
-            "schedule = \"{}\"\nsession = \"agent:cron-migrated-{}\"\nprompt = \"\"\"{}\"\"\"\n",
-            job.schedule,
-            i + 1,
-            job.prompt
-        );
-
-        fs::write(&filepath, &content)
-            .map_err(|e| format!("Failed to write migrated heartbeat '{}': {}", filename, e))?;
-
-        log::info!(
-            "[Heartbeat] Migrated cron job #{} to '{}'",
-            i + 1,
-            filename
-        );
-        migrated += 1;
-    }
-
-    Ok(migrated)
 }
 
 // ============================================================================
