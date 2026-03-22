@@ -5,7 +5,10 @@ mod gemini;
 pub(crate) mod openrouter;
 mod types;
 
-pub use gemini::{construct_gemini_messages, parse_gemini_chunk, AgentEvent};
+pub use gemini::{
+    construct_gemini_messages, construct_interactions_input, parse_gemini_chunk,
+    parse_interactions_sse_line, process_interactions_event, AgentEvent,
+};
 pub use openrouter::{has_images, supports_tools, to_multimodal_messages};
 pub use types::*;
 
@@ -1885,10 +1888,8 @@ impl Agent {
         is_research_mode: bool,
     ) -> Result<bool, String> {
         let enable_tools = config.enable_tools.unwrap_or(true);
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent",
-            selected_model
-        );
+        // Interactions API: single endpoint, model specified in body
+        let url = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
         // Load memories for injection into system prompt (skip in incognito mode)
         let incognito_mode = config.incognito_mode.unwrap_or(false);
@@ -1939,38 +1940,30 @@ impl Agent {
             })
         };
 
-        let contents = construct_gemini_messages(history);
-        let system_instruction = Some(GeminiContent {
-            role: None,
-            parts: vec![GeminiPart::Text {
-                text: system_prompt_content.clone(),
-            }],
-        });
+        // Build stateless input from history
+        let input = construct_interactions_input(history);
 
         let session_id_str = self.session_id.lock().await.clone();
         let active_skills_list = crate::memories::get_vector_store(app_handle)
             .and_then(|store| crate::db::sessions::get_active_skills(&store, &session_id_str))
             .unwrap_or_default();
 
-        let gemini_tools = if enable_tools {
-            Some(vec![GeminiTool {
-                function_declarations: crate::tool_registry::global().get_definitions(&active_skills_list)
+        // Interactions API uses flat tool definitions: { type: "function", name, description, parameters }
+        let interactions_tools: Option<Vec<InteractionsTool>> = if enable_tools {
+            Some(
+                crate::tool_registry::global().get_definitions(&active_skills_list)
                     .iter()
                     .map(|t| {
-                        // Strip OpenAI-specific fields and normalize schemas for Gemini.
-                        // Gemini's proto schema uses a scalar `type` enum — it cannot accept
-                        // the OpenAI nullable union format `"type": ["X", "null"]`. We
-                        // recursively collapse those arrays to just the primary type string.
                         let mut params = t.function.parameters.clone();
                         normalize_gemini_schema(&mut params);
-                        GeminiFunctionDefinition {
+                        InteractionsTool::Function {
                             name: t.function.name.clone(),
                             description: t.function.description.clone(),
                             parameters: params,
                         }
                     })
                     .collect(),
-            }])
+            )
         } else {
             None
         };
@@ -1979,26 +1972,35 @@ impl Agent {
             || selected_model.contains("gemini-3")
             || selected_model.contains("thinking");
 
-        let request_body = GenerateContentRequest {
-            contents,
-            tools: gemini_tools,
-            system_instruction,
-            generation_config: Some(GenerationConfig {
-                thinking_config: if supports_thinking {
-                    Some(ThinkingConfig {
-                        include_thoughts: true,
-                        thinking_budget: Some(1024),
-                    })
-                } else {
-                    None
-                },
-            }),
+        let request_body = InteractionsRequest {
+            model: selected_model.to_string(),
+            input,
+            system_instruction: Some(system_prompt_content),
+            tools: interactions_tools,
+            generation_config: if supports_thinking {
+                Some(InteractionsGenerationConfig {
+                    thinking_level: Some("high".to_string()),
+                    thinking_summaries: Some("auto".to_string()),
+                    temperature: None,
+                    max_output_tokens: None,
+                })
+            } else {
+                None
+            },
+            stream: true,
+            store: Some(false), // We manage state locally
         };
 
+        // DEBUG: Output the raw REST JSON to terminal so we can see what's being rejected
+        if let Ok(json) = serde_json::to_string_pretty(&request_body) {
+            println!("--- GEMINI REQUEST PAYLOAD ---\n{}\n------------------------------", json);
+        }
+
+        // Streaming via SSE: append ?alt=sse
         let response = self
             .http_client
-            .post(&url)
-            .header("X-Goog-Api-Key", api_key)
+            .post(format!("{}?alt=sse", url))
+            .header("x-goog-api-key", api_key)
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
@@ -2015,10 +2017,10 @@ impl Agent {
 
         use futures_util::StreamExt;
         let mut stream = response.bytes_stream();
-        let mut buffer = Vec::new();
+        let mut buffer = String::new();
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
-        let mut tool_calls: Vec<GeminiFunctionCallWithSignature> = Vec::new();
+        let mut tool_calls: Vec<(String, String, Value)> = Vec::new(); // (id, name, arguments)
 
         while let Some(item) = stream.next().await {
             if stream_id == crate::CANCELLED_STREAM_ID.load(std::sync::atomic::Ordering::Relaxed) {
@@ -2026,86 +2028,63 @@ impl Agent {
             }
 
             let chunk = item.map_err(|e| format!("Stream error: {}", e))?;
-            buffer.extend_from_slice(&chunk);
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&chunk_str);
 
-            let mut consumed = 0;
-            let mut depth = 0;
-            let mut in_string = false;
-            let mut escape = false;
-            let mut start_idx = None;
+            // Process complete SSE lines
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim_end_matches('\r').to_string();
+                buffer.drain(..newline_pos + 1);
 
-            for (idx, &b) in buffer.iter().enumerate() {
-                let c = b as char;
-                if !in_string {
-                    if c == '{' {
-                        if depth == 0 {
-                            start_idx = Some(idx);
-                        }
-                        depth += 1;
-                    } else if c == '}' {
-                        depth -= 1;
-                        if depth == 0 {
-                            if let Some(start) = start_idx {
-                                let slice = &buffer[start..=idx];
-                                if let Ok(json_obj) =
-                                    serde_json::from_slice::<GenerateContentResponse>(slice)
-                                {
-                                    if let Some(candidates) = json_obj.candidates {
-                                        for candidate in candidates {
-                                            for part in candidate.content.parts {
-                                                let events = parse_gemini_chunk(
-                                                    part,
-                                                    &mut full_text,
-                                                    &mut full_reasoning,
-                                                    &mut tool_calls,
-                                                );
-                                                for event in events {
-                                                    match event {
-                                                        AgentEvent::ResponseChunk(text) => {
-                                                            app_handle
-                                                                .emit("agent-response-chunk", text)
-                                                                .ok();
-                                                        }
-                                                        AgentEvent::ReasoningChunk(text) => {
-                                                            app_handle
-                                                                .emit("agent-reasoning-chunk", text)
-                                                                .ok();
-                                                        }
-                                                        AgentEvent::ToolCall(fc) => {
-                                                            let tool_call_event = serde_json::json!({
-                                                                "name": fc.function_call.name,
-                                                                "args": fc.function_call.args,
-                                                                "rawArgs": serde_json::to_string(&fc.function_call.args).unwrap_or_default(),
-                                                                "id": format!("call_{}", fc.function_call.name)
-                                                            });
-                                                            app_handle
-                                                                .emit("agent-tool-call", tool_call_event.to_string())
-                                                                .ok();
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    consumed = idx + 1;
-                                    start_idx = None;
-                                }
+                if line.is_empty() {
+                    continue;
+                }
+
+                if let Some(event) = parse_interactions_sse_line(&line) {
+                    let events = process_interactions_event(
+                        &event,
+                        &mut full_text,
+                        &mut full_reasoning,
+                        &mut tool_calls,
+                    );
+                    for agent_event in events {
+                        match agent_event {
+                            AgentEvent::ResponseChunk(text) => {
+                                app_handle
+                                    .emit("agent-response-chunk", text)
+                                    .ok();
+                            }
+                            AgentEvent::ReasoningChunk(text) => {
+                                app_handle
+                                    .emit("agent-reasoning-chunk", text)
+                                    .ok();
+                            }
+                            AgentEvent::InteractionToolCall { id, name, arguments } => {
+                                let tool_call_event = serde_json::json!({
+                                    "name": name,
+                                    "args": arguments,
+                                    "rawArgs": serde_json::to_string(&arguments).unwrap_or_default(),
+                                    "id": id,
+                                });
+                                app_handle
+                                    .emit("agent-tool-call", tool_call_event.to_string())
+                                    .ok();
+                            }
+                            AgentEvent::ToolCall(fc) => {
+                                // Legacy path (should not fire for Interactions API)
+                                let tool_call_event = serde_json::json!({
+                                    "name": fc.function_call.name,
+                                    "args": fc.function_call.args,
+                                    "rawArgs": serde_json::to_string(&fc.function_call.args).unwrap_or_default(),
+                                    "id": format!("call_{}", fc.function_call.name)
+                                });
+                                app_handle
+                                    .emit("agent-tool-call", tool_call_event.to_string())
+                                    .ok();
                             }
                         }
                     }
                 }
-                if c == '"' && !escape {
-                    in_string = !in_string;
-                }
-                if c == '\\' && !escape {
-                    escape = true;
-                } else {
-                    escape = false;
-                }
-            }
-
-            if consumed > 0 {
-                buffer.drain(0..consumed);
             }
         }
 
@@ -2125,16 +2104,15 @@ impl Agent {
                 tool_calls: Some(
                     tool_calls
                         .iter()
-                        .enumerate()
-                        .map(|(idx, fc)| ToolCall {
-                            id: format!("call_{}_{}", fc.function_call.name, idx),
+                        .map(|(id, name, args)| ToolCall {
+                            id: id.clone(),
                             tool_type: "function".to_string(),
                             function: FunctionCall {
-                                name: fc.function_call.name.clone(),
-                                arguments: serde_json::to_string(&fc.function_call.args)
+                                name: name.clone(),
+                                arguments: serde_json::to_string(args)
                                     .unwrap_or_default(),
                             },
-                            thought_signature: fc.thought_signature.clone(),
+                            thought_signature: None,
                         })
                         .collect(),
                 ),
@@ -2145,19 +2123,13 @@ impl Agent {
             history.push(msg.clone());
             self.insert_single_message_to_db(app_handle, &msg).await;
 
-            for (idx, fc) in tool_calls.into_iter().enumerate() {
-                let function_name = &fc.function_call.name;
-                let args = &fc.function_call.args;
-
-                // Note: agent-tool-call was already emitted during streaming (with id for dedup).
-                // Emitting it again here (without id) caused duplicate cards in the frontend.
-
+            for (id, name, args) in tool_calls.iter() {
                 let tool_result = self
-                    .execute_tool(app_handle, function_name, args, config)
+                    .execute_tool(app_handle, name, args, config)
                     .await;
 
                 let result_payload = serde_json::json!({
-                    "name": function_name,
+                    "name": name,
                     "result": tool_result.clone()
                 });
                 app_handle
@@ -2169,7 +2141,7 @@ impl Agent {
                     content: Some(tool_result),
                     reasoning: None,
                     tool_calls: None,
-                    tool_call_id: Some(format!("call_{}_{}", fc.function_call.name, idx)),
+                    tool_call_id: Some(id.clone()),
                     is_cron: None,
                     images: None,
                 };
