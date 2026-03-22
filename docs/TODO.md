@@ -31,6 +31,37 @@
 - [ ] Migrate from `screenshots` crate to `xcap` for screen capture (P2)
 - [ ] Update models supported (especially with OpenRouter free model router)
 
+## P2: Platform Gateway
+
+- [ ] Build a gateway layer so Shard can receive/send messages via external platforms
+  - Discord bot (via `serenity` or gateway API)
+  - Email (IMAP polling + SMTP send)
+  - SMS/iMessage (Shortcuts automation or Twilio)
+  - Slack (webhook + Bolt API)
+- [ ] Route inbound messages through the same `process_message()` pipeline as the chat UI
+- [ ] Per-platform formatting (markdown → Discord flavored, plaintext for SMS, etc.)
+- [ ] Platform-aware session management (one session per channel/thread/conversation)
+- [ ] Rate limiting and authentication per platform
+
+## P2: Sub-Agent Support
+
+- [ ] Allow the primary agent to spawn sub-agents for parallel tool execution
+  - Leverage `ToolRegistry::should_parallelize()` metadata (already exists, not yet wired)
+  - Sub-agents share the same session context but run tool calls concurrently
+- [ ] Orchestrator pattern: primary agent decomposes tasks, delegates to sub-agents, merges results
+- [ ] Sub-agent isolation: each gets its own tool call budget and timeout
+- [ ] Support for specialized sub-agents (e.g., research sub-agent with `research_mode`, code sub-agent with `run_python`)
+- [ ] Progress streaming: sub-agent results streamed back to UI as they complete
+
+## P2: Skill Auto-Creation (Procedural Memory)
+
+- [ ] Agent automatically creates/improves personas from experience
+  - After complex tasks (5+ tool calls), agent saves the working approach as a new persona
+  - When user corrects the agent's approach, agent patches the relevant persona
+  - `skill_manage` tool with actions: `create`, `patch`, `edit`, `delete`, `write_file`
+- [ ] Track skill usage and success rate to prune stale personas
+- [ ] Progressive disclosure: list names/descriptions first (~3k tokens), load full content only when needed
+
 ## P2: Multi-Provider Support
 
 - [ ] Add support for other providers (e.g., Ollama, Anthropic).
