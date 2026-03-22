@@ -836,7 +836,7 @@ mod tests {
 
     #[test]
     fn test_debug_interactions_payload() {
-        use crate::agent::{InteractionsRequest, InteractionsTool, InteractionsGenerationConfig};
+        use crate::agent::{InteractionsGenerationConfig, InteractionsRequest, InteractionsTool};
         let history = vec![
             ChatMessage {
                 role: "user".to_string(),
@@ -898,7 +898,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Prevent CI from running this without API keys
     async fn test_live_tool_call_invalid_argument() {
-        use crate::agent::{InteractionsRequest, InteractionsTool, InteractionsGenerationConfig};
+        use crate::agent::{InteractionsGenerationConfig, InteractionsRequest, InteractionsTool};
         let keys_res = crate::secrets::get_all_secrets();
         if keys_res.is_err() {
             println!("No keys found, skipping live test");
@@ -984,165 +984,5 @@ mod tests {
         let status = res.status();
         let text = res.text().await.unwrap();
         panic!("STATUS: {}\nBODY: {}", status, text);
-    }
-}
-
-// ----------------------------------------------------------------------------
-// DELTA DEBUGGING TEST
-// ----------------------------------------------------------------------------
-#[cfg(test)]
-mod delta_tests {
-    use super::*;
-    use serde_json::{json, Value};
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_delta_debug_payload() {
-        let keys = crate::secrets::get_all_secrets().expect("needs key");
-        let api_key = keys.get("gemini_api_key")
-            .cloned()
-            .unwrap_or_else(|| panic!("Keys available: {:?}", keys.keys()));
-        let raw_json = r#"{
-  "model": "gemini-3.1-flash-lite-preview",
-  "input": [
-    {
-      "content": [
-        {
-          "text": "can you search the web for what I should keep my macbook battery at",
-          "type": "text"
-        }
-      ],
-      "role": "user"
-    },
-    {
-      "content": [
-        {
-          "arguments": {
-            "query": "recommended macbook battery percentage for longevity 2026"
-          },
-          "id": "lymogv85",
-          "name": "web_search",
-          "type": "function_call"
-        }
-      ],
-      "role": "model"
-    },
-    {
-      "content": [
-        {
-          "call_id": "lymogv85",
-          "name": "web_search",
-          "result": [
-            {
-              "text": "[{\"title\":\"8 Essential Tips\"}]",
-              "type": "text"
-            }
-          ],
-          "type": "function_result"
-        }
-      ],
-      "role": "user"
-    }
-  ],
-  "tools": [{"type":"function","name":"web_search","description":"search","parameters":{"type":"object","properties":{}}}]
-}"#;
-
-        let mut base_payload: Value = serde_json::from_str(raw_json).unwrap();
-        let client = reqwest::Client::new();
-        let url = "https://generativelanguage.googleapis.com/v1beta/interactions?key=".to_string() + &api_key;
-
-        // Try base payload
-        let res = client.post(&url).json(&base_payload).send().await.unwrap();
-        let status = res.status();
-        let text = res.text().await.unwrap();
-        println!("====== BASE PAYLOAD ======\nSTATUS: {}\nBODY: {}\n", status, text);
-
-        // Variant 1: Remove tools
-        let mut variant1 = base_payload.clone();
-        variant1.as_object_mut().unwrap().remove("tools");
-        let res = client.post(&url).json(&variant1).send().await.unwrap();
-        println!("====== NO TOOLS ======\nSTATUS: {}\nBODY: {}\n", res.status(), res.text().await.unwrap());
-
-        // Variant 2: Result as Object
-        let mut variant2 = base_payload.clone();
-        variant2["input"][2]["content"][0]["result"] = json!({"result":"[{\"title\":\"8 Essential Tips\"}]"});
-        let res = client.post(&url).json(&variant2).send().await.unwrap();
-        println!("====== RESULT AS OBJECT ======\nSTATUS: {}\nBODY: {}\n", res.status(), res.text().await.unwrap());
-
-        // Variant 3: Result as raw string
-        let mut variant3 = base_payload.clone();
-        variant3["input"][2]["content"][0]["result"] = json!("[{\"title\":\"8 Essential Tips\"}]");
-        let res = client.post(&url).json(&variant3).send().await.unwrap();
-        println!("====== RESULT AS STRING ======\nSTATUS: {}\nBODY: {}\n", res.status(), res.text().await.unwrap());
-
-        // Variant 4: Remove generation config
-        let mut variant4 = variant1.clone();
-        variant4.as_object_mut().unwrap().remove("generation_config");
-        let res = client.post(&url).json(&variant4).send().await.unwrap();
-        println!("====== NO GENERATION CONFIG ======\nSTATUS: {}\nBODY: {}\n", res.status(), res.text().await.unwrap());
-
-        // Variant 5: Remove system instruction as well
-        let mut variant5 = variant4.clone();
-        variant5.as_object_mut().unwrap().remove("system_instruction");
-        let res = client.post(&url).json(&variant5).send().await.unwrap();
-        // We know Variant 6 (Input + function_call, without function_result) throws invalid_argument.
-        let mut base_fc = variant5.clone();
-        base_fc["input"].as_array_mut().unwrap().pop(); // Pop function_result
-
-        // Test E: Old Gemini Tools Schema
-        let mut test_e = base_fc.clone();
-        test_e["tools"] = json!([{
-            "functionDeclarations": [{
-                "name": "web_search",
-                "description": "search",
-                "parameters": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "query": { "type": "STRING" }
-                    }
-                }
-            }]
-        }]);
-        let res = client.post(&url).json(&test_e).send().await.unwrap();
-        println!("====== FUNC_CALL + CLASSIC TOOLS SCHEMA ======\nSTATUS: {}\nBODY: {}\n", res.status(), res.text().await.unwrap());
-
-        // Test F: Classic Tools Schema + function_result
-        let mut test_f = base_payload.clone();
-        test_f["tools"] = test_e["tools"].clone();
-        let res = client.post(&url).json(&test_f).send().await.unwrap();
-        println!("====== FULL HISTORY + CLASSIC TOOLS SCHEMA ======\nSTATUS: {}\nBODY: {}\n", res.status(), res.text().await.unwrap());
-
-        // Test G: Strip `content` wrapping, what if it's just '{"type": "function_call"}' not inside array?
-        // Wait, content is strictly an array in Gemini.
-
-        // Test I: Classic Dict functionCall, keeping function_result as interactions API type
-        let mut test_i = base_payload.clone();
-        test_i["input"][1]["content"][0] = json!({
-            "functionCall": {
-                "id": "lymogv85",
-                "name": "web_search",
-                "args": {
-                    "query": "battery"
-                }
-            }
-        });
-        let res = client.post(&url).json(&test_i).send().await.unwrap();
-        println!("====== CLASSIC DICT FUNCTION CALL ======\nSTATUS: {}\nBODY: {}\n", res.status(), res.text().await.unwrap());
-
-        // Test J: Classic Dict functionCall AND functionResponse
-        let mut test_j = test_i.clone();
-        test_j["input"][2]["content"][0] = json!({
-            "functionResponse": {
-                "id": "lymogv85",
-                "name": "web_search",
-                "response": {
-                    "result": "[{\"title\":\"8 Essential Tips\"}]"
-                }
-            }
-        });
-        let res = client.post(&url).json(&test_j).send().await.unwrap();
-        println!("====== CLASSIC DICT BOTH ======\nSTATUS: {}\nBODY: {}\n", res.status(), res.text().await.unwrap());
-
-        panic!("Classic Type debug completed. Check stdout.");
     }
 }

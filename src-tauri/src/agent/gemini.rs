@@ -13,6 +13,7 @@ pub enum AgentEvent {
         id: String,
         name: String,
         arguments: Value,
+        signature: Option<String>,
     },
 }
 
@@ -226,6 +227,38 @@ pub fn construct_interactions_input(history: &[ChatMessage]) -> Value {
             };
             let mut content_parts: Vec<Value> = Vec::new();
 
+            // Reasoning/Thought parts: include signature if it was a tool-call turn
+            let mut thought_part: Option<serde_json::Map<String, Value>> = None;
+
+            if let Some(reasoning) = &msg.reasoning {
+                if !reasoning.is_empty() {
+                    let mut map = serde_json::Map::new();
+                    map.insert("type".to_string(), json!("thought"));
+                    map.insert("thought".to_string(), json!(true));
+                    map.insert("text".to_string(), json!(reasoning));
+                    thought_part = Some(map);
+                }
+            }
+
+            // If we have tool calls, check for a signature to emit as a thought part
+            if let Some(tool_calls) = &msg.tool_calls {
+                if let Some(first_tc) = tool_calls.first() {
+                    if let Some(sig) = &first_tc.thought_signature {
+                        let mut map = thought_part.unwrap_or_else(|| {
+                            let mut m = serde_json::Map::new();
+                            m.insert("type".to_string(), json!("thought"));
+                            m
+                        });
+                        map.insert("signature".to_string(), json!(sig));
+                        thought_part = Some(map);
+                    }
+                }
+            }
+
+            if let Some(part) = thought_part {
+                content_parts.push(Value::Object(part));
+            }
+
             if let Some(text) = &msg.content {
                 // Clean up old-format JSON content (same as legacy path)
                 let clean_text = if text.trim().starts_with('{') && text.contains("file_data") {
@@ -323,7 +356,7 @@ pub fn process_interactions_event(
     event: &InteractionStreamEvent,
     full_text: &mut String,
     full_reasoning: &mut String,
-    tool_calls: &mut Vec<(String, String, Value)>, // (id, name, arguments)
+    _tool_calls: &mut Vec<(String, String, Value, Option<String>)>, // (id, name, arguments, signature)
 ) -> Vec<AgentEvent> {
     let mut events = Vec::new();
 
@@ -354,15 +387,22 @@ pub fn process_interactions_event(
                         name,
                         arguments,
                     } => {
-                        tool_calls.push((id.clone(), name.clone(), arguments.clone()));
+                        // In the Interactions API stream, signature usually comes in a separate ThoughtSignature event.
+                        // We emit them as separate events and let the caller associate them.
                         events.push(AgentEvent::InteractionToolCall {
                             id: id.clone(),
                             name: name.clone(),
                             arguments: arguments.clone(),
+                            signature: None,
                         });
                     }
-                    InteractionDelta::ThoughtSignature { .. } => {
-                        // Signatures are captured but not emitted to the UI
+                    InteractionDelta::ThoughtSignature { signature } => {
+                        events.push(AgentEvent::InteractionToolCall {
+                            id: "".to_string(), // Partial event, signature only
+                            name: "".to_string(),
+                            arguments: json!(null),
+                            signature: Some(signature.clone()),
+                        });
                     }
                 }
             }

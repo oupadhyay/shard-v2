@@ -2020,7 +2020,8 @@ impl Agent {
         let mut buffer = String::new();
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
-        let mut tool_calls: Vec<(String, String, Value)> = Vec::new(); // (id, name, arguments)
+        let mut tool_calls: Vec<(String, String, Value, Option<String>)> = Vec::new(); // (id, name, arguments, signature)
+        let mut current_signature: Option<String> = None;
 
         while let Some(item) = stream.next().await {
             if stream_id == crate::CANCELLED_STREAM_ID.load(std::sync::atomic::Ordering::Relaxed) {
@@ -2041,11 +2042,12 @@ impl Agent {
                 }
 
                 if let Some(event) = parse_interactions_sse_line(&line) {
+                    let mut dummy_tool_calls: Vec<(String, String, Value, Option<String>)> = Vec::new();
                     let events = process_interactions_event(
                         &event,
                         &mut full_text,
                         &mut full_reasoning,
-                        &mut tool_calls,
+                        &mut dummy_tool_calls,
                     );
                     for agent_event in events {
                         match agent_event {
@@ -2059,16 +2061,21 @@ impl Agent {
                                     .emit("agent-reasoning-chunk", text)
                                     .ok();
                             }
-                            AgentEvent::InteractionToolCall { id, name, arguments } => {
-                                let tool_call_event = serde_json::json!({
-                                    "name": name,
-                                    "args": arguments,
-                                    "rawArgs": serde_json::to_string(&arguments).unwrap_or_default(),
-                                    "id": id,
-                                });
-                                app_handle
-                                    .emit("agent-tool-call", tool_call_event.to_string())
-                                    .ok();
+                            AgentEvent::InteractionToolCall { id, name, arguments, signature } => {
+                                if let Some(sig) = signature {
+                                    current_signature = Some(sig);
+                                } else {
+                                    tool_calls.push((id.clone(), name.clone(), arguments.clone(), current_signature.take()));
+                                    let tool_call_event = serde_json::json!({
+                                        "name": name,
+                                        "args": arguments,
+                                        "rawArgs": serde_json::to_string(&arguments).unwrap_or_default(),
+                                        "id": id,
+                                    });
+                                    app_handle
+                                        .emit("agent-tool-call", tool_call_event.to_string())
+                                        .ok();
+                                }
                             }
                             AgentEvent::ToolCall(fc) => {
                                 // Legacy path (should not fire for Interactions API)
@@ -2104,7 +2111,7 @@ impl Agent {
                 tool_calls: Some(
                     tool_calls
                         .iter()
-                        .map(|(id, name, args)| ToolCall {
+                        .map(|(id, name, args, signature)| ToolCall {
                             id: id.clone(),
                             tool_type: "function".to_string(),
                             function: FunctionCall {
@@ -2112,7 +2119,7 @@ impl Agent {
                                 arguments: serde_json::to_string(args)
                                     .unwrap_or_default(),
                             },
-                            thought_signature: None,
+                            thought_signature: signature.clone(),
                         })
                         .collect(),
                 ),
@@ -2123,7 +2130,7 @@ impl Agent {
             history.push(msg.clone());
             self.insert_single_message_to_db(app_handle, &msg).await;
 
-            for (id, name, args) in tool_calls.iter() {
+            for (id, name, args, _) in tool_calls.iter() {
                 let tool_result = self
                     .execute_tool(app_handle, name, args, config)
                     .await;
