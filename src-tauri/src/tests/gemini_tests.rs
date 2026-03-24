@@ -3,7 +3,7 @@ mod tests {
     use crate::agent::{
         construct_gemini_messages, construct_interactions_input, parse_interactions_sse_line,
         process_interactions_event, ChatMessage, FunctionCall, GeminiPart, ImageAttachment,
-        InteractionDelta, InteractionOutput, InteractionStreamEvent, ToolCall,
+        InteractionDelta, InteractionOutput, InteractionStreamEvent, ToolCall, AgentEvent,
     };
     use serde_json::json;
 
@@ -734,7 +734,7 @@ mod tests {
     fn test_process_interactions_event_text() {
         let event = InteractionStreamEvent {
             event_type: "content.delta".to_string(),
-            index: Some(0),
+            index: Some(1),
             delta: Some(InteractionDelta::Text {
                 text: "Hello world".to_string(),
             }),
@@ -744,19 +744,12 @@ mod tests {
 
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
-        let mut tool_calls = Vec::new();
 
-        let events = process_interactions_event(
-            &event,
-            &mut full_text,
-            &mut full_reasoning,
-            &mut tool_calls,
-        );
+        let events = process_interactions_event(&event, &mut full_text, &mut full_reasoning);
 
         assert_eq!(events.len(), 1);
         assert_eq!(full_text, "Hello world");
         assert!(full_reasoning.is_empty());
-        assert!(tool_calls.is_empty());
     }
 
     #[test]
@@ -775,27 +768,30 @@ mod tests {
 
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
-        let mut tool_calls = Vec::new();
 
-        let events = process_interactions_event(
-            &event,
-            &mut full_text,
-            &mut full_reasoning,
-            &mut tool_calls,
-        );
+        let events = process_interactions_event(&event, &mut full_text, &mut full_reasoning);
 
         assert_eq!(events.len(), 1);
-        assert_eq!(tool_calls.len(), 1);
-        assert_eq!(tool_calls[0].0, "fc_abc");
-        assert_eq!(tool_calls[0].1, "search_wikipedia");
-        assert_eq!(tool_calls[0].2["query"], "Rust programming");
+        if let AgentEvent::InteractionToolCall {
+            id,
+            name,
+            arguments,
+            signature,
+        } = &events[0]
+        {
+            assert_eq!(id, "fc_abc");
+            assert_eq!(name, "search_wikipedia");
+            assert_eq!(arguments["query"], serde_json::json!("Rust programming"));
+            assert!(signature.is_none());
+        } else {
+            panic!("Expected InteractionToolCall event");
+        }
     }
 
     #[test]
     fn test_process_interactions_event_accumulates() {
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
-        let mut tool_calls = Vec::new();
 
         // First text delta
         let event1 = InteractionStreamEvent {
@@ -807,12 +803,7 @@ mod tests {
             content: None,
             interaction: None,
         };
-        process_interactions_event(
-            &event1,
-            &mut full_text,
-            &mut full_reasoning,
-            &mut tool_calls,
-        );
+        process_interactions_event(&event1, &mut full_text, &mut full_reasoning);
 
         // Second text delta
         let event2 = InteractionStreamEvent {
@@ -824,14 +815,10 @@ mod tests {
             content: None,
             interaction: None,
         };
-        process_interactions_event(
-            &event2,
-            &mut full_text,
-            &mut full_reasoning,
-            &mut tool_calls,
-        );
+        process_interactions_event(&event2, &mut full_text, &mut full_reasoning);
 
         assert_eq!(full_text, "Hello world!");
+        assert!(full_reasoning.is_empty());
     }
 
     #[test]
@@ -875,7 +862,7 @@ mod tests {
             },
         ];
 
-        let req = InteractionsRequest {
+        let _req = InteractionsRequest {
             model: "gemini-3.1-flash-lite-preview".to_string(),
             input: construct_interactions_input(&history),
             system_instruction: Some("test mode".to_string()),

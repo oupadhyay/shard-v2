@@ -227,36 +227,16 @@ pub fn construct_interactions_input(history: &[ChatMessage]) -> Value {
             };
             let mut content_parts: Vec<Value> = Vec::new();
 
-            // Reasoning/Thought parts: include signature if it was a tool-call turn
-            let mut thought_part: Option<serde_json::Map<String, Value>> = None;
-
-            if let Some(reasoning) = &msg.reasoning {
-                if !reasoning.is_empty() {
-                    let mut map = serde_json::Map::new();
-                    map.insert("type".to_string(), json!("thought"));
-                    map.insert("thought".to_string(), json!(true));
-                    map.insert("text".to_string(), json!(reasoning));
-                    thought_part = Some(map);
-                }
-            }
-
-            // If we have tool calls, check for a signature to emit as a thought part
+            // Thought Signature (Required for tool calling)
             if let Some(tool_calls) = &msg.tool_calls {
                 if let Some(first_tc) = tool_calls.first() {
                     if let Some(sig) = &first_tc.thought_signature {
-                        let mut map = thought_part.unwrap_or_else(|| {
-                            let mut m = serde_json::Map::new();
-                            m.insert("type".to_string(), json!("thought"));
-                            m
-                        });
-                        map.insert("signature".to_string(), json!(sig));
-                        thought_part = Some(map);
+                        content_parts.push(json!({
+                            "type": "thought",
+                            "signature": sig
+                        }));
                     }
                 }
-            }
-
-            if let Some(part) = thought_part {
-                content_parts.push(Value::Object(part));
             }
 
             if let Some(text) = &msg.content {
@@ -356,7 +336,6 @@ pub fn process_interactions_event(
     event: &InteractionStreamEvent,
     full_text: &mut String,
     full_reasoning: &mut String,
-    _tool_calls: &mut Vec<(String, String, Value, Option<String>)>, // (id, name, arguments, signature)
 ) -> Vec<AgentEvent> {
     let mut events = Vec::new();
 

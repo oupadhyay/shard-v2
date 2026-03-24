@@ -2042,12 +2042,10 @@ impl Agent {
                 }
 
                 if let Some(event) = parse_interactions_sse_line(&line) {
-                    let mut dummy_tool_calls: Vec<(String, String, Value, Option<String>)> = Vec::new();
                     let events = process_interactions_event(
                         &event,
                         &mut full_text,
                         &mut full_reasoning,
-                        &mut dummy_tool_calls,
                     );
                     for agent_event in events {
                         match agent_event {
