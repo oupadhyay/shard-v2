@@ -2,12 +2,15 @@
 
 ## P0: Code Review Issues (Feb 2026)
 
-- [ ] **Manual config merging** - (Deferred) Using `#[serde(default)]` patterns, full refactor to `figment` deemed too large for this pass.
 - [ ] **Monolithic handleInput** ([main.ts:69-224](../src/main.ts)) - Split into `preparePayload`, `sendChatMessage`, etc.
 
-## P1: Password Prompts
+## P1: Auto-Testing (Evaluator-as-a-Judge)
 
-- [ ] Still requires 2 passwords prompts (there is always allow but 2 shouldn't be necessary?)
+- [ ] Automate actual testing with the model using an **Evaluator-as-a-Judge** pattern:
+  1. **Automated UI**: Use **Playwright** or **Cypress** with the Tauri WebDriver to drive the frontend.
+  2. **Synthetic User**: Script a separate LLM (e.g., GPT-4o or a local Llama instance) to generate prompts, send them to Shard, and wait for the UI to update.
+  3. **Verification**: Have the Evaluator LLM check the final DOM state or your `interactions.jsonl` against a set of "ground truth" requirements.
+  4. **Mocking**: Use a test flag to swap real tool calls (like `web_search`) with static JSON mocks to keep tests deterministic and save your quota.
 
 ## P2: Light Mode Theme Support
 
