@@ -862,7 +862,7 @@ mod tests {
             },
         ];
 
-        let _req = InteractionsRequest {
+        let req = InteractionsRequest {
             model: "gemini-3.1-flash-lite-preview".to_string(),
             input: construct_interactions_input(&history),
             system_instruction: Some("test mode".to_string()),
@@ -880,6 +880,17 @@ mod tests {
             stream: true,
             store: Some(false),
         };
+
+        // Verify serialization round-trips and required fields are present
+        let json = serde_json::to_value(&req).expect("InteractionsRequest should serialize");
+        assert_eq!(json["model"], "gemini-3.1-flash-lite-preview");
+        assert_eq!(json["stream"], true);
+        assert_eq!(json["store"], false);
+        assert!(json["input"].is_array(), "input should be an array of turns");
+        assert!(!json["input"].as_array().unwrap().is_empty(), "input should not be empty");
+        assert_eq!(json["system_instruction"], "test mode");
+        assert!(json["tools"].is_array(), "tools should be an array");
+        assert_eq!(json["generation_config"]["thinking_level"], "low");
     }
 
     #[tokio::test]

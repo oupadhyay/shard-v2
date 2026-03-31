@@ -1888,8 +1888,11 @@ impl Agent {
         is_research_mode: bool,
     ) -> Result<bool, String> {
         let enable_tools = config.enable_tools.unwrap_or(true);
-        // Interactions API: single endpoint, model specified in body
-        let url = "https://generativelanguage.googleapis.com/v1beta/interactions";
+        // Interactions API: model-specific endpoint, model in path
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:interactions",
+            selected_model
+        );
 
         // Load memories for injection into system prompt (skip in incognito mode)
         let incognito_mode = config.incognito_mode.unwrap_or(false);
@@ -1992,8 +1995,10 @@ impl Agent {
         };
 
         // DEBUG: Output the raw REST JSON to terminal so we can see what's being rejected
-        if let Ok(json) = serde_json::to_string_pretty(&request_body) {
-            println!("--- GEMINI REQUEST PAYLOAD ---\n{}\n------------------------------", json);
+        if cfg!(debug_assertions) {
+            if let Ok(json) = serde_json::to_string_pretty(&request_body) {
+                println!("--- GEMINI REQUEST PAYLOAD ---\n{}\n------------------------------", json);
+            }
         }
 
         // Streaming via SSE: append ?alt=sse
@@ -2061,9 +2066,20 @@ impl Agent {
                             }
                             AgentEvent::InteractionToolCall { id, name, arguments, signature } => {
                                 if let Some(sig) = signature {
-                                    current_signature = Some(sig);
+                                    // Try to attach signature to an existing tool call by id
+                                    if let Some(entry) = tool_calls.iter_mut().find(|e| e.0 == id) {
+                                        entry.3 = Some(sig);
+                                    } else {
+                                        current_signature = Some(sig);
+                                    }
                                 } else {
-                                    tool_calls.push((id.clone(), name.clone(), arguments.clone(), current_signature.take()));
+                                    // Check if a placeholder already exists for this id (signature arrived first)
+                                    if let Some(entry) = tool_calls.iter_mut().find(|e| e.0 == id) {
+                                        entry.1 = name.clone();
+                                        entry.2 = arguments.clone();
+                                    } else {
+                                        tool_calls.push((id.clone(), name.clone(), arguments.clone(), current_signature.take()));
+                                    }
                                     let tool_call_event = serde_json::json!({
                                         "name": name,
                                         "args": arguments,

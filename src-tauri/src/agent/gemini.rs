@@ -202,7 +202,13 @@ pub fn construct_interactions_input(history: &[ChatMessage]) -> Value {
 
     for msg in history {
         if msg.role == "tool" {
-            let call_id = msg.tool_call_id.clone().unwrap_or_default();
+            let call_id = match &msg.tool_call_id {
+                Some(id) if !id.is_empty() => id.clone(),
+                _ => {
+                    log::warn!("Skipping tool message with missing tool_call_id");
+                    continue;
+                }
+            };
             let func_name = call_id_to_name
                 .get(&call_id)
                 .cloned()
@@ -313,8 +319,8 @@ pub fn construct_interactions_input(history: &[ChatMessage]) -> Value {
 /// Parse a single SSE line from the Interactions API streaming response.
 /// Returns None if the line is not a data line or cannot be parsed.
 pub fn parse_interactions_sse_line(line: &str) -> Option<InteractionStreamEvent> {
-    let data = line.strip_prefix("data: ")?;
-    let data = data.trim();
+    let data = line.strip_prefix("data:")?;
+    let data = data.trim_start();
     if data.is_empty() || data == "[DONE]" {
         return None;
     }
