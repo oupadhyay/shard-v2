@@ -89,5 +89,8 @@ pub fn has_images(messages: &[ChatMessage]) -> bool {
 
 /// Check if a model supports tool calling
 pub fn supports_tools(model: &str) -> bool {
-    !model.contains("olmo-3.1-32b-think")
+    !model.contains("o1-")
+        && !model.contains("o3-")
+        && !model.contains("deepseek-reasoner")
+        && !model.contains("olmo-3.1-32b-think")
 }
