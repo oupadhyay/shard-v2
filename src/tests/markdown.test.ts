@@ -5,7 +5,10 @@ import {
   clearKatexErrors,
   getKatexErrors,
   hasKatexErrors,
+  md,
 } from '../ui/markdown';
+import { vi } from 'vitest';
+import hljs from 'highlight.js';
 
 describe('Markdown Utilities', () => {
   describe('detectUnrenderedLatex', () => {
@@ -130,6 +133,53 @@ describe('Markdown Utilities', () => {
       const errors = getKatexErrors();
       expect(Array.isArray(errors)).toBe(true);
       expect(errors).toHaveLength(0);
+    });
+  });
+
+  describe('Syntax Highlighting', () => {
+    it('should highlight code when language is supported', () => {
+      const code = 'const x = 1;';
+      const lang = 'javascript';
+      const result = md.render(`\`\`\`${lang}\n${code}\n\`\`\``);
+
+      expect(result).toContain('hljs-keyword');
+      expect(result).toContain('javascript');
+    });
+
+    it('should fallback to escaped text when language is not supported', () => {
+      const code = 'some code';
+      const lang = 'nonexistent-lang';
+      const result = md.render(`\`\`\`${lang}\n${code}\n\`\`\``);
+
+      expect(result).toContain('<pre class="hljs"><code>some code');
+      expect(result).not.toContain('hljs-');
+    });
+
+    it('should escape HTML in fallback mode', () => {
+      const code = '<script>alert(1)</script>';
+      const lang = 'nonexistent-lang';
+      const result = md.render(`\`\`\`${lang}\n${code}\n\`\`\``);
+
+      expect(result).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    });
+
+    it('should handle highlighting errors gracefully', () => {
+      const code = 'const x = 1;';
+      const lang = 'javascript';
+
+      // Mock highlight.js to throw an error
+      const spy = vi.spyOn(hljs, 'highlight').mockImplementationOnce(() => {
+        throw new Error('Highlighting failed');
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = md.render(`\`\`\`${lang}\n${code}\n\`\`\``);
+
+      expect(result).toContain('<pre class="hljs"><code>const x = 1;');
+      expect(warnSpy).toHaveBeenCalledWith('[Markdown-it highlight] error:', expect.any(Error));
+
+      spy.mockRestore();
+      warnSpy.mockRestore();
     });
   });
 });
