@@ -726,7 +726,7 @@ async function loadChatHistory() {
 
         // If not matched as web search, try regular tool-output
         if (!matched) {
-          const toolMessages = Array.from(fragment.querySelectorAll(".tool-output"));
+          const toolMessages = fragment.querySelectorAll(".tool-output");
           let matchingTool: Element | undefined;
 
           // Try to match by ID first if available
