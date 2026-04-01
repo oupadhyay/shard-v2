@@ -185,12 +185,13 @@ pub fn get_observations_by_level(
         )
         .map_err(|e| e.to_string())?;
 
-    stmt.query_map(params![observed, level.as_str(), limit as i64], |row| {
-        Ok(row_to_observation(row))
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())
+    let rows = stmt
+        .query_map(params![observed, level.as_str(), limit as i64], |row| {
+            Ok(row_to_observation(row))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// Get the N most-derived observations (highest `times_derived`).
@@ -211,12 +212,13 @@ pub fn get_top_derived_observations(
         )
         .map_err(|e| e.to_string())?;
 
-    stmt.query_map(params![observed, limit as i64], |row| {
-        Ok(row_to_observation(row))
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())
+    let rows = stmt
+        .query_map(params![observed, limit as i64], |row| {
+            Ok(row_to_observation(row))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// Get the N most recent observations.
@@ -236,12 +238,13 @@ pub fn get_recent_observations(
         )
         .map_err(|e| e.to_string())?;
 
-    stmt.query_map(params![observed, limit as i64], |row| {
-        Ok(row_to_observation(row))
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())
+    let rows = stmt
+        .query_map(params![observed, limit as i64], |row| {
+            Ok(row_to_observation(row))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 // ============================================================================
@@ -275,19 +278,20 @@ pub fn search_observations_by_embedding(
         )
         .map_err(|e| e.to_string())?;
 
-    stmt.query_map(
-        params![
-            embedding_bytes,
-            limit as i64 * 2,
-            max_distance,
-            observed,
-            limit as i64
-        ],
-        |row| Ok(row_to_observation(row)),
-    )
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())
+    let rows = stmt
+        .query_map(
+            params![
+                embedding_bytes,
+                limit as i64 * 2,
+                max_distance,
+                observed,
+                limit as i64
+            ],
+            |row| Ok(row_to_observation(row)),
+        )
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// FTS5 keyword search over observations.
@@ -310,21 +314,22 @@ pub fn search_observations_by_keyword(
             "SELECT obs.id, obs.observer, obs.observed, obs.content, obs.level, \
                     obs.source_ids, obs.times_derived, obs.session_name, \
                     obs.content_hash, obs.created_at, obs.deleted_at \
-             FROM observations_fts f \
-             JOIN observations obs ON f.observation_id = obs.id \
-             WHERE f MATCH ?1 \
+             FROM observations_fts \
+             JOIN observations obs ON observations_fts.observation_id = obs.id \
+             WHERE observations_fts MATCH ?1 \
                    AND obs.observed = ?2 AND obs.deleted_at IS NULL \
-             ORDER BY bm25(f) \
+             ORDER BY bm25(observations_fts) \
              LIMIT ?3",
         )
         .map_err(|e| e.to_string())?;
 
-    stmt.query_map(params![sanitized, observed, limit as i64], |row| {
-        Ok(row_to_observation(row))
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())
+    let rows = stmt
+        .query_map(params![sanitized, observed, limit as i64], |row| {
+            Ok(row_to_observation(row))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 // ============================================================================
@@ -479,25 +484,6 @@ pub fn format_peer_card(card: &PeerCard) -> String {
 // ============================================================================
 // Helpers
 // ============================================================================
-
-fn get_observation_by_id(
-    store: &VectorStore,
-    id: &str,
-) -> Result<Option<Observation>, String> {
-    let result = store
-        .conn
-        .query_row(
-            "SELECT id, observer, observed, content, level, source_ids, times_derived, \
-             session_name, content_hash, created_at, deleted_at \
-             FROM observations WHERE id = ?",
-            params![id],
-            |row| Ok(row_to_observation(row)),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-
-    Ok(result)
-}
 
 fn row_to_observation(row: &rusqlite::Row) -> Observation {
     let source_ids_json: String = row.get(5).unwrap_or_else(|_| "[]".to_string());
