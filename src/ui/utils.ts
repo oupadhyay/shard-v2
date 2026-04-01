@@ -35,3 +35,26 @@ export function formatSessionDate(raw: string, now?: Date): string {
   if (diffDays < 14) return "Last Week";
   return d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 }
+
+/**
+ * Simple logger utility that only outputs to console in development mode
+ * for debug and info levels. Warnings and errors are always shown.
+ */
+export const logger = {
+  debug: (...args: any[]) => {
+    if ((import.meta as any).env.DEV) {
+      console.log(...args);
+    }
+  },
+  info: (...args: any[]) => {
+    if ((import.meta as any).env.DEV) {
+      console.info(...args);
+    }
+  },
+  warn: (...args: any[]) => {
+    console.warn(...args);
+  },
+  error: (...args: any[]) => {
+    console.error(...args);
+  },
+};
