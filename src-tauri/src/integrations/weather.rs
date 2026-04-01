@@ -30,6 +30,15 @@ struct WeatherCurrentData {
     time: Option<String>,
     interval: Option<i32>,
     temperature_2m: Option<f32>,
+    weather_code: Option<i32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct WeatherDailyData {
+    time: Option<Vec<String>>,
+    weather_code: Option<Vec<i32>>,
+    temperature_2m_max: Option<Vec<f32>>,
+    temperature_2m_min: Option<Vec<f32>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -43,6 +52,7 @@ struct WeatherResponse {
     elevation: Option<f32>,
     current_units: Option<WeatherCurrentUnits>,
     current: Option<WeatherCurrentData>,
+    daily: Option<WeatherDailyData>,
 }
 
 fn sanitize_log_str(s: &str) -> String {
@@ -55,7 +65,7 @@ fn sanitize_log_str(s: &str) -> String {
 pub async fn perform_weather_lookup(
     client: &reqwest::Client,
     location: &str,
-) -> Result<Option<(f32, String, String)>, String> {
+) -> Result<String, String> {
     let geo_url = "https://geocoding-api.open-meteo.com/v1/search";
     let geo_params = [
         ("name", location),
@@ -89,7 +99,7 @@ pub async fn perform_weather_lookup(
         Some(data) => data,
         None => {
             log::info!("No location found");
-            return Ok(None);
+            return Err("Location not found".to_string());
         }
     };
 
@@ -117,7 +127,9 @@ pub async fn perform_weather_lookup(
     let weather_params = [
         ("latitude", lat.to_string()),
         ("longitude", lon.to_string()),
-        ("current", "temperature_2m".to_string()),
+        ("current", "temperature_2m,weather_code".to_string()),
+        ("daily", "weather_code,temperature_2m_max,temperature_2m_min".to_string()),
+        ("timezone", "auto".to_string()),
     ];
 
     log::info!("Performing Weather lookup for a sanitized location");
@@ -138,11 +150,37 @@ pub async fn perform_weather_lookup(
         .await
         .map_err(|e| format!("Weather JSON parse error: {}", e))?;
 
-    if let (Some(current), Some(units)) = (weather_data.current, weather_data.current_units) {
-        if let (Some(temp), Some(unit)) = (current.temperature_2m, units.temperature_2m) {
-            return Ok(Some((temp, unit, location_display)));
+    let mut result_json = serde_json::json!({
+        "location": location_display,
+    });
+
+    if let Some(current) = weather_data.current {
+        if let Some(temp) = current.temperature_2m {
+            let unit = weather_data.current_units.and_then(|u| u.temperature_2m).unwrap_or_else(|| "C".to_string());
+            result_json["current"] = serde_json::json!({
+                "temperature": temp,
+                "unit": unit,
+                "weather_code": current.weather_code.unwrap_or(0)
+            });
         }
     }
 
-    Ok(None)
+    if let Some(daily) = weather_data.daily {
+        if let (Some(times), Some(codes), Some(maxes), Some(mins)) = (daily.time, daily.weather_code, daily.temperature_2m_max, daily.temperature_2m_min) {
+            let mut forecast = Vec::new();
+            for i in 0..times.len().min(7) {
+                if let (Some(t), Some(c), Some(max), Some(min)) = (times.get(i), codes.get(i), maxes.get(i), mins.get(i)) {
+                    forecast.push(serde_json::json!({
+                        "date": t,
+                        "weather_code": c,
+                        "max_temp": max,
+                        "min_temp": min
+                    }));
+                }
+            }
+            result_json["forecast"] = serde_json::Value::Array(forecast);
+        }
+    }
+
+    Ok(result_json.to_string())
 }

@@ -15,6 +15,7 @@ pub mod compaction;
 mod config;
 pub mod db;
 mod gemini_files;
+mod heartbeat;
 mod integrations;
 mod interactions;
 pub mod memories;
@@ -23,9 +24,13 @@ mod prompts;
 pub mod retrieval;
 mod secrets;
 pub mod sessions;
-pub mod skills;
-mod tools;
+pub mod personas;
+mod sandbox;
+pub mod tool_registry;
+pub mod observations;
 pub mod vector_store;
+mod webhook;
+pub mod context;
 
 #[cfg(test)]
 mod tests;
@@ -227,6 +232,7 @@ async fn chat(
             images_base64,
             images_mime_types,
             &config,
+            false,
         )
         .await
 }
@@ -237,7 +243,10 @@ async fn save_and_clear_chat(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let config = crate::config::load_config(&app_handle).map_err(|e| e.to_string())?;
-    state.agent.save_and_clear_history(config.gemini_api_key).await;
+    state
+        .agent
+        .save_and_clear_history(config.gemini_api_key)
+        .await;
     Ok(())
 }
 
@@ -287,7 +296,10 @@ async fn load_session(
     state: tauri::State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
-    state.agent.load_session_from_db(&app_handle, &session_id).await
+    state
+        .agent
+        .load_session_from_db(&app_handle, &session_id)
+        .await
 }
 
 /// Retry the last response with a hint about KaTeX rendering errors
@@ -316,6 +328,131 @@ async fn cancel_current_stream() -> Result<(), String> {
 async fn hide_window(app_handle: AppHandle) -> Result<(), String> {
     if let Some(window) = app_handle.get_webview_window("main") {
         window.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Open the dedicated (breakout) chat window.
+/// If it already exists, bring it to focus.
+/// Hides the ambient panel — the frontend handles the fade-out transition
+/// before invoking this command.
+#[tauri::command]
+async fn open_dedicated_window(app_handle: AppHandle) -> Result<(), String> {
+    // If the dedicated window already exists, just focus it.
+    if let Some(win) = app_handle.get_webview_window("dedicated") {
+        win.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    // Hide the ambient panel (frontend has already faded it out).
+    let main_win = app_handle.get_webview_window("main");
+
+    // Create the dedicated window. It loads the same Vite dev server / dist
+    // but at `dedicated.html`, which uses a separate entry point with the
+    // full session-sidebar layout.
+    let result = tauri::WebviewWindowBuilder::new(
+        &app_handle,
+        "dedicated",
+        tauri::WebviewUrl::App("dedicated.html".into()),
+    )
+    .title("Shard")
+    .inner_size(900.0, 660.0)
+    .min_inner_size(640.0, 480.0)
+    .resizable(true)
+    .decorations(false) // Custom titlebar rendered in HTML
+    .transparent(true)
+    .shadow(true)
+    .center()
+    .build();
+
+    match result {
+        Ok(_) => {
+            // Only hide main window after dedicated window is successfully created.
+            // Best effort so we don't return an error and confuse the UI if it fails.
+            if let Some(win) = main_win {
+                if let Err(e) = win.hide() {
+                    log::warn!("Failed to hide main window after creating dedicated window: {}", e);
+                }
+            }
+        }
+        Err(e) => return Err(e.to_string()),
+    }
+
+    Ok(())
+}
+
+/// Delete a session and all its messages. If the session is currently active,
+/// rotates to a new session so the agent isn't left in a ghost state.
+#[tauri::command]
+async fn delete_session(
+    session_id: String,
+    state: tauri::State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    // Rotate agent state if deleting the active session
+    {
+        let current = state.agent.session_id.lock().await.clone();
+        if current == session_id {
+            drop(current);
+            let new_id = state.agent.reset_for_delete().await;
+            // Create the new session row so FK constraints pass for future messages
+            if let Ok(store) = crate::memories::get_vector_store(&app_handle) {
+                let now = chrono::Utc::now().to_rfc3339();
+                let session = crate::db::sessions::SessionRow {
+                    id: new_id,
+                    title: "Active Session".to_string(),
+                    summary: None,
+                    created_at: now.clone(),
+                    updated_at: now,
+                    active_personas: Some("[]".to_string()),
+                };
+                let _ = crate::db::sessions::insert_session(&store, &session);
+            }
+        }
+    }
+
+    // Delete messages then session from DB using a blocking task to avoid stalling the async runtime.
+    let store = crate::memories::get_vector_store(&app_handle)
+        .map_err(|e| format!("Failed to access database: {}", e))?;
+
+    tokio::task::spawn_blocking(move || {
+        store.with_transaction(|_store, conn| {
+            conn.execute(
+                "DELETE FROM messages WHERE session_id = ?",
+                rusqlite::params![&session_id],
+            )?;
+            conn.execute(
+                "DELETE FROM sessions WHERE id = ?",
+                rusqlite::params![&session_id],
+            )?;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+    .map_err(|e| format!("Database error: {}", e))?;
+
+    Ok(())
+}
+
+/// Return the session ID currently held by the agent (used by frontend to detect active session).
+#[tauri::command]
+async fn get_current_session_id(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    Ok(state.agent.session_id.lock().await.clone())
+}
+
+#[tauri::command]
+async fn close_dedicated_window(app_handle: AppHandle) -> Result<(), String> {
+    if let Some(win) = app_handle.get_webview_window("dedicated") {
+        win.close().map_err(|e| e.to_string())?;
+    }
+    // Restore the ambient panel and trigger its fade-in via the start-show event.
+    if let Some(main_win) = app_handle.get_webview_window("main") {
+        main_win.show().map_err(|e| e.to_string())?;
+        main_win.set_focus().map_err(|e| e.to_string())?;
+        // Pass `true` as the payload to indicate this is a resume/return,
+        // so the frontend knows to suppress new screen suggestions.
+        main_win.emit("start-show", true).ok();
     }
     Ok(())
 }
@@ -361,6 +498,71 @@ async fn force_summary(app_handle: AppHandle) -> Result<SummaryStats, String> {
 }
 
 #[tauri::command]
+async fn force_deriver(app_handle: AppHandle) -> Result<background::ExtractionResult, String> {
+    background::force_deriver(&app_handle).await
+}
+
+#[tauri::command]
+async fn force_dream(app_handle: AppHandle) -> Result<background::DreamResult, String> {
+    background::force_dream(&app_handle).await
+}
+
+// ============================================================================
+// Heartbeat Dashboard Commands
+// ============================================================================
+
+#[tauri::command]
+async fn get_heartbeat_status(
+    app_handle: AppHandle,
+) -> Result<Vec<heartbeat::HeartbeatStatusInfo>, String> {
+    Ok(heartbeat::get_heartbeat_status_list(&app_handle))
+}
+
+// ============================================================================
+// Proactive Queue Commands
+// ============================================================================
+
+#[tauri::command]
+async fn get_proactive_messages(
+    app_handle: AppHandle,
+    limit: Option<usize>,
+) -> Result<Vec<heartbeat::ProactiveMessage>, String> {
+    heartbeat::get_unreviewed_messages(&app_handle, limit.unwrap_or(20))
+}
+
+#[tauri::command]
+async fn review_proactive_message(
+    app_handle: AppHandle,
+    message_id: String,
+) -> Result<(), String> {
+    heartbeat::review_proactive_message(&app_handle, &message_id, None)
+}
+
+#[tauri::command]
+async fn approve_draft(
+    app_handle: AppHandle,
+    message_id: String,
+) -> Result<String, String> {
+    // Execute the draft-gated tool and mark as approved
+    heartbeat::execute_approved_draft(&app_handle, &message_id).await
+}
+
+#[tauri::command]
+async fn reject_draft(
+    app_handle: AppHandle,
+    message_id: String,
+) -> Result<(), String> {
+    heartbeat::review_proactive_message(&app_handle, &message_id, Some(false))
+}
+
+#[tauri::command]
+async fn get_proactive_count(
+    app_handle: AppHandle,
+) -> Result<usize, String> {
+    heartbeat::get_unreviewed_count(&app_handle, None)
+}
+
+#[tauri::command]
 fn rebuild_topic_index(app_handle: AppHandle) -> Result<usize, String> {
     // TopicIndex no longer stores embeddings, just file names
     memories::rebuild_topic_index(&app_handle)
@@ -385,6 +587,58 @@ async fn rebuild_chunk_index(app_handle: AppHandle) -> Result<usize, String> {
         .ok_or("No Gemini API key configured for embedding generation")?;
     let http_client = reqwest::Client::new();
     memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await
+}
+
+/// Rebuild all indexes in one shot: clears embedding cache, then rebuilds
+/// topic index, insight index, BM25 index, and chunk index (with re-embedding).
+#[derive(serde::Serialize)]
+struct RebuildAllResult {
+    topics: usize,
+    insights: usize,
+    bm25_docs: usize,
+    chunks: usize,
+    cache_cleared: usize,
+}
+
+#[tauri::command]
+async fn rebuild_all_indexes(app_handle: AppHandle) -> Result<RebuildAllResult, String> {
+    let config = config::load_config(&app_handle)?;
+    let api_key = config
+        .gemini_api_key
+        .ok_or("No Gemini API key configured for embedding generation")?;
+    let http_client = reqwest::Client::new();
+
+    // 1. Clear embedding cache (old model embeddings are incompatible)
+    let cache_cleared = {
+        let store = memories::get_vector_store(&app_handle)?;
+        store
+            .clear_embedding_cache()
+            .map_err(|e| format!("Failed to clear embedding cache: {}", e))?
+    };
+
+    // 2. Rebuild metadata indexes
+    let topics = memories::rebuild_topic_index(&app_handle)?;
+    let insights = memories::rebuild_insight_index(&app_handle)?;
+
+    // 3. Rebuild BM25 index
+    let bm25_docs = retrieval::rebuild_bm25_index(&app_handle)?;
+
+    // 4. Rebuild chunk index (re-embeds everything with current model)
+    let chunks =
+        memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await?;
+
+    log::info!(
+        "[RebuildAll] Complete: {} topics, {} insights, {} BM25 docs, {} chunks, {} cache entries cleared",
+        topics, insights, bm25_docs, chunks, cache_cleared
+    );
+
+    Ok(RebuildAllResult {
+        topics,
+        insights,
+        bm25_docs,
+        chunks,
+        cache_cleared,
+    })
 }
 
 /// Capture screen context and return suggestions
@@ -436,14 +690,16 @@ pub fn run() {
         .setup(|app| {
             let _app_handle = app.handle();
 
-            // Start background jobs
-            background::start_background_jobs(app.handle().clone());
+            // Start maintenance background jobs (Summary + Cleanup)
+            background::start_maintenance_jobs(app.handle().clone());
 
-            if let Ok(store) = memories::get_vector_store(&app.handle().clone()) {
-                if let Err(e) = crate::db::sessions::run_migration(&app.handle().clone(), &store) {
-                    log::warn!("[Startup] Session migration failed: {}", e);
-                }
-            }
+            // Start heartbeat engine (replaces old cron_jobs)
+            heartbeat::start_heartbeat_engine(app.handle().clone());
+
+            let webhook_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                crate::webhook::start_webhook_server(webhook_handle).await;
+            });
 
             let agent = Arc::new(Agent::new(app.handle().clone()));
             // Initialize memory store cache
@@ -495,27 +751,79 @@ pub fn run() {
                 }
             });
 
+            // One-time: migrate MEMORIES.json entries to observations
+            let app_handle_clone = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let handle = app_handle_clone.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let store = memories::get_vector_store(&handle)?;
+                    let obs_count = crate::observations::count_observations(&store, "user").unwrap_or(0);
+                    if obs_count == 0 {
+                        drop(store);
+                        memories::migrate_memories_to_observations(&handle)
+                    } else {
+                        Ok(0)
+                    }
+                }).await;
+
+                match result {
+                    Ok(Ok(n)) if n > 0 => log::info!("[Setup] Migrated {} memories to observations", n),
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => log::warn!("[Setup] Memory migration failed: {}", e),
+                    Err(e) => log::warn!("[Setup] Memory migration task panicked: {}", e),
+                }
+            });
+
             // Setup Panel (macOS)
             #[cfg(target_os = "macos")]
             {
                 use tauri_nspanel::WebviewWindowExt;
                 let window = app.get_webview_window("main").unwrap();
 
-                // Position window at bottom-left
+                // Position window at bottom-left, flush with screen edges
                 if let Some(monitor) = window.current_monitor().ok().flatten() {
+                    let scale = monitor.scale_factor();
                     let screen_size = monitor.size();
-                    let window_size = window.outer_size().unwrap();
 
-                    // Position: 20px from left, 20px from bottom
-                    let x = 20;
-                    let y = screen_size.height as i32 - window_size.height as i32 - 20;
+                    // Subtract macOS system menu bar (35pt physical) and set size
+                    let menu_bar_px = (35.0 * scale) as u32;
+                    let target_h = screen_size.height.saturating_sub(menu_bar_px);
 
                     window
-                        .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+                        .set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                            width: (350.0 * scale) as u32,
+                            height: target_h,
+                        }))
+                        .ok();
+
+                    // Calculate Y so the bottom edge sits exactly on the bottom physical edge
+                    // X = 0 (flush left)
+                    // Y = monitor_top + (monitor_height - window_height)
+                    let target_y = screen_size.height.saturating_sub(target_h);
+
+                    window
+                        .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                            x: monitor.position().x,
+                            y: monitor.position().y + target_y as i32,
+                        }))
                         .ok();
                 }
 
-                let _panel = window.to_panel().unwrap();
+                // Prevent the app icon from showing on the dock and stealing focus
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+                let panel = window.to_panel().unwrap();
+
+                // Ensure the panel acts as an auxiliary floating window that tiling managers ignore
+                #[allow(deprecated)]
+                {
+                    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                    panel.set_collection_behaviour(
+                        NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary,
+                    );
+                }
             }
 
             // Register Global Shortcuts with handlers
@@ -530,11 +838,24 @@ pub fn run() {
                 .global_shortcut()
                 .on_shortcut(ctrl_space, move |_app, _shortcut, event| {
                     if event.state == tauri_gs::ShortcutState::Pressed {
+                        // If the dedicated window is open, toggle IT instead of ambient
+                        if let Some(dedicated) =
+                            app_handle_for_space.get_webview_window("dedicated")
+                        {
+                            if dedicated.is_visible().unwrap_or(false) {
+                                dedicated.hide().ok();
+                            } else {
+                                dedicated.show().ok();
+                                dedicated.set_focus().ok();
+                            }
+                            return;
+                        }
+
+                        // No dedicated window — toggle the ambient panel
                         if window_for_space.is_visible().unwrap_or(false) {
                             // Trigger fade out in frontend
                             window_for_space.emit("start-hide", ()).ok();
                         } else {
-                            // Show window immediately
                             window_for_space.show().ok();
                             window_for_space.set_focus().ok();
                             // Trigger fade in
@@ -609,14 +930,27 @@ pub fn run() {
             cancel_current_stream,
             rewind_history,
             hide_window,
+            open_dedicated_window,
+            close_dedicated_window,
+            delete_session,
+            get_current_session_id,
             force_cleanup,
             force_summary,
+            force_deriver,
+            force_dream,
             rebuild_topic_index,
             rebuild_insight_index,
             rebuild_bm25_index,
             rebuild_chunk_index,
+            rebuild_all_indexes,
             retry_with_katex_hint,
-            capture_screen_context
+            capture_screen_context,
+            get_proactive_messages,
+            review_proactive_message,
+            approve_draft,
+            reject_draft,
+            get_proactive_count,
+            get_heartbeat_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

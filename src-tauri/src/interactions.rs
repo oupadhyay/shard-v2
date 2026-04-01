@@ -7,7 +7,7 @@ use crate::retrieval::{
  *
  * Implements Tier 3 of the memory system:
  * - Logs every turn to daily JSONL files
- * - Generates embeddings using gemini-embedding-001
+ * - Generates embeddings using gemini-embedding-2-preview (multimodal)
  * - Performs semantic search for context retrieval
  */
 use chrono::{DateTime, Utc};
@@ -43,8 +43,20 @@ struct EmbeddingContent {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct EmbeddingPart {
-    text: String,
+#[serde(untagged)]
+enum EmbeddingPart {
+    Text {
+        text: String,
+    },
+    InlineData {
+        inline_data: InlineData,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct InlineData {
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -61,27 +73,67 @@ struct EmbeddingValues {
 // Embedding API
 // ============================================================================
 
+const EMBEDDING_MODEL_URL: &str =
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent";
+
 pub async fn generate_embedding(
     client: &reqwest::Client,
     text: &str,
     api_key: &str,
 ) -> Result<Vec<f32>, String> {
-    let url =
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent";
-
     let payload = EmbeddingRequest {
         content: EmbeddingContent {
-            parts: vec![EmbeddingPart {
+            parts: vec![EmbeddingPart::Text {
                 text: text.to_string(),
             }],
         },
         output_dimensionality: Some(768),
     };
 
+    send_embedding_request(client, api_key, &payload).await
+}
+
+/// Generate a multimodal embedding from text + images using gemini-embedding-2-preview.
+/// Images are passed as base64-encoded inline data alongside the text.
+pub async fn generate_multimodal_embedding(
+    client: &reqwest::Client,
+    text: &str,
+    images_base64: &[String],
+    images_mime_types: &[String],
+    api_key: &str,
+) -> Result<Vec<f32>, String> {
+    let mut parts = Vec::with_capacity(1 + images_base64.len());
+
+    parts.push(EmbeddingPart::Text {
+        text: text.to_string(),
+    });
+
+    for (data, mime) in images_base64.iter().zip(images_mime_types.iter()) {
+        parts.push(EmbeddingPart::InlineData {
+            inline_data: InlineData {
+                mime_type: mime.clone(),
+                data: data.clone(),
+            },
+        });
+    }
+
+    let payload = EmbeddingRequest {
+        content: EmbeddingContent { parts },
+        output_dimensionality: Some(768),
+    };
+
+    send_embedding_request(client, api_key, &payload).await
+}
+
+async fn send_embedding_request(
+    client: &reqwest::Client,
+    api_key: &str,
+    payload: &EmbeddingRequest,
+) -> Result<Vec<f32>, String> {
     let res = client
-        .post(url)
+        .post(EMBEDDING_MODEL_URL)
         .header("X-Goog-Api-Key", api_key)
-        .json(&payload)
+        .json(payload)
         .send()
         .await
         .map_err(|e| format!("Embedding API network error: {}", e))?;
@@ -164,6 +216,10 @@ pub async fn log_interaction<R: Runtime>(
 // ============================================================================
 
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() {
+        return 0.0;
+    }
+
     let dot_product: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -363,15 +419,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cosine_similarity() {
-        let a = vec![1.0, 0.0, 0.0];
-        let b = vec![1.0, 0.0, 0.0]; // Identical
-        assert!((cosine_similarity(&a, &b) - 1.0).abs() < 1e-5);
+    fn test_cosine_similarity_comprehensive() {
+        // Test identical vectors
+        let vec_query = vec![1.0, 2.0, 3.0];
+        let vec_identical = vec![1.0, 2.0, 3.0];
+        assert!((cosine_similarity(&vec_query, &vec_identical) - 1.0).abs() < 1e-6);
 
-        let c = vec![0.0, 1.0, 0.0]; // Orthogonal
-        assert!((cosine_similarity(&a, &c) - 0.0).abs() < 1e-5);
+        // Test orthogonal vectors
+        let vec_a = vec![1.0, 0.0, 0.0];
+        let vec_orthogonal = vec![0.0, 1.0, 0.0];
+        assert!((cosine_similarity(&vec_a, &vec_orthogonal) - 0.0).abs() < 1e-6);
 
-        let d = vec![-1.0, 0.0, 0.0]; // Opposite
-        assert!((cosine_similarity(&a, &d) - -1.0).abs() < 1e-5);
+        // Test opposite vectors
+        let vec_opposite = vec![-1.0, 0.0, 0.0];
+        assert!((cosine_similarity(&vec_a, &vec_opposite) - (-1.0)).abs() < 1e-6);
+
+        // Test zero vector (should return 0.0, not NaN)
+        let vec_zero = vec![0.0, 0.0, 0.0];
+        assert_eq!(cosine_similarity(&vec_a, &vec_zero), 0.0);
+
+        // Test different length vectors (should return 0.0 as per updated logic)
+        let vec_short = vec![1.0, 2.0];
+        let vec_long = vec![1.0, 2.0, 3.0];
+        assert_eq!(cosine_similarity(&vec_short, &vec_long), 0.0);
     }
 }

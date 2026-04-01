@@ -6,6 +6,9 @@
  * - Cleanup: LLM-filter generic/redundant entries from interaction logs
  *
  * Both jobs run sequentially every 6 hours (Summary first, then Cleanup).
+ *
+ * Note: User-defined scheduled tasks (heartbeats) are handled by the
+ * separate heartbeat engine in heartbeat.rs — not here.
  */
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
@@ -33,6 +36,10 @@ const SKIP_INTERVAL_FRACTION: f64 = 0.5;
 struct LastRunInfo {
     summary_last_run: Option<String>,
     cleanup_last_run: Option<String>,
+    #[serde(default)]
+    deriver_last_run: Option<String>,
+    #[serde(default)]
+    dream_last_run: Option<String>,
 }
 
 /// Get the path to the last_run.json file
@@ -102,6 +109,56 @@ pub struct CleanupResult {
     pub llm_reasoning: Option<String>,
 }
 
+/// Result of observation extraction (deriver pipeline)
+#[derive(Debug, Serialize, Clone)]
+pub struct ExtractionResult {
+    pub sessions_processed: usize,
+    pub observations_created: usize,
+    pub llm_reasoning: Option<String>,
+}
+
+/// Result of the dream phase (deduction + induction)
+#[derive(Debug, Serialize, Clone)]
+pub struct DreamResult {
+    pub deductions_created: usize,
+    pub inductions_created: usize,
+    pub contradictions_found: usize,
+    pub peer_card_updated: bool,
+    pub llm_reasoning: Option<String>,
+}
+
+/// Individual fact extracted by the deriver LLM
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ExtractedFact {
+    pub fact: String,
+    /// Optional session ID it was extracted from
+    #[serde(default)]
+    pub session: Option<String>,
+}
+
+/// LLM response for observation extraction
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DeriverResponse {
+    pub facts: Vec<ExtractedFact>,
+}
+
+/// Individual deduction from the dream phase
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DreamDeduction {
+    pub content: String,
+    pub source_ids: Vec<String>,
+    /// "deductive", "inductive", or "contradiction"
+    pub level: String,
+}
+
+/// LLM response for the dream phase
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DreamResponse {
+    pub observations: Vec<DreamDeduction>,
+    #[serde(default)]
+    pub peer_card_facts: Vec<String>,
+}
+
 /// Result of summary analysis
 #[derive(Debug, PartialEq, Serialize, Clone)]
 pub struct SummaryResult {
@@ -156,6 +213,68 @@ pub struct CleanupDecision {
 // LLM Integration
 // ============================================================================
 
+// ============================================================================
+// Rate Limit Handling
+// ============================================================================
+
+/// Maximum number of retries for rate-limited requests.
+const RATE_LIMIT_MAX_RETRIES: u32 = 3;
+
+/// Parse a rate limit error message and extract the wait time in seconds.
+/// Handles Groq/OpenRouter/Cerebras error formats:
+/// - "Please try again in 18.48s"
+/// - "Please try again in 1m30s"
+/// - "Rate limit" without specific wait → returns a default backoff
+///
+/// Returns `None` if the error is not a rate limit error.
+pub fn parse_rate_limit_wait(error: &str) -> Option<f64> {
+    let lower = error.to_lowercase();
+
+    // Must be a rate limit error
+    if !lower.contains("rate_limit") && !lower.contains("rate limit") && !lower.contains("429") {
+        return None;
+    }
+
+    // Try to extract "try again in Xs" or "try again in XmYs"
+    if let Some(idx) = lower.find("try again in ") {
+        let after = &error[idx + "try again in ".len()..];
+        // Parse "18.48s" or "1m30s" or "2m" or "90s"
+        let mut seconds = 0.0f64;
+        let mut num_buf = String::new();
+
+        for c in after.chars() {
+            if c.is_ascii_digit() || c == '.' {
+                num_buf.push(c);
+            } else if c == 'm' {
+                if let Ok(mins) = num_buf.parse::<f64>() {
+                    seconds += mins * 60.0;
+                }
+                num_buf.clear();
+            } else if c == 's' {
+                if let Ok(secs) = num_buf.parse::<f64>() {
+                    seconds += secs;
+                }
+                break;
+            } else {
+                break;
+            }
+        }
+
+        if seconds > 0.0 {
+            // Add a small buffer to ensure the limit resets
+            return Some(seconds + 1.0);
+        }
+    }
+
+    // Check for daily/request limit (non-retryable within a short window)
+    if lower.contains("per day") || lower.contains("requests per") {
+        return None; // Don't retry daily limits
+    }
+
+    // Generic rate limit without specific wait time — use 30s default
+    Some(30.0)
+}
+
 /// Make an LLM call for background processing
 /// Routes to the appropriate provider based on the model name
 pub async fn call_background_llm(
@@ -164,6 +283,75 @@ pub async fn call_background_llm(
     model: &str,
     prompt: &str,
 ) -> Result<String, String> {
+    call_llm_oneshot(
+        http_client,
+        config,
+        model,
+        "You are a memory management assistant. Analyze interaction logs and provide structured JSON responses. Be concise and accurate.",
+        prompt,
+        2000,
+        0.3,
+    )
+    .await
+}
+
+/// General-purpose one-shot LLM call with a custom system prompt.
+///
+/// Uses the background model provider (OpenRouter/Groq/Cerebras).
+/// Automatically retries on rate limit errors with the wait time from the error message.
+/// Returns the text content of the first response choice.
+pub async fn call_llm_oneshot(
+    http_client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    model: &str,
+    system_prompt: &str,
+    user_message: &str,
+    max_tokens: u32,
+    temperature: f64,
+) -> Result<String, String> {
+    let mut last_err = String::new();
+
+    for attempt in 0..=RATE_LIMIT_MAX_RETRIES {
+        if attempt > 0 {
+            log::info!("[LLM] Retry attempt {}/{}", attempt, RATE_LIMIT_MAX_RETRIES);
+        }
+
+        match call_llm_oneshot_inner(
+            http_client, config, model, system_prompt, user_message, max_tokens, temperature,
+        )
+        .await
+        {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                if let Some(wait_secs) = parse_rate_limit_wait(&e) {
+                    if attempt < RATE_LIMIT_MAX_RETRIES {
+                        log::info!(
+                            "[LLM] Rate limited, waiting {:.1}s before retry...",
+                            wait_secs
+                        );
+                        tokio::time::sleep(Duration::from_secs_f64(wait_secs)).await;
+                        last_err = e;
+                        continue;
+                    }
+                }
+                return Err(e);
+            }
+        }
+    }
+
+    Err(last_err)
+}
+
+/// Inner one-shot LLM call (no retry logic).
+async fn call_llm_oneshot_inner(
+    http_client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    model: &str,
+    system_prompt: &str,
+    user_message: &str,
+    max_tokens: u32,
+    temperature: f64,
+) -> Result<String, String> {
     let (provider_config, api_key) = config.get_model_provider_config(model, "background jobs")?;
 
     let payload = serde_json::json!({
@@ -171,15 +359,15 @@ pub async fn call_background_llm(
         "messages": [
             {
                 "role": "system",
-                "content": "You are a memory management assistant. Analyze interaction logs and provide structured JSON responses. Be concise and accurate."
+                "content": system_prompt
             },
             {
                 "role": "user",
-                "content": prompt
+                "content": user_message
             }
         ],
-        "temperature": 0.3,
-        "max_tokens": 2000
+        "temperature": temperature,
+        "max_tokens": max_tokens
     });
 
     let res = http_client
@@ -220,6 +408,375 @@ pub async fn call_background_llm(
         "No content in {} response",
         provider_config.provider_name
     ))
+}
+
+/// Response from a tool-aware LLM call.
+#[derive(Debug, Clone)]
+pub struct LlmToolResponse {
+    /// Text content from the assistant (may be empty if model only returns tool calls)
+    pub content: Option<String>,
+    /// Tool calls requested by the model
+    pub tool_calls: Vec<LlmToolCall>,
+    /// finish_reason from the API ("stop", "tool_calls", etc.)
+    #[allow(dead_code)]
+    pub finish_reason: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct LlmToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String, // raw JSON string
+}
+
+/// Call an LLM with tool definitions.
+/// Automatically selects the correct API format:
+/// - Gemini models: native `generateContent` with `functionDeclarations`
+/// - OpenAI-compatible (Groq/Cerebras/OpenRouter): standard `chat/completions` with `tools`
+///
+/// Automatically retries on rate limit errors with the wait time from the error message.
+pub async fn call_llm_with_tools(
+    http_client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    model: &str,
+    messages: &[serde_json::Value],
+    tools: &[crate::agent::ToolDefinition],
+    max_tokens: u32,
+    temperature: f64,
+) -> Result<LlmToolResponse, String> {
+    let mut last_err = String::new();
+
+    for attempt in 0..=RATE_LIMIT_MAX_RETRIES {
+        if attempt > 0 {
+            log::info!("[LLM] Tool call retry attempt {}/{}", attempt, RATE_LIMIT_MAX_RETRIES);
+        }
+
+        let result = if crate::models::is_gemini_model(model) {
+            call_gemini_with_tools(http_client, config, model, messages, tools, max_tokens, temperature).await
+        } else {
+            call_openai_with_tools(http_client, config, model, messages, tools, max_tokens, temperature).await
+        };
+
+        match result {
+            Ok(response) => return Ok(response),
+            Err(e) => {
+                if let Some(wait_secs) = parse_rate_limit_wait(&e) {
+                    if attempt < RATE_LIMIT_MAX_RETRIES {
+                        log::info!(
+                            "[LLM] Rate limited (tools), waiting {:.1}s before retry...",
+                            wait_secs
+                        );
+                        tokio::time::sleep(Duration::from_secs_f64(wait_secs)).await;
+                        last_err = e;
+                        continue;
+                    }
+                }
+                return Err(e);
+            }
+        }
+    }
+
+    Err(last_err)
+}
+
+/// Gemini native generateContent path with functionDeclarations.
+async fn call_gemini_with_tools(
+    http_client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    model: &str,
+    messages: &[serde_json::Value],
+    tools: &[crate::agent::ToolDefinition],
+    _max_tokens: u32,
+    _temperature: f64,
+) -> Result<LlmToolResponse, String> {
+    let api_key = config
+        .gemini_api_key
+        .as_deref()
+        .ok_or("No Gemini API key configured for heartbeat")?;
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+        model
+    );
+
+    // Convert OpenAI-format messages to Gemini contents
+    let mut contents: Vec<serde_json::Value> = Vec::new();
+    let mut system_instruction: Option<serde_json::Value> = None;
+
+    for msg in messages {
+        let role = msg["role"].as_str().unwrap_or("user");
+        match role {
+            "system" => {
+                system_instruction = Some(serde_json::json!({
+                    "parts": [{ "text": msg["content"].as_str().unwrap_or("") }]
+                }));
+            }
+            "assistant" => {
+                let mut parts: Vec<serde_json::Value> = Vec::new();
+                if let Some(content) = msg["content"].as_str() {
+                    if !content.is_empty() {
+                        parts.push(serde_json::json!({ "text": content }));
+                    }
+                }
+                // Convert tool_calls to functionCall parts
+                if let Some(tc_array) = msg["tool_calls"].as_array() {
+                    for tc in tc_array {
+                        if let Some(func) = tc.get("function") {
+                            let name = func["name"].as_str().unwrap_or("");
+                            let args_str = func["arguments"].as_str().unwrap_or("{}");
+                            let args: serde_json::Value =
+                                serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+                            parts.push(serde_json::json!({
+                                "functionCall": { "name": name, "args": args }
+                            }));
+                        }
+                    }
+                }
+                if !parts.is_empty() {
+                    contents.push(serde_json::json!({ "role": "model", "parts": parts }));
+                }
+            }
+            "tool" => {
+                // Find the tool name from tool_call_id by looking back at previous assistant message
+                let tool_call_id = msg["tool_call_id"].as_str().unwrap_or("");
+                let mut func_name = "unknown".to_string();
+                // Search backwards for the matching tool_call
+                for prev in contents.iter().rev() {
+                    if let Some(parts) = prev["parts"].as_array() {
+                        for part in parts {
+                            if let Some(fc) = part.get("functionCall") {
+                                // Gemini doesn't use IDs — match by position/name
+                                // Best effort: use the name from the most recent assistant message
+                                if let Some(n) = fc["name"].as_str() {
+                                    func_name = n.to_string();
+                                }
+                            }
+                        }
+                    }
+                }
+                // Alternative: look at the original messages for tool_call_id -> name mapping
+                for prev_msg in messages.iter().rev() {
+                    if let Some(tcs) = prev_msg["tool_calls"].as_array() {
+                        for tc in tcs {
+                            if tc["id"].as_str() == Some(tool_call_id) {
+                                if let Some(n) = tc["function"]["name"].as_str() {
+                                    func_name = n.to_string();
+                                }
+                            }
+                        }
+                    }
+                }
+                let result_content = msg["content"].as_str().unwrap_or("");
+                contents.push(serde_json::json!({
+                    "role": "function",
+                    "parts": [{
+                        "functionResponse": {
+                            "name": func_name,
+                            "response": { "result": result_content }
+                        }
+                    }]
+                }));
+            }
+            _ => {
+                // user
+                contents.push(serde_json::json!({
+                    "role": "user",
+                    "parts": [{ "text": msg["content"].as_str().unwrap_or("") }]
+                }));
+            }
+        }
+    }
+
+    // Build Gemini tool format: normalize schemas for Gemini proto compatibility
+    // (strips additionalProperties/strict and collapses nullable union types).
+    let function_declarations: Vec<serde_json::Value> = tools
+        .iter()
+        .map(|t| {
+            let mut params = t.function.parameters.clone();
+            crate::agent::normalize_gemini_schema(&mut params);
+            serde_json::json!({
+                "name": t.function.name,
+                "description": t.function.description,
+                "parameters": params
+            })
+        })
+        .collect();
+
+    let mut payload = serde_json::json!({
+        "contents": contents,
+        "tools": [{ "functionDeclarations": function_declarations }]
+    });
+    if let Some(si) = system_instruction {
+        payload["systemInstruction"] = si;
+    }
+
+    let res = http_client
+        .post(&url)
+        .header("X-Goog-Api-Key", api_key)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini heartbeat API error: {}", e))?;
+
+    if !res.status().is_success() {
+        let error_text = res.text().await.unwrap_or_default();
+        return Err(format!("Gemini heartbeat API error: {}", error_text));
+    }
+
+    let body: serde_json::Value = res
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Gemini response: {}", e))?;
+
+    // Parse Gemini response: candidates[0].content.parts[]
+    let parts = body
+        .get("candidates")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|c| c.get("content"))
+        .and_then(|c| c.get("parts"))
+        .and_then(|p| p.as_array());
+
+    let mut content: Option<String> = None;
+    let mut tool_calls: Vec<LlmToolCall> = Vec::new();
+    let mut call_counter = 0u32;
+
+    if let Some(parts) = parts {
+        for part in parts {
+            if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                // Skip thinking/thought parts
+                if part.get("thought").and_then(|t| t.as_bool()).unwrap_or(false) {
+                    continue;
+                }
+                content = Some(text.to_string());
+            }
+            if let Some(fc) = part.get("functionCall") {
+                let name = fc["name"].as_str().unwrap_or("").to_string();
+                let args = fc.get("args").cloned().unwrap_or(serde_json::json!({}));
+                call_counter += 1;
+                tool_calls.push(LlmToolCall {
+                    id: format!("gemini_call_{}", call_counter),
+                    name,
+                    arguments: args.to_string(),
+                });
+            }
+        }
+    }
+
+    let finish_reason = if tool_calls.is_empty() { "stop" } else { "tool_calls" }.to_string();
+
+    Ok(LlmToolResponse {
+        content,
+        tool_calls,
+        finish_reason,
+    })
+}
+
+/// OpenAI-compatible chat/completions path (Groq/Cerebras/OpenRouter).
+async fn call_openai_with_tools(
+    http_client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    model: &str,
+    messages: &[serde_json::Value],
+    tools: &[crate::agent::ToolDefinition],
+    max_tokens: u32,
+    temperature: f64,
+) -> Result<LlmToolResponse, String> {
+    let (provider_config, api_key) = config.get_model_provider_config(model, "heartbeat")?;
+
+    let tools_json: Vec<serde_json::Value> = tools
+        .iter()
+        .filter_map(|t| serde_json::to_value(t).ok())
+        .collect();
+
+    let payload = serde_json::json!({
+        "model": provider_config.model_id,
+        "messages": messages,
+        "tools": tools_json,
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    });
+
+    let res = http_client
+        .post(provider_config.full_url())
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Heartbeat LLM API network error: {}", e))?;
+
+    if !res.status().is_success() {
+        let error_text = res.text().await.unwrap_or_default();
+        return Err(format!("Heartbeat LLM API error: {}", error_text));
+    }
+
+    let body: serde_json::Value = res.json().await.map_err(|e| {
+        format!(
+            "Failed to parse {} response: {}",
+            provider_config.provider_name, e
+        )
+    })?;
+
+    // Parse the first choice
+    let choice = body
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .ok_or_else(|| format!("No choices in {} response", provider_config.provider_name))?;
+
+    let message = choice.get("message").ok_or("No message in choice")?;
+    let finish_reason = choice
+        .get("finish_reason")
+        .and_then(|f| f.as_str())
+        .unwrap_or("stop")
+        .to_string();
+
+    let content = message
+        .get("content")
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
+
+    // Parse tool_calls if present
+    let mut tool_calls = Vec::new();
+    if let Some(tc_array) = message.get("tool_calls").and_then(|tc| tc.as_array()) {
+        for tc in tc_array {
+            let id = tc
+                .get("id")
+                .and_then(|i| i.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            if let Some(func) = tc.get("function") {
+                let name = func
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = func
+                    .get("arguments")
+                    .map(|a| {
+                        if let Some(s) = a.as_str() {
+                            s.to_string()
+                        } else {
+                            a.to_string()
+                        }
+                    })
+                    .unwrap_or_default();
+                tool_calls.push(LlmToolCall {
+                    id,
+                    name,
+                    arguments,
+                });
+            }
+        }
+    }
+
+    Ok(LlmToolResponse {
+        content,
+        tool_calls,
+        finish_reason,
+    })
 }
 
 /// Parse topic updates from LLM JSON response
@@ -270,8 +827,10 @@ pub fn parse_cleanup_decision(llm_response: &str) -> Result<CleanupDecision, Str
 // Background Job Runner
 // ============================================================================
 
-/// Start all background jobs (sequential: Summary first, then Cleanup)
-pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
+/// Start maintenance background jobs (Summary + Cleanup, 6-hour interval).
+/// Heartbeat-based scheduled tasks are handled separately by heartbeat::start_heartbeat_engine.
+pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
+    let summary_cleanup_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         let mut job_interval = time::interval(Duration::from_secs(JOB_INTERVAL_HOURS * 3600));
 
@@ -281,7 +840,7 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
             log::info!("[Background] Starting scheduled jobs (Summary → Cleanup)...");
 
             // Load last run info to check if we should skip
-            let mut last_run_info = load_last_run_info(&app_handle);
+            let mut last_run_info = load_last_run_info(&summary_cleanup_handle);
             let now = Utc::now().to_rfc3339();
 
             // Summary job with skip check
@@ -292,7 +851,7 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                 );
             } else {
                 log::info!("[Background] Running summary job...");
-                match run_summary_job(&app_handle).await {
+                match run_summary_job(&summary_cleanup_handle).await {
                     Ok(result) => {
                         log::info!(
                             "[Summary] Complete. {} interactions analyzed, {} topics updated.",
@@ -300,19 +859,21 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                             result.topics_updated.len()
                         );
                         // Update last run time on success
-                        last_run_info.summary_last_run = Some(now.clone());
-                        save_last_run_info(&app_handle, &last_run_info);
+                        if result.llm_reasoning.is_some() || result.total_interactions == 0 {
+                            last_run_info.summary_last_run = Some(now.clone());
+                            save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                        }
 
                         if !result.topics_updated.is_empty() || !result.insights_created.is_empty()
                         {
                             log::info!(
                                 "[Background] Topics/insights changed, rebuilding chunk index..."
                             );
-                            if let Ok(config) = crate::config::load_config(&app_handle) {
+                            if let Ok(config) = crate::config::load_config(&summary_cleanup_handle) {
                                 if let Some(api_key) = config.gemini_api_key {
                                     let http_client = reqwest::Client::new();
                                     match crate::memories::rebuild_chunk_index(
-                                        &app_handle,
+                                        &summary_cleanup_handle,
                                         &http_client,
                                         &api_key,
                                     )
@@ -345,7 +906,7 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                 );
             } else {
                 log::info!("[Background] Running cleanup job...");
-                match run_cleanup_job(&app_handle).await {
+                match run_cleanup_job(&summary_cleanup_handle).await {
                     Ok(result) => {
                         log::info!(
                             "[Cleanup] Complete. Removed {} entries, freed {} bytes.",
@@ -353,11 +914,62 @@ pub fn start_background_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                             result.bytes_freed
                         );
                         // Update last run time on success
-                        last_run_info.cleanup_last_run = Some(Utc::now().to_rfc3339());
-                        save_last_run_info(&app_handle, &last_run_info);
+                        if result.llm_reasoning.is_some() {
+                            last_run_info.cleanup_last_run = Some(Utc::now().to_rfc3339());
+                            save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                        }
                     }
                     Err(e) => {
                         log::error!("[Background] Cleanup job failed: {}", e);
+                    }
+                }
+            }
+
+            // Deriver job (observation extraction) with skip check
+            if should_skip_job(last_run_info.deriver_last_run.as_deref()) {
+                log::info!(
+                    "[Background] Skipping deriver job - less than {} hours since last run",
+                    (JOB_INTERVAL_HOURS as f64 * SKIP_INTERVAL_FRACTION) as u64
+                );
+            } else {
+                log::info!("[Background] Running deriver job (observation extraction)...");
+                match run_deriver_job(&summary_cleanup_handle).await {
+                    Ok(result) => {
+                        let sessions_processed = result.sessions_processed;
+                        let observations_created = result.observations_created;
+                        log::debug!(
+                            "[Deriver] Complete. {} sessions processed, {} observations created.",
+                            sessions_processed,
+                            observations_created
+                        );
+                        if result.llm_reasoning.is_some() || sessions_processed == 0 {
+                            last_run_info.deriver_last_run = Some(Utc::now().to_rfc3339());
+                            save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                        }
+
+                        // Trigger dream phase if enough observations exist and haven't been dreamed recently
+                        let should_dream = observations_created >= 5
+                            || !should_skip_job(last_run_info.dream_last_run.as_deref());
+                        if should_dream && observations_created > 0 {
+                            log::debug!("[Background] Triggering dream phase ({} new observations)...", observations_created);
+                            match run_dream_job(&summary_cleanup_handle).await {
+                                Ok(dream) => {
+                                    log::info!(
+                                        "[Dream] Complete. {} deductions, {} inductions, {} contradictions, card_updated={}",
+                                        dream.deductions_created, dream.inductions_created,
+                                        dream.contradictions_found, dream.peer_card_updated
+                                    );
+                                    if dream.llm_reasoning.is_some() {
+                                        last_run_info.dream_last_run = Some(Utc::now().to_rfc3339());
+                                        save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                                    }
+                                }
+                                Err(e) => log::error!("[Background] Dream job failed: {}", e),
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("[Background] Deriver job failed: {}", e);
                     }
                 }
             }
@@ -683,6 +1295,53 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
 
+    // ── Prune stale sessions (0–1 user messages, older than 1 day) ──────────
+    // These are sessions that were never meaningfully used (e.g. app launched
+    // then closed without chatting). No LLM needed — pure SQL decision.
+    if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+        let prune_result = tokio::task::spawn_blocking(move || {
+            store.with_transaction(|_store, conn| {
+                // Delete messages for stale sessions first (prevent orphans)
+                conn.execute(
+                    "DELETE FROM messages WHERE session_id IN (
+                        SELECT s.id FROM sessions s
+                        WHERE datetime(s.updated_at) < datetime('now', '-1 day')
+                          AND (
+                            SELECT COUNT(*) FROM messages m
+                            WHERE m.session_id = s.id
+                              AND m.role = 'user'
+                          ) <= 1
+                    )",
+                    [],
+                )?;
+
+                // Delete the sessions themselves
+                let n = conn.execute(
+                    "DELETE FROM sessions WHERE id IN (
+                        SELECT s.id FROM sessions s
+                        WHERE datetime(s.updated_at) < datetime('now', '-1 day')
+                          AND (
+                            SELECT COUNT(*) FROM messages m
+                            WHERE m.session_id = s.id
+                              AND m.role = 'user'
+                          ) <= 1
+                    )",
+                    [],
+                )?;
+                Ok(n)
+            })
+        })
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+        .map_err(|e| format!("Database error: {}", e));
+
+        match prune_result {
+            Ok(n) if n > 0 => log::info!("[Cleanup] Pruned {} stale sessions (<= 1 user message, > 1 day old)", n),
+            Ok(_) => {}
+            Err(e) => log::warn!("[Cleanup] Failed to prune stale sessions: {}", e),
+        }
+    }
+
     let interactions_dir = app_data_dir.join("interactions");
 
     let config = crate::config::load_config(app_handle)?;
@@ -853,6 +1512,509 @@ Interaction Entries:
 }
 
 // ============================================================================
+// Deriver Job (Observation Extraction)
+// ============================================================================
+
+/// Extract explicit observations from recent session transcripts.
+/// Processes sessions updated since the last deriver run.
+async fn run_deriver_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<ExtractionResult, String> {
+    let config = crate::config::load_config(app_handle)?;
+    let background_model = config
+        .background_model
+        .as_deref()
+        .unwrap_or(DEFAULT_BACKGROUND_MODEL);
+    let _ = config.get_model_provider_config(background_model, "deriver")?;
+
+    let gemini_key = config
+        .gemini_api_key
+        .clone();
+
+    // Determine cutoff: sessions updated since last deriver run (or last 12h)
+    let last_run_info = load_last_run_info(app_handle);
+    let cutoff = last_run_info
+        .deriver_last_run
+        .as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|| Utc::now() - ChronoDuration::hours(LOOKBACK_HOURS));
+    let cutoff_str = cutoff.to_rfc3339();
+
+    // Fetch recent session transcripts
+    let handle = app_handle.clone();
+    let cutoff_str_clone = cutoff_str.clone();
+    let transcripts: Vec<(String, String)> = tokio::task::spawn_blocking(move || {
+        let store = crate::memories::get_vector_store(&handle)?;
+        let mut stmt = store
+            .conn
+            .prepare(
+                "SELECT id, title FROM sessions \
+                 WHERE updated_at > ? \
+                 ORDER BY updated_at ASC LIMIT 10",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let session_ids: Vec<(String, String)> = stmt
+            .query_map([&cutoff_str_clone], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut results = Vec::new();
+        for (sid, title) in session_ids {
+            if let Ok(transcript) = crate::db::sessions::get_session_transcript(&store, &sid) {
+                if transcript.len() > 50 {
+                    // Skip trivially short sessions
+                    results.push((sid, format!("Session: {}\n{}", title, transcript)));
+                }
+            }
+        }
+        Ok::<_, String>(results)
+    })
+    .await
+    .map_err(|e| format!("Deriver blocking task panicked: {}", e))??;
+
+    if transcripts.is_empty() {
+        log::info!("[Deriver] No new sessions to process since {}", cutoff_str);
+        return Ok(ExtractionResult {
+            sessions_processed: 0,
+            observations_created: 0,
+            llm_reasoning: None,
+        });
+    }
+
+    // Build combined transcript for LLM, respecting token budget.
+    // Background models (e.g. gpt-oss-20b on Groq) often have small TPM limits.
+    // Rough heuristic: 1 token ≈ 4 chars. Reserve ~1500 tokens for prompt + response.
+    const MAX_TRANSCRIPT_CHARS: usize = 20_000; // ~5000 tokens
+    let mut combined = String::new();
+    for (_, t) in &transcripts {
+        if combined.len() + t.len() + 4 > MAX_TRANSCRIPT_CHARS {
+            // Truncate the current transcript to fit
+            let remaining = MAX_TRANSCRIPT_CHARS.saturating_sub(combined.len() + 4);
+            if remaining > 100 {
+                if !combined.is_empty() {
+                    combined.push_str("\n---\n");
+                }
+                let boundary = t.floor_char_boundary(remaining);
+                combined.push_str(&t[..boundary]);
+                combined.push_str("...");
+            }
+            break;
+        }
+        if !combined.is_empty() {
+            combined.push_str("\n---\n");
+        }
+        combined.push_str(t);
+    }
+
+    let prompt = format!(
+        r#"Extract atomic facts about the USER from these chat transcripts.
+Focus ONLY on facts the user explicitly stated or clearly implied about themselves.
+
+Rules:
+1. Each fact must be a single, self-contained statement
+2. Focus on: preferences, biographical info, habits, opinions, technical stack, work details
+3. Ignore the assistant's responses unless they confirm a user fact
+4. Ignore generic greetings, one-off queries, and ephemeral requests
+5. Do NOT extract facts about the assistant or about external topics
+6. Deduplicate: if the same fact appears multiple times, include it only once
+
+TRANSCRIPTS:
+{}
+
+Return a JSON object:
+{{
+  "facts": [
+    {{"fact": "User prefers Rust for backend development"}},
+    {{"fact": "User has a cat named Luna"}}
+  ]
+}}
+
+Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
+        combined
+    );
+
+    let http_client = reqwest::Client::new();
+    let llm_response = call_background_llm(&http_client, &config, background_model, &prompt).await;
+
+    let mut observations_created = 0usize;
+    let llm_reasoning = match llm_response {
+        Ok(response) => {
+            log::debug!("[Deriver] LLM response: {}", response);
+
+            // Parse facts
+            let facts = parse_deriver_response(&response);
+
+            if !facts.is_empty() {
+                // Pre-compute embeddings asynchronously before entering spawn_blocking
+                let mut precomputed_embeddings: Vec<Option<Vec<f32>>> = Vec::with_capacity(facts.len());
+                for fact in &facts {
+                    let hash = crate::vector_store::compute_content_hash(&fact.fact);
+                    // Try generating embedding via API if we have a Gemini key
+                    if let Some(ref key) = gemini_key {
+                        match crate::interactions::generate_embedding(&http_client, &fact.fact, key).await {
+                            Ok(emb) => {
+                                precomputed_embeddings.push(Some(emb));
+                                continue;
+                            }
+                            Err(e) => {
+                                log::warn!("[Deriver] Embedding generation failed for fact, will try cache: {}", e);
+                            }
+                        }
+                    }
+                    precomputed_embeddings.push(None);
+                    let _ = hash;
+                }
+
+                let handle = app_handle.clone();
+
+                observations_created = tokio::task::spawn_blocking(move || {
+                    let store = crate::memories::get_vector_store(&handle)
+                        .map_err(|e| format!("Failed to open vector store: {}", e))?;
+                    let mut created = 0usize;
+
+                    for (fact, precomputed) in facts.iter().zip(precomputed_embeddings.into_iter()) {
+                        // Check for duplicate by content hash
+                        let hash = crate::vector_store::compute_content_hash(&fact.fact);
+                        let exists: bool = store
+                            .conn
+                            .query_row(
+                                "SELECT COUNT(*) FROM observations WHERE content_hash = ? AND deleted_at IS NULL",
+                                [&hash],
+                                |row| row.get::<_, i64>(0),
+                            )
+                            .unwrap_or(0) > 0;
+
+                        if exists {
+                            log::debug!("[Deriver] Skipping duplicate: {}", &fact.fact);
+                            continue;
+                        }
+
+                        let obs = crate::observations::make_observation(
+                            &fact.fact,
+                            crate::observations::ObservationLevel::Explicit,
+                            vec![],
+                            fact.session.clone(),
+                        );
+
+                        // Use pre-computed embedding, fall back to cache
+                        let embedding = precomputed.or_else(|| {
+                            let hash = crate::vector_store::compute_content_hash(&fact.fact);
+                            store.get_cached_embedding(&hash).ok().flatten()
+                        });
+
+                        match crate::observations::insert_observation(
+                            &store,
+                            &obs,
+                            embedding.as_deref(),
+                        ) {
+                            Ok(()) => {
+                                log::info!("[Deriver] Created observation: {}", &fact.fact);
+                                created += 1;
+                            }
+                            Err(e) => log::warn!("[Deriver] Failed to insert observation: {}", e),
+                        }
+                    }
+                    Ok::<_, String>(created)
+                })
+                .await
+                .map_err(|e| format!("Deriver save panicked: {}", e))?
+                .unwrap_or(0);
+            }
+
+            Some(response)
+        }
+        Err(e) => {
+            log::warn!("[Deriver] LLM call failed: {}", e);
+            None
+        }
+    };
+
+    Ok(ExtractionResult {
+        sessions_processed: transcripts.len(),
+        observations_created,
+        llm_reasoning,
+    })
+}
+
+/// Parse the deriver LLM response into extracted facts.
+pub fn parse_deriver_response(response: &str) -> Vec<ExtractedFact> {
+    let json_start = response.find('{');
+    let json_end = response.rfind('}');
+
+    if let (Some(start), Some(end)) = (json_start, json_end) {
+        let json_str = &response[start..=end];
+        if let Ok(parsed) = serde_json::from_str::<DeriverResponse>(json_str) {
+            return parsed.facts;
+        }
+    }
+
+    Vec::new()
+}
+
+// ============================================================================
+// Dream Job (Deduction + Induction)
+// ============================================================================
+
+/// Analyze existing explicit observations to derive higher-level insights.
+/// - Deductions: logical implications from 1+ explicit observations
+/// - Inductions: behavioral patterns across multiple observations
+/// - Contradictions: flagged conflicts between observations
+/// - Peer card: curated biographical summary updated from all levels
+async fn run_dream_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<DreamResult, String> {
+    let config = crate::config::load_config(app_handle)?;
+    let background_model = config
+        .background_model
+        .as_deref()
+        .unwrap_or(DEFAULT_BACKGROUND_MODEL);
+    let _ = config.get_model_provider_config(background_model, "dream")?;
+
+    // Gather recent explicit observations for the dream phase
+    let handle = app_handle.clone();
+    let (explicit_obs, existing_deductive, existing_inductive) =
+        tokio::task::spawn_blocking(move || {
+            let store = crate::memories::get_vector_store(&handle)?;
+            let explicit = crate::observations::get_observations_by_level(
+                &store,
+                "user",
+                crate::observations::ObservationLevel::Explicit,
+                50,
+            )?;
+            let deductive = crate::observations::get_observations_by_level(
+                &store,
+                "user",
+                crate::observations::ObservationLevel::Deductive,
+                20,
+            )?;
+            let inductive = crate::observations::get_observations_by_level(
+                &store,
+                "user",
+                crate::observations::ObservationLevel::Inductive,
+                20,
+            )?;
+            Ok::<_, String>((explicit, deductive, inductive))
+        })
+        .await
+        .map_err(|e| format!("Dream blocking task panicked: {}", e))??;
+
+    if explicit_obs.is_empty() {
+        log::info!("[Dream] No explicit observations to analyze");
+        return Ok(DreamResult {
+            deductions_created: 0,
+            inductions_created: 0,
+            contradictions_found: 0,
+            peer_card_updated: false,
+            llm_reasoning: None,
+        });
+    }
+
+    // Format observations for LLM
+    let mut explicit_text = String::new();
+    for obs in &explicit_obs {
+        explicit_text.push_str(&format!("- [{}] {}\n", obs.id, obs.content));
+    }
+
+    let mut existing_text = String::new();
+    if !existing_deductive.is_empty() {
+        existing_text.push_str("Existing Deductions:\n");
+        for obs in &existing_deductive {
+            existing_text.push_str(&format!("- {}\n", obs.content));
+        }
+    }
+    if !existing_inductive.is_empty() {
+        existing_text.push_str("Existing Inductions/Patterns:\n");
+        for obs in &existing_inductive {
+            existing_text.push_str(&format!("- {}\n", obs.content));
+        }
+    }
+
+    let prompt = format!(
+        r#"Analyze these explicit facts about the user and derive higher-level observations.
+
+EXPLICIT OBSERVATIONS (source facts):
+{}
+
+EXISTING HIGHER-LEVEL OBSERVATIONS (avoid duplicates):
+{}
+
+Tasks:
+1. DEDUCTIONS: Identify logical implications from 1+ explicit facts. Include the source observation IDs.
+   Example: If user "lives in SF" and "commutes daily" → "User likely commutes in the Bay Area"
+2. INDUCTIONS: Identify behavioral patterns across multiple observations.
+   Example: If user prefers Rust, uses Tauri, avoids JavaScript → "User favors systems-level typed languages"
+3. CONTRADICTIONS: Flag any conflicts between observations.
+   Example: "User said they live in SF" vs "User said they live in NYC"
+4. PEER CARD: Produce a curated list of 5-10 key biographical facts (one sentence each) for a quick user profile.
+
+Return a JSON object:
+{{
+  "observations": [
+    {{"content": "User likely commutes in Bay Area", "source_ids": ["id1", "id2"], "level": "deductive"}},
+    {{"content": "User favors typed systems languages", "source_ids": ["id3", "id4", "id5"], "level": "inductive"}}
+  ],
+  "peer_card_facts": [
+    "Software engineer who prefers Rust",
+    "Lives in San Francisco"
+  ]
+}}
+
+Rules:
+- Only create observations that add NEW knowledge not already in the existing set
+- Each source_id must reference an actual observation ID from the EXPLICIT list above
+- The level field must be "deductive", "inductive", or "contradiction"
+- Return at most 10 observations and 10 peer card facts
+- If nothing meaningful can be derived, return {{"observations": [], "peer_card_facts": []}}"#,
+        explicit_text, existing_text
+    );
+
+    let http_client = reqwest::Client::new();
+    let llm_response = call_background_llm(&http_client, &config, background_model, &prompt).await;
+
+    let mut deductions_created = 0usize;
+    let mut inductions_created = 0usize;
+    let mut contradictions_found = 0usize;
+    let mut peer_card_updated = false;
+
+    let llm_reasoning = match llm_response {
+        Ok(response) => {
+            log::debug!("[Dream] LLM response: {}", response);
+
+            let parsed = parse_dream_response(&response);
+
+            if !parsed.observations.is_empty() || !parsed.peer_card_facts.is_empty() {
+                let handle = app_handle.clone();
+                let dream_data = parsed.clone();
+
+                let result = tokio::task::spawn_blocking(move || {
+                    let store = crate::memories::get_vector_store(&handle)?;
+
+                    let mut deductions = 0usize;
+                    let mut inductions = 0usize;
+                    let mut contradictions = 0usize;
+
+                    for dream_obs in &dream_data.observations {
+                        let level = match dream_obs.level.as_str() {
+                            "deductive" => crate::observations::ObservationLevel::Deductive,
+                            "inductive" => crate::observations::ObservationLevel::Inductive,
+                            "contradiction" => {
+                                crate::observations::ObservationLevel::Contradiction
+                            }
+                            _ => continue,
+                        };
+
+                        // Deduplicate by content hash
+                        let hash = crate::vector_store::compute_content_hash(&dream_obs.content);
+                        let exists: bool = store
+                            .conn
+                            .query_row(
+                                "SELECT COUNT(*) FROM observations WHERE content_hash = ? AND deleted_at IS NULL",
+                                [&hash],
+                                |row| row.get::<_, i64>(0),
+                            )
+                            .unwrap_or(0) > 0;
+
+                        if exists {
+                            continue;
+                        }
+
+                        let obs = crate::observations::make_observation(
+                            &dream_obs.content,
+                            level,
+                            dream_obs.source_ids.clone(),
+                            None,
+                        );
+
+                        match crate::observations::insert_observation(&store, &obs, None) {
+                            Ok(()) => {
+                                match level {
+                                    crate::observations::ObservationLevel::Deductive => {
+                                        deductions += 1
+                                    }
+                                    crate::observations::ObservationLevel::Inductive => {
+                                        inductions += 1
+                                    }
+                                    crate::observations::ObservationLevel::Contradiction => {
+                                        contradictions += 1;
+                                        // Auto-resolve: soft-delete the older source observations
+                                        // that this contradiction supersedes
+                                        for source_id in &dream_obs.source_ids {
+                                            let _ = crate::observations::soft_delete_observation(&store, source_id);
+                                            log::info!("[Dream] Soft-deleted conflicting observation: {}", source_id);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                log::info!("[Dream] Created {:?} observation: {}", level, &dream_obs.content);
+                            }
+                            Err(e) => log::warn!("[Dream] Failed to insert: {}", e),
+                        }
+                    }
+
+                    // Update peer card
+                    let card_updated = if !dream_data.peer_card_facts.is_empty() {
+                        crate::observations::upsert_peer_card(
+                            &store,
+                            "shard",
+                            "user",
+                            &dream_data.peer_card_facts,
+                        )
+                        .is_ok()
+                    } else {
+                        false
+                    };
+
+                    Ok::<_, String>((deductions, inductions, contradictions, card_updated))
+                })
+                .await
+                .map_err(|e| format!("Dream save panicked: {}", e))??;
+
+                deductions_created = result.0;
+                inductions_created = result.1;
+                contradictions_found = result.2;
+                peer_card_updated = result.3;
+            }
+
+            Some(response)
+        }
+        Err(e) => {
+            log::warn!("[Dream] LLM call failed: {}", e);
+            None
+        }
+    };
+
+    Ok(DreamResult {
+        deductions_created,
+        inductions_created,
+        contradictions_found,
+        peer_card_updated,
+        llm_reasoning,
+    })
+}
+
+/// Parse the dream LLM response.
+pub fn parse_dream_response(response: &str) -> DreamResponse {
+    let json_start = response.find('{');
+    let json_end = response.rfind('}');
+
+    if let (Some(start), Some(end)) = (json_start, json_end) {
+        let json_str = &response[start..=end];
+        if let Ok(parsed) = serde_json::from_str::<DreamResponse>(json_str) {
+            return parsed;
+        }
+    }
+
+    DreamResponse {
+        observations: Vec::new(),
+        peer_card_facts: Vec::new(),
+    }
+}
+
+// ============================================================================
 // Force Trigger Commands
 // ============================================================================
 
@@ -863,9 +2025,11 @@ pub async fn force_summary<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Summ
     let result = run_summary_job(app_handle).await?;
 
     // Update last run time on success
-    let mut last_run_info = load_last_run_info(app_handle);
-    last_run_info.summary_last_run = Some(Utc::now().to_rfc3339());
-    save_last_run_info(app_handle, &last_run_info);
+    if result.llm_reasoning.is_some() || result.total_interactions == 0 {
+        let mut last_run_info = load_last_run_info(app_handle);
+        last_run_info.summary_last_run = Some(Utc::now().to_rfc3339());
+        save_last_run_info(app_handle, &last_run_info);
+    }
 
     Ok(result)
 }
@@ -886,9 +2050,39 @@ pub async fn force_cleanup<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Clea
     let result = run_cleanup_job(app_handle).await?;
 
     // Update last run time on success
-    let mut last_run_info = load_last_run_info(app_handle);
-    last_run_info.cleanup_last_run = Some(Utc::now().to_rfc3339());
-    save_last_run_info(app_handle, &last_run_info);
+    if result.llm_reasoning.is_some() {
+        let mut last_run_info = load_last_run_info(app_handle);
+        last_run_info.cleanup_last_run = Some(Utc::now().to_rfc3339());
+        save_last_run_info(app_handle, &last_run_info);
+    }
+
+    Ok(result)
+}
+
+/// Force-trigger the deriver job (observation extraction)
+pub async fn force_deriver<R: Runtime>(app_handle: &AppHandle<R>) -> Result<ExtractionResult, String> {
+    log::info!("[Background] Force-triggered deriver job");
+    let result = run_deriver_job(app_handle).await?;
+
+    if result.llm_reasoning.is_some() || result.sessions_processed == 0 {
+        let mut last_run_info = load_last_run_info(app_handle);
+        last_run_info.deriver_last_run = Some(Utc::now().to_rfc3339());
+        save_last_run_info(app_handle, &last_run_info);
+    }
+
+    Ok(result)
+}
+
+/// Force-trigger the dream phase (deduction + induction)
+pub async fn force_dream<R: Runtime>(app_handle: &AppHandle<R>) -> Result<DreamResult, String> {
+    log::info!("[Background] Force-triggered dream job");
+    let result = run_dream_job(app_handle).await?;
+
+    if result.llm_reasoning.is_some() {
+        let mut last_run_info = load_last_run_info(app_handle);
+        last_run_info.dream_last_run = Some(Utc::now().to_rfc3339());
+        save_last_run_info(app_handle, &last_run_info);
+    }
 
     Ok(result)
 }

@@ -13,6 +13,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: None,
         }];
 
@@ -31,6 +32,7 @@ mod tests {
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
+                is_cron: None,
                 images: Some(vec![ImageAttachment {
                     base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".to_string(),
                     mime_type: "image/png".to_string(),
@@ -63,6 +65,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![
                 ImageAttachment {
                     base64: "img1".to_string(),
@@ -99,6 +102,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![ImageAttachment {
                 base64: "img_only".to_string(),
                 mime_type: "image/webp".to_string(),
@@ -136,6 +140,7 @@ mod tests {
                 thought_signature: None,
             }]),
             tool_call_id: None,
+            is_cron: None,
             images: None,
         }];
 
@@ -153,6 +158,25 @@ mod tests {
     }
 
     #[test]
+    fn test_to_multimodal_messages_null_content() {
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            is_cron: None,
+            images: None,
+        }];
+
+        let result = to_multimodal_messages(&messages);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["role"], "assistant");
+        assert!(result[0]["content"].is_null()); // Explicitly check for null content
+        assert!(result[0].get("tool_calls").is_none() || result[0]["tool_calls"].is_null());
+    }
+
+    #[test]
     fn test_to_multimodal_messages_tool_result() {
         let messages = vec![ChatMessage {
             role: "tool".to_string(),
@@ -160,6 +184,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: Some("call_123".to_string()),
+            is_cron: None,
             images: None,
         }];
 
@@ -178,6 +203,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![ImageAttachment {
                 base64: "data".to_string(),
                 mime_type: "image/png".to_string(),
@@ -200,6 +226,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![]),
         }];
 
@@ -216,6 +243,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: None,
         }];
         assert!(!has_images(&messages_no_images));
@@ -226,6 +254,7 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![ImageAttachment {
                 base64: "data".to_string(),
                 mime_type: "image/png".to_string(),
@@ -240,9 +269,46 @@ mod tests {
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+            is_cron: None,
             images: Some(vec![]),
         }];
         assert!(!has_images(&messages_with_empty_images));
+    }
+
+    #[test]
+    fn test_multimodal_content_null_when_none() {
+        // Assistant message with tool_calls but no content should serialize content: null
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            reasoning: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_1".to_string(),
+                tool_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "get_weather".to_string(),
+                    arguments: "{}".to_string(),
+                },
+                thought_signature: None,
+            }]),
+            tool_call_id: None,
+            is_cron: None,
+            images: None,
+        }];
+
+        let result = to_multimodal_messages(&messages);
+        assert_eq!(result.len(), 1);
+        // content key must be present and null (not omitted)
+        assert!(
+            result[0].get("content").is_some(),
+            "content key must be present"
+        );
+        assert!(
+            result[0]["content"].is_null(),
+            "content must be null when msg.content is None"
+        );
+        // tool_calls should still be present
+        assert!(result[0].get("tool_calls").is_some());
     }
 
     #[test]

@@ -2,84 +2,15 @@
 
 ## P0: Code Review Issues (Feb 2026)
 
-### Medium
-
-- [ ] **Manual config merging** - (Deferred) Using `#[serde(default)]` patterns, full refactor to `figment` deemed too large for this pass.
-- [x] **Global frontend state** ([main.ts:42-48](../src/main.ts)) - Encapsulated in `ChatState` class (`src/state.ts`)
 - [ ] **Monolithic handleInput** ([main.ts:69-224](../src/main.ts)) - Split into `preparePayload`, `sendChatMessage`, etc.
 
----
+## P1: Auto-Testing (Evaluator-as-a-Judge)
 
-## P0: OpenClaw Gaps
-
-- [x] **Unified Session Model** - Isolate chat contexts instead of a single global append-only history.
-- [x] **Skills Engine & Pi Runtime** - Dynamic tools and prompts loaded from `~/Library/Application Support/dev.ojasw.shard/skills/`.
-- [ ] **Automation (Cronjobs, Webhooks, Gmail)** - Background tasks and event-driven agent runs.
-
----
-
-## P0: Clawdbot Memory Learnings
-
-### 1. Compaction + Pre-Compaction Memory Flush
-
-- [x] Add `context_size` config per model (e.g., 131K for GPT-OSS, 1M for all Gemini models)
-- [x] Track token usage in conversation history
-- [x] Trigger compaction when approaching ~50% of context window
-- [x] Pre-compaction flush: silent LLM turn to save important facts to `memory/YYYY-MM-DD.md` before summarization
-- [x] Store compaction summaries in session transcripts (JSONL)
-
-### 2. Chunking Pipeline for Topics/Insights
-
-- [x] Chunk content into ~400 tokens with 80-token overlap
-- [x] Store chunks with line range metadata: `{chunk_id, text, start_line, end_line, embedding}`
-- [x] Update `find_relevant_context()` to search chunks instead of whole documents
-- [x] Return specific snippets instead of entire topic files
-
-### 3. sqlite-vec for Embedding Storage
-
-- [x] Replace JSON index files with SQLite database (`memories.sqlite`)
-- [x] Use `sqlite-vec` extension for vector similarity search
-- [x] Use FTS5 for BM25 keyword matching (hybrid search in one DB)
-- [x] Add `embedding_cache` table to avoid re-embedding unchanged content
-
-### 4. Session Memory Hooks + Descriptive Slugs
-
-- [x] On conversation clear/new session: extract last N messages
-- [x] Generate descriptive slug via LLM (e.g., "api-design-discussion")
-- [x] Save to `memory/YYYY-MM-DD-\<slug\>.md` for searchable session transcripts
-
-### 5. Explicit Memory Search Tools
-
-- [x] Add `memory_search` tool: semantic search across all memory tiers
-  - Params: `query`, `max_results`, `min_score`
-  - Returns: `{path, start_line, end_line, score, snippet, source}`
-- [x] Add `memory_get` tool: read specific lines from a memory file
-  - Params: `path`, `from`, `lines`
-- [x] Keep existing silent RAG injection for baseline context
-
-## P0: Read Page via Browser Tool
-
-- [x] Add `open_url` tool to allow Shard to read any URL (HTML/browser/DOM?)
-
-## P1: Better Screen Context Experience
-
-- [ ] Instead of showing analyzing screen, show no loading and just animate when the suggestions are ready (especially useful when the user just opens the chat window to ask a question unrelated to screen context). This will make the screen context experience feel faster (since no loading state) and more intuitive.
-
-## P1: LaTeX/Markdown Error Detection UI
-
-- [ ] **Unbalanced delimiter warnings** - Show error hint when `$` or `$$` delimiters are unbalanced (detected by `detectUnrenderedLatex()`)
-- [ ] **Unrendered LaTeX command detection** - Show warning when LaTeX commands (e.g., `\frac`, `\sum`) appear outside of `$...$` delimiters
-- [ ] **Integrate with auto-retry mechanism** - Use detected errors to provide context-aware retry hints (via `getRetryHint()` in prompts.rs)
-
-## P1: New Tools
-
-- [ ] **Switch main Agent logic to multimodal format** - Once `to_multimodal_messages` tests are passing (from Jules PR), integrate it into the main chat loop to support native images via OpenRouter/OpenAI.
-- Code Tool: Run Python Code in Sandbox (one option: WASI via Wasmtime plus a small Rust mediator in a Tauri app?)
-- YouTube Tool: Get Transcript & Summarize
-
-## P1: Improve Tool UX
-
-- [ ] Improve weather, stock, and web_search tool output UX. weather should get a full forecast as text for model (show as diagram in UI), stock should give price percentage changes and price history as text for model (show as graph in UI), web_search should show the full results as links and summary for model (show as list of websites visited in UI).
+- [ ] Automate actual testing with the model using an **Evaluator-as-a-Judge** pattern:
+  1. **Automated UI**: Use **Playwright** or **Cypress** with the Tauri WebDriver to drive the frontend.
+  2. **Synthetic User**: Script a separate LLM (e.g., GPT-4o or a local Llama instance) to generate prompts, send them to Shard, and wait for the UI to update.
+  3. **Verification**: Have the Evaluator LLM check the final DOM state or your `interactions.jsonl` against a set of "ground truth" requirements.
+  4. **Mocking**: Use a test flag to swap real tool calls (like `web_search`) with static JSON mocks to keep tests deterministic and save your quota.
 
 ## P2: Light Mode Theme Support
 
@@ -101,10 +32,41 @@
   - Extract core logic: `agent/core.rs`
   - Consider separating retry logic, tool execution, and streaming handling
 - [ ] Migrate from `screenshots` crate to `xcap` for screen capture (P2)
+- [ ] Update models supported (especially with OpenRouter free model router)
+
+## P2: Platform Gateway
+
+- [ ] Build a gateway layer so Shard can receive/send messages via external platforms
+  - Discord bot (via `serenity` or gateway API)
+  - Email (IMAP polling + SMTP send)
+  - SMS/iMessage (Shortcuts automation or Twilio)
+  - Slack (webhook + Bolt API)
+- [ ] Route inbound messages through the same `process_message()` pipeline as the chat UI
+- [ ] Per-platform formatting (markdown → Discord flavored, plaintext for SMS, etc.)
+- [ ] Platform-aware session management (one session per channel/thread/conversation)
+- [ ] Rate limiting and authentication per platform
+
+## P2: Sub-Agent Support
+
+- [ ] Allow the primary agent to spawn sub-agents for parallel tool execution
+  - Leverage `ToolRegistry::should_parallelize()` metadata (already exists, not yet wired)
+  - Sub-agents share the same session context but run tool calls concurrently
+- [ ] Orchestrator pattern: primary agent decomposes tasks, delegates to sub-agents, merges results
+- [ ] Sub-agent isolation: each gets its own tool call budget and timeout
+- [ ] Support for specialized sub-agents (e.g., research sub-agent with `research_mode`, code sub-agent with `run_python`)
+- [ ] Progress streaming: sub-agent results streamed back to UI as they complete
+
+## P2: Skill Auto-Creation (Procedural Memory)
+
+- [ ] Agent automatically creates/improves personas from experience
+  - After complex tasks (5+ tool calls), agent saves the working approach as a new persona
+  - When user corrects the agent's approach, agent patches the relevant persona
+  - `skill_manage` tool with actions: `create`, `patch`, `edit`, `delete`, `write_file`
+- [ ] Track skill usage and success rate to prune stale personas
+- [ ] Progressive disclosure: list names/descriptions first (~3k tokens), load full content only when needed
 
 ## P2: Multi-Provider Support
 
-- [ ] Model management system that checks for free models from OpenRouter and updates the model list.
 - [ ] Add support for other providers (e.g., Ollama, Anthropic).
 
 ## P2: Distribution & CI/CD
@@ -112,6 +74,20 @@
 - [ ] Set up GitHub Actions for cross-platform builds
   - macOS: Uses existing `build-macos.sh` script
   - Auto-create releases with `.dmg`, `.msi`, `.AppImage`
+
+## P2: Future Horizons (Documentation & Stubs)
+
+### 2. Mobile App (iOS/Android)
+
+- [ ] Evaluate Tauri Mobile vs React Native for the client view.
+- [ ] Implement remote connection to the desktop "Shard Hub" (since the local app runs the heavy vector DB/models).
+- [ ] Add share sheet extensions to quickly pipe links/text into Shard Mobile.
+
+### 3. Nodes (Device Sync & Distributed Shard)
+
+- [ ] Design a peer-to-peer sync protocol (e.g., libp2p or simple WebSockets) to keep `memories.sqlite` consistent across multiple devices.
+- [ ] Allow one powerful desktop node to run embedded inference for weaker mobile nodes.
+- [ ] Create a "Nodes" UI panel to manage connected devices and sync status.
 
 ## P3: Hybrid Retrieval Enhancements
 

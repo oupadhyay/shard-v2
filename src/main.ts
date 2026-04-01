@@ -5,8 +5,10 @@ import DOMPurify from "dompurify";
 import "katex/dist/katex.min.css";
 
 // Internal modules
-import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, AppConfig } from "./types";
+import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, ModelsResponse } from "./types";
+import { type SessionSummary, renderSessionItem } from "./ui/sessions";
 import { ChatState } from "./state";
+import { EVENTS } from "./events";
 import {
   md,
   clearKatexErrors,
@@ -17,7 +19,8 @@ import {
   updateThinkingElement,
   createToolCallElement,
   updateToolResult,
-  addMessage as addMessageToChat,
+  addMessage,
+  addProactiveMessage,
   getOrCreateWebSearchContainer,
   resetWebSearchContainer,
   isWebSearchTool,
@@ -33,7 +36,10 @@ import {
   SETTINGS_MODAL_HTML,
   SESSIONS_MODAL_HTML,
   initSettingsTabs,
+  populateHeartbeatsPanel,
   resizeImage,
+  populateModelDropdown,
+  formatSessionDate,
 } from "./ui";
 
 // DOM Elements
@@ -43,6 +49,26 @@ const ocrBtn = document.getElementById("ocr-btn") as HTMLButtonElement;
 const trashBtn = document.getElementById("trash-btn") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
 const stopBtn = document.getElementById("stop-btn") as HTMLButtonElement;
+const breakoutBtn = document.getElementById("breakout-btn") as HTMLButtonElement;
+
+// Breakout button: fade-out ambient panel, then open dedicated window
+breakoutBtn?.addEventListener("click", async () => {
+  const appEl = document.querySelector(".app-ui") as HTMLElement | null;
+  if (appEl) {
+    appEl.style.transition = "opacity 0.2s ease";
+    appEl.style.opacity = "0";
+  }
+  // Fire immediately — fade-out and window open run concurrently
+  try {
+    await invoke("open_dedicated_window");
+  } catch (e) {
+    // Restore visibility on failure
+    if (appEl) {
+      appEl.style.opacity = "1";
+    }
+    console.error("Failed to open dedicated window:", e);
+  }
+});
 
 // State (centralized in ChatState – see src/state.ts)
 const state = new ChatState();
@@ -57,14 +83,6 @@ document.addEventListener("click", (e) => {
   }
 });
 
-function addMessage(
-  role: "user" | "assistant",
-  content: string,
-  images?: { base64: string; mimeType: string }[],
-  container: HTMLElement | DocumentFragment = chatArea,
-) {
-  addMessageToChat(container, role, content, images);
-}
 
 // Helper: Handle Input
 async function handleInput(skipUi = false) {
@@ -89,7 +107,7 @@ async function handleInput(skipUi = false) {
     inputField.value = "";
     inputField.style.height = "auto"; // Reset height
     // Pass all images for display
-    addMessage("user", text, currentImages);
+    addMessage(chatArea, "user", text, currentImages);
 
     // Clear image preview immediately to prevent duplication
     state.attachedImages = [];
@@ -114,7 +132,6 @@ async function handleInput(skipUi = false) {
   // Reset web search container for new response
   resetWebSearchContainer();
 
-
   // Clear KaTeX errors for new response (for auto-retry tracking)
   clearKatexErrors();
 
@@ -125,42 +142,12 @@ async function handleInput(skipUi = false) {
   stopBtn.dataset.mode = "stop";
 
   try {
-    // Include image data or OCR text based on model
+    // Always send image binary data to backend — provider routing happens server-side
     const messagePayload: ChatMessagePayload = { message: skipUi ? state.lastUserMessage : text };
 
     if (imagesToSend.length > 0) {
-      // For OpenRouter models (don't support images), prepend OCR text
-      // For Gemini models, send image data
-      // Simple heuristic: if there's a slash in model name, it's OpenRouter
-      const config = await invoke<AppConfig>("get_config");
-      const selectedModel = config?.selected_model || "";
-
-      // Heuristic: If it's not a Gemini model, we treat it as OpenRouter/Groq/etc and send OCR text
-      if (!selectedModel.toLowerCase().includes("gemini")) {
-        // Wait for any pending OCR
-        const pendingImages = imagesToSend.filter(img => img.ocrPromise);
-        if (pendingImages.length > 0) {
-          await Promise.all(imagesToSend.map(async (img) => {
-            if (img.ocrPromise) {
-              try {
-                const text = await img.ocrPromise;
-                img.ocrText = text;
-              } catch (e) {
-                console.error("OCR failed during wait:", e);
-                img.ocrText = "[OCR failed]";
-              }
-            }
-          }));
-        }
-
-        // OpenRouter - use OCR text for all images
-        const ocrTexts = imagesToSend.map((img) => img.ocrText).join("\n---\n");
-        messagePayload.message = `[Image OCR]:\n${ocrTexts}\n\n${messagePayload.message}`;
-      } else {
-        // Gemini - send image data as arrays
-        messagePayload.imagesBase64 = imagesToSend.map((img) => img.base64);
-        messagePayload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
-      }
+      messagePayload.imagesBase64 = imagesToSend.map((img) => img.base64);
+      messagePayload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
     }
 
     console.log("Sending payload to backend:", {
@@ -326,9 +313,6 @@ inputField.addEventListener("paste", async (e) => {
       const objectUrl = URL.createObjectURL(file);
       const mimeType = file.type;
 
-      // Predict index (since showImagePreview pushes)
-      const imageIndex = state.attachedImages.length;
-
       // Define the async process immediately so the promise exists synchronously
       const ocrTask = async () => {
         try {
@@ -341,9 +325,7 @@ inputField.addEventListener("paste", async (e) => {
           });
 
           // Update base64 for Gemini (side effect)
-          if (state.attachedImages[imageIndex]) {
-            state.attachedImages[imageIndex].base64 = base64;
-          }
+          imageData.base64 = base64;
 
           // 2. Resize
           console.log("[Paste] Resizing image for OCR...");
@@ -373,18 +355,10 @@ inputField.addEventListener("paste", async (e) => {
       console.log("[Paste] Calling showImagePreview with ObjectURL");
       showImagePreview(imageData);
 
-      // Add side-effect to update ocrText when done and remove loading state
+      // Add side-effect to update ocrText when done
       if (imageData.ocrPromise) {
         imageData.ocrPromise.then(text => {
-          if (state.attachedImages[imageIndex]) {
-            state.attachedImages[imageIndex].ocrText = text;
-          }
-          // Remove loading indicator from preview
-          const container = document.getElementById("image-preview-container");
-          const preview = container?.querySelector(`.image-preview[data-index="${imageIndex}"]`);
-          if (preview) {
-            preview.classList.remove("ocr-processing");
-          }
+          imageData.ocrText = text;
         });
       }
 
@@ -439,6 +413,12 @@ function showImagePreview(imageData: AttachedImage) {
     });
   });
 
+  if (imageData.ocrPromise) {
+    imageData.ocrPromise.finally(() => {
+      preview.classList.remove("ocr-processing");
+    });
+  }
+
   console.log("[showImagePreview] Appending preview to container");
   container.appendChild(preview);
   console.log("[showImagePreview] Append complete");
@@ -453,28 +433,20 @@ ocrBtn.addEventListener("click", async () => {
       // Create promise first so showImagePreview can detect it
       const ocrPromise = invoke<string>("ocr_image", { imageBase64: result.image_base64 });
 
-      showImagePreview({
+      const newImage: AttachedImage = {
         base64: result.image_base64,
         mimeType: result.mime_type,
         ocrText: "[Processing...]",
         ocrPromise,
-      });
-      const index = state.attachedImages.length - 1;
+      };
+      showImagePreview(newImage);
 
       ocrPromise.then(text => {
         console.log("[OCR] Screenshot text:", text.substring(0, 50) + "...");
-        if (state.attachedImages[index]) state.attachedImages[index].ocrText = text;
-        // Remove loading indicator
-        const container = document.getElementById("image-preview-container");
-        const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
-        if (preview) preview.classList.remove("ocr-processing");
+        newImage.ocrText = text;
       }).catch(err => {
         console.error("OCR failed:", err);
-        if (state.attachedImages[index]) state.attachedImages[index].ocrText = "[OCR failed]";
-        // Remove loading indicator
-        const container = document.getElementById("image-preview-container");
-        const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
-        if (preview) preview.classList.remove("ocr-processing");
+        newImage.ocrText = "[OCR failed]";
       });
 
       inputField.focus();
@@ -483,12 +455,14 @@ ocrBtn.addEventListener("click", async () => {
     console.error("OCR error:", error);
     const errorDiv = document.createElement("div");
     errorDiv.className = "message error-message";
-    errorDiv.innerHTML = `
+    errorDiv.innerHTML = DOMPurify.sanitize(`
       <details class="error-accordion">
         <summary class="error-summary">OCR Error</summary>
-        <div class="error-details">${DOMPurify.sanitize(String(error))}</div>
+        <div class="error-details"></div>
       </details>
-    `;
+    `);
+    const detailsEl = errorDiv.querySelector('.error-details');
+    if (detailsEl) detailsEl.textContent = String(error);
     chatArea.appendChild(errorDiv);
     chatArea.scrollTop = chatArea.scrollHeight;
     inputField.focus();
@@ -496,7 +470,7 @@ ocrBtn.addEventListener("click", async () => {
 });
 
 // Listen for OCR trigger from global shortcut
-listen("trigger-ocr", async () => {
+listen(EVENTS.TRIGGER_OCR, async () => {
   // Focus immediately so user can type while OCR processes
   inputField.focus();
   try {
@@ -505,28 +479,20 @@ listen("trigger-ocr", async () => {
       // Create promise first so showImagePreview can detect it
       const ocrPromise = invoke<string>("ocr_image", { imageBase64: result.image_base64 });
 
-      showImagePreview({
+      const newImage: AttachedImage = {
         base64: result.image_base64,
         mimeType: result.mime_type,
         ocrText: "[Processing...]",
         ocrPromise,
-      });
-      const index = state.attachedImages.length - 1;
+      };
+      showImagePreview(newImage);
 
       ocrPromise.then(text => {
         console.log("[OCR] Screenshot text:", text.substring(0, 50) + "...");
-        if (state.attachedImages[index]) state.attachedImages[index].ocrText = text;
-        // Remove loading indicator
-        const container = document.getElementById("image-preview-container");
-        const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
-        if (preview) preview.classList.remove("ocr-processing");
+        newImage.ocrText = text;
       }).catch(err => {
         console.error("OCR failed:", err);
-        if (state.attachedImages[index]) state.attachedImages[index].ocrText = "[OCR failed]";
-        // Remove loading indicator
-        const container = document.getElementById("image-preview-container");
-        const preview = container?.querySelector(`.image-preview[data-index="${index}"]`);
-        if (preview) preview.classList.remove("ocr-processing");
+        newImage.ocrText = "[OCR failed]";
       });
 
       inputField.focus();
@@ -584,12 +550,14 @@ trashBtn.addEventListener("click", async () => {
       console.error("Restore error:", error);
       const errorDiv = document.createElement("div");
       errorDiv.className = "message error-message";
-      errorDiv.innerHTML = `
+      errorDiv.innerHTML = DOMPurify.sanitize(`
         <details class="error-accordion">
           <summary class="error-summary">Restore Error</summary>
-          <div class="error-details">${DOMPurify.sanitize(String(error))}</div>
+          <div class="error-details"></div>
         </details>
-      `;
+      `);
+      const detailsEl = errorDiv.querySelector('.error-details');
+      if (detailsEl) detailsEl.textContent = String(error);
       chatArea.appendChild(errorDiv);
       chatArea.scrollTop = chatArea.scrollHeight;
     }
@@ -606,12 +574,14 @@ trashBtn.addEventListener("click", async () => {
       console.error("Delete error:", error);
       const errorDiv = document.createElement("div");
       errorDiv.className = "message error-message";
-      errorDiv.innerHTML = `
+      errorDiv.innerHTML = DOMPurify.sanitize(`
         <details class="error-accordion">
           <summary class="error-summary">Delete Error</summary>
-          <div class="error-details">${DOMPurify.sanitize(String(error))}</div>
+          <div class="error-details"></div>
         </details>
-      `;
+      `);
+      const detailsEl = errorDiv.querySelector('.error-details');
+      if (detailsEl) detailsEl.textContent = String(error);
       chatArea.appendChild(errorDiv);
       chatArea.scrollTop = chatArea.scrollHeight;
     }
@@ -629,12 +599,14 @@ async function loadChatHistory() {
 
     // Process messages sequentially
     for (const msg of history) {
-      if (msg.role === "user") {
+      const displayRole = msg.is_cron ? "cron" : msg.role;
+
+      if (displayRole === "user" || displayRole === "cron") {
         // Reset web search container for each user message (new turn)
         resetWebSearchContainer();
         // Pass all images if present in history
-        addMessage("user", msg.content || "", msg.images, fragment);
-      } else if (msg.role === "assistant") {
+        addMessage(fragment, displayRole as "user" | "assistant" | "cron", msg.content || "", msg.images);
+      } else if (displayRole === "assistant") {
         // 1. Render Reasoning (if present)
         if (msg.reasoning) {
           const thinkingMsg = createThinkingElement(msg.reasoning, true);
@@ -680,7 +652,7 @@ async function loadChatHistory() {
 
         // 3. Render Assistant Content (if present)
         if (msg.content) {
-          addMessage("assistant", msg.content, msg.images, fragment);
+          addMessage(fragment, "assistant", msg.content, msg.images);
         }
       } else if (msg.role === "tool") {
         // Tool result message - try to find matching element by ID
@@ -697,20 +669,9 @@ async function loadChatHistory() {
             const resultSection = matchingQuery.querySelector('.tool-result') as HTMLElement;
             const resultContent = matchingQuery.querySelector('.tool-result-content');
             if (resultSection && resultContent) {
-              // Simplify web search results for display (extract just title links)
-              const cleanResult = msg.content
-                .replace(/^Web Search Results:\n/, '')
-                // Extract markdown links and remove snippets after " : "
-                .split('\n')
-                .filter((line: string) => line.trim().startsWith('-'))
-                .map((line: string) => {
-                  // Match "- [title](url) : snippet" and keep just "- [title](url)"
-                  const match = line.match(/^(- \[[^\]]+\]\([^)]+\))/);
-                  return match ? match[1] : line;
-                })
-                .join('\n');
-              resultContent.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(cleanResult)));
-              resultSection.style.display = 'grid';
+              // Since Web Search now returns JSON, we use the standardized updateToolResult function
+              // to parse it into our rich specific widget.
+              updateToolResult(matchingQuery, msg.content);
               matched = true;
             }
           }
@@ -744,6 +705,9 @@ async function loadChatHistory() {
 
     // Scroll to bottom
     chatArea.scrollTop = chatArea.scrollHeight;
+
+    // Load pending proactive actions at the end of chat history
+    await loadProactiveMessages();
   } catch (e) {
     console.error("Failed to load chat history:", e);
     if (fragment.hasChildNodes()) {
@@ -752,10 +716,26 @@ async function loadChatHistory() {
   }
 }
 
+async function loadProactiveMessages() {
+  try {
+    const activeSessionId = await invoke<string>("get_current_session_id").catch(() => "");
+    const messages = await invoke<import("./types").ProactiveMessage[]>("get_proactive_messages");
+    
+    // Only render pending messages that belong to the current active session
+    for (const msg of messages) {
+      if (msg.heartbeat_session === activeSessionId) {
+        addProactiveMessage(chatArea, msg);
+      }
+    }
+  } catch (error) {
+    console.error("Failed to load proactive messages:", error);
+  }
+}
+
 loadChatHistory();
 
 // Listen for agent retry events (backend requesting UI clear before retry)
-listen<string>("agent-retry", (event) => {
+listen<string>(EVENTS.AGENT_RETRY, (event) => {
   try {
     const payload = JSON.parse(event.payload);
     console.log("[Agent Retry] Received retry event:", payload);
@@ -799,8 +779,44 @@ listen<string>("agent-retry", (event) => {
   }
 });
 
+// Listen for retry exhaustion (best-effort response stays, just clean up indicator)
+listen<string>(EVENTS.AGENT_RETRY_EXHAUSTED, (event) => {
+  try {
+    const payload = JSON.parse(event.payload);
+    console.log("[Agent Retry] Retries exhausted:", payload);
+    const loadingIndicator = chatArea.querySelector("#loading-indicator");
+    if (loadingIndicator) loadingIndicator.remove();
+  } catch (e) {
+    console.error("[Agent Retry] Failed to parse exhausted event:", e);
+  }
+});
+
+// Listen for background cron jobs starting
+listen<string>(EVENTS.AGENT_CRON_STARTED, (event) => {
+  const prompt = DOMPurify.sanitize(event.payload);
+  resetWebSearchContainer();
+  addMessage(chatArea, "cron", prompt, undefined);
+});
+
+// Listen for incoming proactive messages/drafts
+listen<import("./types").ProactiveMessage>(EVENTS.PROACTIVE_MESSAGE, async (event) => {
+  console.log("[Proactive] Received new proactive action:", event.payload);
+  
+  const activeSessionId = await invoke<string>("get_current_session_id").catch(() => "");
+  
+  // Only show the message inline if we are currently viewing the session it belongs to
+  if (event.payload.heartbeat_session === activeSessionId) {
+    addProactiveMessage(chatArea, event.payload);
+  }
+
+  const unreadBadge = document.getElementById("unread-sessions-badge");
+  if (unreadBadge) {
+    unreadBadge.classList.remove("hidden");
+  }
+});
+
 // Listen for agent streaming response chunks
-listen<string>("agent-response-chunk", (event) => {
+listen<string>(EVENTS.AGENT_RESPONSE_CHUNK, (event) => {
   const chunk = event.payload;
 
   // Ignore empty chunks
@@ -922,7 +938,7 @@ listen<string>("agent-response-chunk", (event) => {
   chatArea.scrollTop = chatArea.scrollHeight;
 });
 
-listen<string>("agent-reasoning-chunk", (event) => {
+listen<string>(EVENTS.AGENT_REASONING_CHUNK, (event) => {
   // ============================================================================
   // REASONING CHUNK HANDLER
   // ============================================================================
@@ -953,27 +969,35 @@ listen<string>("agent-reasoning-chunk", (event) => {
   chatArea.scrollTop = chatArea.scrollHeight;
 });
 
-listen<string>("agent-tool-call", (event) => {
+listen<string>(EVENTS.AGENT_TOOL_CALL, (event) => {
   const payload = JSON.parse(event.payload);
 
   // Idempotent update: find existing block by ID
   let toolDiv = payload.id ? chatArea.querySelector(`[data-tool-id="${payload.id}"]`) as HTMLElement : null;
 
   if (toolDiv) {
-    // Update existing tool call (e.g. arguments streaming)
-    const summaryArgs = toolDiv.querySelector(".tool-summary-args");
-    if (summaryArgs) {
-      const argsText = Object.entries(payload.args || {})
-        .map(([k, v]) => `${md.utils.escapeHtml(k)}="${md.utils.escapeHtml(String(v))}"`)
-        .join(" ");
-      summaryArgs.textContent = argsText;
-    }
-    const toolArgs = toolDiv.querySelector(".tool-args");
-    if (toolArgs) {
-      if (payload.rawArgs) {
-        toolArgs.textContent = payload.rawArgs;
-      } else {
-        toolArgs.textContent = JSON.stringify(payload.args, null, 2);
+    if (isWebSearchTool(payload.name)) {
+      const queryText = toolDiv.querySelector(".query-text");
+      if (queryText) {
+        const query = payload.args?.query || "";
+        queryText.textContent = `"${query || 'Legacy Search'}"`;
+      }
+    } else {
+      // Update existing tool call (e.g. arguments streaming)
+      const summaryArgs = toolDiv.querySelector(".tool-summary-args");
+      if (summaryArgs) {
+        const argsText = Object.entries(payload.args || {})
+          .map(([k, v]) => `${md.utils.escapeHtml(k)}="${md.utils.escapeHtml(String(v))}"`)
+          .join(" ");
+        summaryArgs.textContent = argsText;
+      }
+      const toolArgs = toolDiv.querySelector(".tool-args");
+      if (toolArgs) {
+        if (payload.rawArgs) {
+          toolArgs.textContent = payload.rawArgs;
+        } else {
+          toolArgs.textContent = JSON.stringify(payload.args, null, 2);
+        }
       }
     }
     return;
@@ -1012,43 +1036,30 @@ listen<string>("agent-tool-call", (event) => {
 });
 
 // Listen for tool results and add them to the matching tool call
-listen<string>("agent-tool-result", (event) => {
+listen<string>(EVENTS.AGENT_TOOL_RESULT, (event) => {
   const payload = JSON.parse(event.payload);
   const name = payload.name;
   const result = payload.result;
 
   if (isWebSearchTool(name)) {
-    // Find matching web search query element
-    const webSearchQueries = Array.from(chatArea.querySelectorAll(".web-search-query"));
-    const matchingQuery = webSearchQueries
-      .reverse()
-      .find((el) => {
-        const resultSection = el.querySelector('.tool-result') as HTMLElement;
-        // Find the one that doesn't have a result yet
-        return resultSection && resultSection.style.display === 'none';
-      });
+    // 1. Try to find by ID if provided (preferred)
+    let matchingQuery = payload.id ? chatArea.querySelector(`[data-tool-id="${payload.id}"]`) as HTMLElement : null;
+
+    // 2. Fallback to finding the last search query without a result
+    if (!matchingQuery) {
+      const webSearchQueries = Array.from(chatArea.querySelectorAll(".web-search-query"));
+      matchingQuery = webSearchQueries
+        .reverse()
+        .find((el) => {
+          const resultSection = el.querySelector('.tool-result') as HTMLElement;
+          // Find the one that doesn't have a result yet
+          return resultSection && resultSection.style.display === 'none';
+        }) as HTMLElement || null;
+    }
 
     if (matchingQuery) {
-      const resultSection = matchingQuery.querySelector('.tool-result') as HTMLElement;
-      const resultContent = matchingQuery.querySelector('.tool-result-content');
-      if (resultSection && resultContent) {
-        // Simplify web search results for display (extract just title links)
-        const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-        // Remove "Web Search Results:" prefix and extract just the links
-        const cleanResult = resultText
-          .replace(/^Web Search Results:\n/, '')
-          // Extract markdown links and remove snippets after " : "
-          .split('\n')
-          .filter((line: string) => line.trim().startsWith('-'))
-          .map((line: string) => {
-            // Match "- [title](url) : snippet" and keep just "- [title](url)"
-            const match = line.match(/^(- \[[^\]]+\]\([^)]+\))/);
-            return match ? match[1] : line;
-          })
-          .join('\n');
-        resultContent.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(cleanResult)));
-        resultSection.style.display = 'grid';
-      }
+      const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+      updateToolResult(matchingQuery, resultText);
     }
   } else {
     // Find the most recent tool-output with matching name
@@ -1066,12 +1077,12 @@ listen<string>("agent-tool-result", (event) => {
   }
 });
 
-listen("agent-processing-start", () => {
+listen(EVENTS.AGENT_PROCESSING_START, () => {
   // Optional: Show a "thinking" indicator
 });
 
 // Listen for API errors and display with retry button
-listen<string>("agent-error", (event) => {
+listen<string>(EVENTS.AGENT_ERROR, (event) => {
   const errorText = event.payload;
   console.error("API Error:", errorText);
 
@@ -1084,16 +1095,18 @@ listen<string>("agent-error", (event) => {
   // Create error message with accordion and retry button below
   const errorDiv = document.createElement("div");
   errorDiv.className = "message error-message";
-  errorDiv.innerHTML = `
+  errorDiv.innerHTML = DOMPurify.sanitize(`
     <details class="error-accordion">
       <summary class="error-summary">API Error</summary>
-      <div class="error-details">${DOMPurify.sanitize(errorText)}</div>
+      <div class="error-details"></div>
     </details>
     <button class="retry-btn" title="Retry request">
       ${RETRY_ICON}
       <span>Retry</span>
     </button>
-  `;
+  `);
+  const detailsEl = errorDiv.querySelector('.error-details');
+  if (detailsEl) detailsEl.textContent = errorText;
 
   // Wire retry button
   const retryBtn = errorDiv.querySelector(".retry-btn");
@@ -1125,7 +1138,7 @@ listen<string>("agent-error", (event) => {
 });
 
 // Listen for provider fallback notifications (rate limit → OpenRouter)
-listen<string>("agent-fallback", (event) => {
+listen<string>(EVENTS.AGENT_FALLBACK, (event) => {
   // Only show the fallback message once per conversation turn
   if (state.fallbackShownThisTurn) {
     console.log("[Fallback] Skipping duplicate notification");
@@ -1143,12 +1156,16 @@ listen<string>("agent-fallback", (event) => {
     // Create a non-blocking notification accordion in chat
     const fallbackDiv = document.createElement("div");
     fallbackDiv.className = "message fallback-message";
-    fallbackDiv.innerHTML = `
+    fallbackDiv.innerHTML = DOMPurify.sanitize(`
       <details class="fallback-accordion">
-        <summary class="fallback-summary">${DOMPurify.sanitize(title)}</summary>
-        <div class="fallback-details">${DOMPurify.sanitize(details)}</div>
+        <summary class="fallback-summary"></summary>
+        <div class="fallback-details"></div>
       </details>
-    `;
+    `);
+    const summaryEl = fallbackDiv.querySelector('.fallback-summary');
+    if (summaryEl) summaryEl.textContent = title;
+    const detailsEl = fallbackDiv.querySelector('.fallback-details');
+    if (detailsEl) detailsEl.textContent = details;
 
     chatArea.appendChild(fallbackDiv);
     chatArea.scrollTop = chatArea.scrollHeight;
@@ -1202,11 +1219,19 @@ async function startHide() {
   }
 }
 
-listen("start-hide", () => {
+listen(EVENTS.START_HIDE, () => {
   startHide();
 });
 
-listen("start-show", async () => {
+listen(EVENTS.START_SHOW, async () => {
+
+  // Restore .app-ui opacity in case we faded it out for the dedicated window transition
+  const appUi = document.querySelector(".app-ui") as HTMLElement | null;
+  if (appUi) {
+    appUi.style.transition = "opacity 0.2s ease";
+    appUi.style.opacity = "1";
+  }
+
   const app = document.getElementById("app");
   if (app) {
     // Small delay to ensure window is rendered before fading in
@@ -1217,15 +1242,8 @@ listen("start-show", async () => {
     }, 50);
   }
 
-  // Show loading chips if screen context is enabled (check config)
-  try {
-    const config = await invoke<{ enable_screen_context?: boolean; incognito_mode?: boolean }>("get_config");
-    if (config.enable_screen_context && !config.incognito_mode) {
-      showLoadingChips();
-    }
-  } catch (e) {
-    console.warn("[ScreenContext] Failed to check config:", e);
-  }
+  // Remove showing loading chips if screen context is enabled
+  // We no longer show a loading state, suggestions will animate in when ready.
 });
 
 // Screen Context Suggestions
@@ -1238,8 +1256,6 @@ interface ScreenContext {
   ocr_text: string;
 }
 
-
-
 // Create suggestions container (positioned above bottom-bar)
 const suggestionsContainer = document.createElement("div");
 suggestionsContainer.className = "suggestion-pills hidden";
@@ -1250,8 +1266,6 @@ document.getElementById("app")?.querySelector(".bottom-bar")?.before(suggestions
 inputField.addEventListener("input", () => {
   hideSuggestions();
 });
-
-
 
 function showSuggestions(suggestions: string[]) {
   if (suggestions.length === 0) return;
@@ -1291,7 +1305,6 @@ function showSuggestions(suggestions: string[]) {
   });
 
   suggestionsContainer.classList.remove("hidden");
-  suggestionsContainer.classList.remove("loading");
 
   // Force reflow to ensure transition plays on first appearance
   void suggestionsContainer.offsetHeight;
@@ -1306,32 +1319,15 @@ function showSuggestions(suggestions: string[]) {
   state.suggestionTimeout = setTimeout(hideSuggestions, 15000);
 }
 
-function showLoadingChips() {
-  suggestionsContainer.innerHTML = `
-    <span class="suggestion-pill loading-pill">Analyzing screen...</span>
-  `;
-  // Start hidden, force reflow, then show to trigger animation
-  suggestionsContainer.classList.add("hidden");
-  void suggestionsContainer.offsetHeight; // Force reflow
-  suggestionsContainer.classList.remove("hidden");
-  suggestionsContainer.classList.add("loading");
-
-  // Scroll chat to bottom after CSS transition completes (300ms)
-  setTimeout(() => {
-    chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
-  }, 200);
-}
-
 function hideSuggestions() {
   suggestionsContainer.classList.add("hidden");
-  suggestionsContainer.classList.remove("loading");
   if (state.suggestionTimeout) {
     clearTimeout(state.suggestionTimeout);
     state.suggestionTimeout = null;
   }
 }
 
-listen<ScreenContext>("screen-context-ready", (event) => {
+listen<ScreenContext>(EVENTS.SCREEN_CONTEXT_READY, (event) => {
   console.log("[ScreenContext] Received suggestions:", event.payload);
 
   // Store image for when a suggestion is clicked
@@ -1380,6 +1376,7 @@ const providerConflictWarning = document.getElementById("provider-conflict-warni
 const enableToolsCheckbox = document.getElementById("enable-tools") as HTMLInputElement;
 const incognitoModeCheckbox = document.getElementById("incognito-mode") as HTMLInputElement;
 const enableScreenContextCheckbox = document.getElementById("enable-screen-context") as HTMLInputElement;
+const heartbeatCooldownInput = document.getElementById("heartbeat-cooldown") as HTMLInputElement;
 const saveSettingsBtn = document.getElementById("save-settings") as HTMLButtonElement;
 const closeSettingsBtn = document.getElementById("close-settings") as HTMLButtonElement;
 
@@ -1433,77 +1430,6 @@ const checkProviderConflict = () => {
 modelInput.addEventListener("change", checkProviderConflict);
 backgroundModelInput.addEventListener("change", checkProviderConflict);
 
-// Model types from backend
-interface ModelInfo {
-  id: string;
-  display_name: string;
-  provider: "gemini" | "openrouter" | "groq" | "cerebras";
-  category: "chat" | "vision" | "background";
-  supports_tools: boolean;
-}
-
-interface ModelsResponse {
-  chat_models: ModelInfo[];
-  vision_models: ModelInfo[];
-  background_models: ModelInfo[];
-}
-
-// Helper to populate a dropdown with models grouped by provider
-function populateModelDropdown(
-  selectEl: HTMLSelectElement,
-  models: ModelInfo[],
-  selectedValue: string | null
-) {
-  // Clear existing options
-  selectEl.innerHTML = "";
-
-  // Group models by provider display name
-  const providerDisplayNames: Record<string, string> = {
-    gemini: "Gemini AI",
-    openrouter: "OpenRouter",
-    groq: "Groq",
-    cerebras: "Cerebras",
-  };
-
-  const groups: Record<string, ModelInfo[]> = {};
-  for (const model of models) {
-    const providerKey = model.provider;
-    if (!groups[providerKey]) {
-      groups[providerKey] = [];
-    }
-    groups[providerKey].push(model);
-  }
-
-  // Create optgroups in order: gemini, openrouter, groq, cerebras
-  const providerOrder = ["gemini", "openrouter", "groq", "cerebras"];
-  for (const provider of providerOrder) {
-    const modelsInGroup = groups[provider];
-    if (!modelsInGroup || modelsInGroup.length === 0) continue;
-
-    const optgroup = document.createElement("optgroup");
-    optgroup.label = providerDisplayNames[provider] || provider;
-
-    for (const model of modelsInGroup) {
-      const option = document.createElement("option");
-      option.value = model.id;
-      option.textContent = model.display_name;
-      option.dataset.provider = model.provider;
-      optgroup.appendChild(option);
-    }
-
-    selectEl.appendChild(optgroup);
-  }
-
-  // Set selected value if provided and exists
-  if (selectedValue) {
-    // Check if the value exists in options
-    const exists = Array.from(selectEl.options).some(opt => opt.value === selectedValue);
-    if (exists) {
-      selectEl.value = selectedValue;
-    }
-  }
-}
-
 settingsBtn.addEventListener("click", async () => {
   try {
     // Load models from backend first
@@ -1533,12 +1459,16 @@ settingsBtn.addEventListener("click", async () => {
     enableToolsCheckbox.checked = config.enable_tools || false;
     incognitoModeCheckbox.checked = config.incognito_mode || false;
     enableScreenContextCheckbox.checked = config.enable_screen_context || false;
+    heartbeatCooldownInput.value = String(config.heartbeat_global_cooldown_secs ?? 60);
 
     // Disable screen context when incognito mode is enabled
     enableScreenContextCheckbox.disabled = incognitoModeCheckbox.checked;
 
     updateToolAvailability(); // Run check on open
     checkProviderConflict(); // Check for provider conflicts
+
+    // Populate heartbeats dashboard (async, non-blocking)
+    populateHeartbeatsPanel(settingsModal);
 
     settingsModal.classList.remove("hidden");
   } catch (e) {
@@ -1564,6 +1494,7 @@ saveSettingsBtn.addEventListener("click", async () => {
     enable_tools: enableToolsCheckbox.checked,
     incognito_mode: incognitoModeCheckbox.checked,
     enable_screen_context: enableScreenContextCheckbox.checked,
+    heartbeat_global_cooldown_secs: parseInt(heartbeatCooldownInput.value) || 60,
   };
 
   try {
@@ -1590,6 +1521,11 @@ const sessionsListContainer = document.getElementById("sessions-list-container")
 sessionsBtn.addEventListener("click", async () => {
   sessionsModal.classList.remove("hidden");
 
+  const unreadBadge = document.getElementById("unread-sessions-badge");
+  if (unreadBadge) {
+    unreadBadge.classList.add("hidden");
+  }
+
   sessionsListContainer.innerHTML = '<div class="loading-spinner">Loading sessions...</div>';
   try {
     const resultString = await invoke<string>("get_recent_sessions", { limit: 20 });
@@ -1598,17 +1534,46 @@ sessionsBtn.addEventListener("click", async () => {
       return;
     }
 
-    const sessions = JSON.parse(resultString);
-    sessionsListContainer.innerHTML = sessions.map((s: any) => `
-      <div class="session-item" data-id="${s.session_id}">
-        <div class="session-item-title">${s.title}</div>
-        <div class="session-item-meta">
-            <span>${new Date(s.date).toLocaleDateString()}</span>
-            <span class="session-item-summary">${s.summary !== "No summary available" ? s.summary.substring(0, 120) + (s.summary.length > 120 ? "..." : "") : ""}</span>
-        </div>
-      </div>
-    `).join("");
+    sessionsListContainer.innerHTML = '';
+    const sessions: SessionSummary[] = JSON.parse(resultString);
 
+    sessions.forEach((s) => {
+      const item = renderSessionItem(s, formatSessionDate);
+
+      // Delete button — shown on hover via CSS
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "session-item-delete";
+      deleteBtn.title = "Delete session";
+      deleteBtn.setAttribute("aria-label", "Delete session");
+      deleteBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+      deleteBtn.addEventListener("click", async (e) => {
+        e.stopPropagation(); // don't trigger session load
+        const id = (item as HTMLElement).dataset.id;
+        if (!id) return;
+        try {
+          // Check BEFORE deleting — backend rotates session ID on delete so comparison fails after
+          const activeId = await invoke<string>("get_current_session_id").catch(() => "");
+          const wasActive = activeId === id;
+
+          await invoke("delete_session", { sessionId: id });
+
+          if (wasActive) {
+            chatArea.innerHTML = "";
+            await updateButtonStates();
+          }
+          // Re-render the list
+          item.remove();
+          if (!sessionsListContainer.querySelector(".session-item")) {
+            sessionsListContainer.innerHTML = '<div class="sessions-empty">No recent sessions found.</div>';
+          }
+        } catch (err) {
+          console.error("Failed to delete session:", err);
+        }
+      });
+      item.appendChild(deleteBtn);
+
+      sessionsListContainer.appendChild(item);
+    });
 
     // Add click listeners
     sessionsListContainer.querySelectorAll('.session-item').forEach(el => {
@@ -1626,7 +1591,16 @@ sessionsBtn.addEventListener("click", async () => {
     });
 
   } catch (e) {
-    sessionsListContainer.innerHTML = `<div style="color: #ff4444; padding: 20px;">Failed to load sessions: ${e}</div>`;
+    sessionsListContainer.innerHTML = `<div class="sessions-error">Failed to load sessions: <span class="sessions-error-details"></span></div>`;
+    const detailsSpan = sessionsListContainer.querySelector('.sessions-error-details');
+    if (detailsSpan) detailsSpan.textContent = String(e);
+  }
+});
+
+// Refresh sessions list if modal is open and we receive a backend update
+listen(EVENTS.SESSIONS_UPDATED, () => {
+  if (!sessionsModal.classList.contains("hidden")) {
+    sessionsBtn.click();
   }
 });
 

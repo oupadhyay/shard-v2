@@ -1,54 +1,89 @@
 # Shard AI Assistant
 
-Shard is a high-performance, privacy-focused AI assistant built with **Tauri**, **Rust**, and **React**. It is designed to be a powerful, extensible, and aesthetically pleasing desktop application that leverages the latest advancements in LLMs.
+Shard is a high-performance, privacy-focused AI assistant built with **Tauri 2**, **Rust**, and **TypeScript**. It runs as a native desktop app with a transparent, glassy overlay UI — summoned instantly via a global shortcut — and leverages multiple LLM providers with autonomous tool calling, persistent memory, and on-demand persona loading.
 
-## 🚀 Key Features
+## ✨ Key Features
 
-* **Multi-Model Support**: Gemini 2.5/3 Flash, Llama 3.3, GPT-OSS, Gemma 3 and Olmo 3.1.
-* **Autonomous Tools**: Weather, Wikipedia, Stocks, ArXiv (enhanced HTML parsing), Web Search.
-* **Multimodal Intelligence**: Take screenshots to chat about them. Gemini models use native Files API; OpenRouter models use Gemma 3 27B for contextual visual understanding.
-* **Deep Research**: Capable of conducting in-depth research by synthesizing information from multiple sources (ArXiv, Wikipedia, Web) to answer complex queries.
-* **Privacy First**: Your API keys are stored locally. No middleman servers.
+- **Multi-Provider Chat** — Gemini 2.5/3 Flash, GPT-OSS 120B (OpenRouter / Groq / Cerebras), LLaMA 3.3, Stepfun 3.5 Flash. Automatic fallback across providers.
+- **Autonomous Tools** — Weather, Wikipedia, Stocks, ArXiv (HTML parsing), Web Search (Brave), URL reader. Results are cached with per-tool TTLs.
+- **Multimodal Intelligence** — Screenshot-to-chat via `Ctrl+Space`. Gemini models use the native Files API; non-vision models route through a Vision LLM pipeline (Molmo, Nemotron, Qwen 2.5 VL).
+- **Deep Research Mode** — Multi-step synthesis from ArXiv, Wikipedia, and web sources for complex queries.
+- **Personas Engine** — Load / unload specialized personas and instruction sets on-demand via `load_persona` / `unload_persona` tools. Personas are `.md` files with optional YAML frontmatter for `required_tools`.
+- **Persistent Sessions** — SQLite-backed session management with LLM-generated titles, summaries, and full message history. Switch between conversations via the Sessions modal.
+- **5-Tier Memory** — Core facts → Topic summaries → Atomic insights → Session transcripts → Interaction JSONL, all backed by SQLite with sqlite-vec embeddings and FTS5 keyword search.
+- **Background Jobs** — Automated 6-hour cycles for memory summarization, cleanup, insight extraction, and up-leveling — powered by free-tier background LLMs.
+- **Auto-Retry** — Automatic retry on empty responses and KaTeX rendering errors, with context-aware hints injected for the model.
+- **Privacy First** — API keys stored in the OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service). No middleman servers.
 
-## 🔄 Feature: Background Jobs
+## 🏗️ Architecture Overview
 
-Located in `src-tauri/src/background.rs`. Two LLM-powered jobs run **sequentially** every 6 hours:
+| Layer        | Stack                                            | Key Files                                                                |
+|--------------|--------------------------------------------------|--------------------------------------------------------------------------|
+| **Frontend** | TypeScript + Vite + Vanilla CSS                  | `src/main.ts`, `src/state.ts`, `src/ui/`, `src/styles.css`               |
+| **Backend**  | Rust + Tauri 2 + SQLite + sqlite-vec             | `src-tauri/src/` (20+ modules)                                           |
+| **IPC**      | Tauri commands + event emitter                   | `#[tauri::command]` ↔ `invoke<T>()`                                      |
+| **Data**     | `~/Library/Application Support/dev.ojasw.shard/` | `memories.sqlite`, `tool_cache.json`, `personas/`, `last_run.json`         |
 
-| Job         | Function                                                                                     |
-|-------------|----------------------------------------------------------------------------------------------|
-| **Summary** | Analyzes last 12h of interactions, extracts topics, updates `memories/topics/*.md`           |
-| **Cleanup** | Identifies generic/redundant entries, removes them (fallback: date-based cleanup > 30 days)  |
+See [`AGENTS.md`](./AGENTS.md) for the full module-level architecture reference.
 
-**Force-trigger via console:**
+## 🚀 Getting Started
 
-```javascript
-await window.__TAURI__.core.invoke("force_summary")
-await window.__TAURI__.core.invoke("force_cleanup")
-await window.__TAURI__.core.invoke("rebuild_topic_index")  // Regenerate index after manual edits
+### Prerequisites
+
+- **Node.js** ≥ 18 and **npm**
+- **Rust** (stable) with `cargo`
+- **Tauri 2 CLI**: `cargo install tauri-cli --version "^2"`
+
+### Development
+
+```bash
+npm install
+npm run tauri dev        # Launch with hot-reload (Vite on :1420)
 ```
 
-## 🧠 Feature: 3-Tier Memory Architecture
+### Testing
 
-| Tier               | File(s)                      | Purpose                          | In Prompt    | Retrieval   |
-|--------------------|------------------------------|----------------------------------|--------------|-------------|
-| **1. Core**        | `MEMORIES.json`              | User preferences, critical facts | ✅ Always    | Direct load |
-| **2. Focused**     | `topics/*.md` + `index.json` | Topic-specific summaries         | ⚠️ On demand | RAG (Top-1) |
-| **3. Interaction** | `interactions/*.jsonl`       | Full conversation history        | ❌ Never     | RAG (Top-5) |
+```bash
+# Frontend (vitest + jsdom)
+npm test
 
-**Tier 1 - Core**: Always loaded into system prompt. Tool: `save_memory(category, content, importance)`
+# Backend (Rust unit tests)
+cd src-tauri && cargo test
 
-**Tier 2 - Focused**: Embedding-based retrieval. Tools: `read_topic_summary`, `update_topic_summary`
+# Benchmarks (Criterion)
+cd src-tauri && cargo bench
+```
 
-**Tier 3 - Interaction**: Daily JSONL files with embeddings. Cosine similarity search.
+### Production Build
+
+```bash
+npm run build:macos      # macOS .dmg
+```
 
 ## 📝 Configuration
 
-Shard allows extensive configuration via the UI:
+Shard is configured entirely through the in-app Settings modal:
 
-* **API Keys**: Securely input your Gemini and OpenRouter keys.
-* **Model Selection**: Choose your preferred model for each conversation.
-* **System Prompt**: Customize the agent's personality and instructions.
-* **Jailbreak Mode**: Toggle unrestricted modes for specific use cases.
+| Setting              | Description                                                       |
+|----------------------|-------------------------------------------------------------------|
+| **API Keys**         | Gemini, OpenRouter, Brave, Groq, Cerebras (stored in OS keychain) |
+| **Chat Model**       | Select from available chat models per provider                    |
+| **Background Model** | LLM used for automated memory jobs (Groq/Cerebras/OpenRouter)     |
+| **Vision Model**     | LLM used for image understanding on non-vision chat models        |
+| **System Prompt**    | Custom personality / instruction override                         |
+| **Enable Tools**     | Toggle autonomous tool calling                                    |
+| **Research Mode**    | Multi-step deep research with web synthesis                       |
+
+## 📚 Documentation
+
+| Document                                           | Purpose                                                              |
+|----------------------------------------------------|----------------------------------------------------------------------|
+| [`AGENTS.md`](./AGENTS.md)                         | Full architecture reference (modules, tools, memory, retrieval, CSS) |
+| [`docs/BENCH.md`](./docs/BENCH.md)                 | Benchmark suite descriptions and run commands                        |
+| [`docs/BENCH_RESULTS.md`](./docs/BENCH_RESULTS.md) | Historical benchmark measurements                                    |
+| [`docs/RETRIEVAL.md`](./docs/RETRIEVAL.md)         | Hybrid search strategy (sqlite-vec + FTS5)                           |
+| [`docs/TODO.md`](./docs/TODO.md)                   | Roadmap and planned features                                         |
+| [`lessons_learned.md`](./lessons_learned.md)       | Engineering lessons from development                                 |
 
 ---
 

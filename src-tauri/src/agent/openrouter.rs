@@ -1,22 +1,7 @@
 // OpenRouter API utilities - message conversion helpers
 // Supports both text-only and multimodal (text + image) messages
 
-#![allow(dead_code)]
-
 use super::types::*;
-
-/// Convert chat messages to OpenRouter/OpenAI API format (text-only)
-pub fn to_api_messages(messages: &[ChatMessage]) -> Vec<ApiChatMessage> {
-    messages
-        .iter()
-        .map(|msg| ApiChatMessage {
-            role: msg.role.clone(),
-            content: msg.content.clone(),
-            tool_calls: msg.tool_calls.clone(),
-            tool_call_id: msg.tool_call_id.clone(),
-        })
-        .collect()
-}
 
 /// Convert chat messages to multimodal API format with image support
 /// Returns a JSON Value that can be used directly in the request
@@ -74,8 +59,11 @@ pub fn to_multimodal_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value
                 "role": msg.role
             });
 
-            if let Some(content) = &msg.content {
-                message["content"] = serde_json::json!(content);
+            // Always include content key (null when absent) — some providers
+            // require `content: null` on assistant messages with tool_calls.
+            match &msg.content {
+                Some(content) => message["content"] = serde_json::json!(content),
+                None => message["content"] = serde_json::Value::Null,
             }
             if let Some(tool_calls) = &msg.tool_calls {
                 message["tool_calls"] = serde_json::to_value(tool_calls).unwrap_or_default();

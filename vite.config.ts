@@ -30,6 +30,10 @@ export default defineConfig(async () => ({
   build: {
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
+      input: {
+        main: "index.html",
+        dedicated: "dedicated.html",
+      },
       output: {
         manualChunks: {
           'vendor-highlight': ['highlight.js'],
