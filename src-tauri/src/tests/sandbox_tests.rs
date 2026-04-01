@@ -164,4 +164,35 @@ with open('test.txt', 'r') as f:
             result.stdout
         );
     }
+
+    #[tokio::test]
+    async fn test_sandbox_isolation() {
+        // This test attempts to write to a file outside the scratch directory.
+        // In WASI, this should fail because the only preopened directory is /scratch.
+        let code = r#"
+try:
+    with open('/tmp/shard_escape_test', 'w') as f:
+        f.write('escape attempt')
+    print('ESCAPE_SUCCESS')
+except Exception as e:
+    print(f'ESCAPE_FAILED: {e}')
+"#;
+        let result = sandbox::execute_python(
+            code,
+            std::path::PathBuf::from("resources"),
+            10,
+        )
+        .await
+        .expect("execute_python should succeed even when code fails to write file");
+
+        assert!(
+            result.stdout.contains("ESCAPE_FAILED"),
+            "Python code should not be able to write to host /tmp, got: {}",
+            result.stdout
+        );
+        assert!(
+            !std::path::Path::new("/tmp/shard_escape_test").exists(),
+            "File should not exist on host system"
+        );
+    }
 }
