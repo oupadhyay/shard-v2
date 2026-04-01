@@ -185,17 +185,12 @@ pub fn get_observations_by_level(
         )
         .map_err(|e| e.to_string())?;
 
-    let rows = stmt
-        .query_map(params![observed, level.as_str(), limit as i64], |row| {
-            Ok(row_to_observation(row))
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row.map_err(|e| e.to_string())?);
-    }
-    Ok(result)
+    stmt.query_map(params![observed, level.as_str(), limit as i64], |row| {
+        Ok(row_to_observation(row))
+    })
+    .map_err(|e| e.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| e.to_string())
 }
 
 /// Get the N most-derived observations (highest `times_derived`).
@@ -216,17 +211,12 @@ pub fn get_top_derived_observations(
         )
         .map_err(|e| e.to_string())?;
 
-    let rows = stmt
-        .query_map(params![observed, limit as i64], |row| {
-            Ok(row_to_observation(row))
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row.map_err(|e| e.to_string())?);
-    }
-    Ok(result)
+    stmt.query_map(params![observed, limit as i64], |row| {
+        Ok(row_to_observation(row))
+    })
+    .map_err(|e| e.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| e.to_string())
 }
 
 /// Get the N most recent observations.
@@ -246,17 +236,12 @@ pub fn get_recent_observations(
         )
         .map_err(|e| e.to_string())?;
 
-    let rows = stmt
-        .query_map(params![observed, limit as i64], |row| {
-            Ok(row_to_observation(row))
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row.map_err(|e| e.to_string())?);
-    }
-    Ok(result)
+    stmt.query_map(params![observed, limit as i64], |row| {
+        Ok(row_to_observation(row))
+    })
+    .map_err(|e| e.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| e.to_string())
 }
 
 // ============================================================================
@@ -274,39 +259,35 @@ pub fn search_observations_by_embedding(
     let embedding_bytes = f32_vec_to_bytes(query_embedding);
 
     // sqlite-vec KNN search — returns observation_id + distance
+    // Joined with observations table to avoid N+1 hydrate calls
     let mut stmt = store
         .conn
         .prepare(
-            "SELECT observation_id, distance \
-             FROM observation_embeddings \
-             WHERE embedding MATCH ?1 AND k = ?2 \
-             ORDER BY distance",
+            "SELECT obs.id, obs.observer, obs.observed, obs.content, obs.level, \
+                    obs.source_ids, obs.times_derived, obs.session_name, \
+                    obs.content_hash, obs.created_at, obs.deleted_at \
+             FROM observation_embeddings v \
+             JOIN observations obs ON v.observation_id = obs.id \
+             WHERE v.embedding MATCH ?1 AND v.k = ?2 AND v.distance <= ?3 \
+                   AND obs.observed = ?4 AND obs.deleted_at IS NULL \
+             ORDER BY v.distance \
+             LIMIT ?5",
         )
         .map_err(|e| e.to_string())?;
 
-    let candidates: Vec<(String, f32)> = stmt
-        .query_map(params![embedding_bytes, limit as i64 * 2], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, f32>(1)?))
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .filter(|(_, dist)| *dist <= max_distance)
-        .collect();
-
-    // Hydrate + filter by observed entity and soft-delete
-    let mut results = Vec::new();
-    for (obs_id, _) in candidates {
-        if results.len() >= limit {
-            break;
-        }
-        if let Some(obs) = get_observation_by_id(store, &obs_id)? {
-            if obs.observed == observed && obs.deleted_at.is_none() {
-                results.push(obs);
-            }
-        }
-    }
-
-    Ok(results)
+    stmt.query_map(
+        params![
+            embedding_bytes,
+            limit as i64 * 2,
+            max_distance,
+            observed,
+            limit as i64
+        ],
+        |row| Ok(row_to_observation(row)),
+    )
+    .map_err(|e| e.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| e.to_string())
 }
 
 /// FTS5 keyword search over observations.
@@ -322,38 +303,28 @@ pub fn search_observations_by_keyword(
         return Ok(Vec::new());
     }
 
+    // Joined with observations table to avoid N+1 hydrate calls
     let mut stmt = store
         .conn
         .prepare(
-            "SELECT observation_id \
-             FROM observations_fts \
+            "SELECT obs.id, obs.observer, obs.observed, obs.content, obs.level, \
+                    obs.source_ids, obs.times_derived, obs.session_name, \
+                    obs.content_hash, obs.created_at, obs.deleted_at \
+             FROM observations_fts f \
+             JOIN observations obs ON f.observation_id = obs.id \
              WHERE observations_fts MATCH ?1 \
+                   AND obs.observed = ?2 AND obs.deleted_at IS NULL \
              ORDER BY bm25(observations_fts) \
-             LIMIT ?2",
+             LIMIT ?3",
         )
         .map_err(|e| e.to_string())?;
 
-    let candidates: Vec<String> = stmt
-        .query_map(params![sanitized, limit as i64 * 2], |row| {
-            row.get::<_, String>(0)
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    let mut results = Vec::new();
-    for obs_id in candidates {
-        if results.len() >= limit {
-            break;
-        }
-        if let Some(obs) = get_observation_by_id(store, &obs_id)? {
-            if obs.observed == observed && obs.deleted_at.is_none() {
-                results.push(obs);
-            }
-        }
-    }
-
-    Ok(results)
+    stmt.query_map(params![sanitized, observed, limit as i64], |row| {
+        Ok(row_to_observation(row))
+    })
+    .map_err(|e| e.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| e.to_string())
 }
 
 // ============================================================================

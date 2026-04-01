@@ -106,3 +106,7 @@ harness = false
 [[bench]]
 name = "personas_bench"
 harness = false
+
+[[bench]]
+name = "observations_bench"
+harness = false
