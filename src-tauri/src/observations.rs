@@ -268,7 +268,7 @@ pub fn search_observations_by_embedding(
                     obs.content_hash, obs.created_at, obs.deleted_at \
              FROM observation_embeddings v \
              JOIN observations obs ON v.observation_id = obs.id \
-             WHERE v.embedding MATCH ?1 AND v.k = ?2 AND v.distance <= ?3 \
+             WHERE v.embedding MATCH ?1 AND k = ?2 AND v.distance <= ?3 \
                    AND obs.observed = ?4 AND obs.deleted_at IS NULL \
              ORDER BY v.distance \
              LIMIT ?5",
@@ -312,9 +312,9 @@ pub fn search_observations_by_keyword(
                     obs.content_hash, obs.created_at, obs.deleted_at \
              FROM observations_fts f \
              JOIN observations obs ON f.observation_id = obs.id \
-             WHERE observations_fts MATCH ?1 \
+             WHERE f MATCH ?1 \
                    AND obs.observed = ?2 AND obs.deleted_at IS NULL \
-             ORDER BY bm25(observations_fts) \
+             ORDER BY bm25(f) \
              LIMIT ?3",
         )
         .map_err(|e| e.to_string())?;
