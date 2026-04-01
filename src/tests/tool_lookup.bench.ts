@@ -1,7 +1,7 @@
-import { bench, describe } from 'vitest';
+import { bench, describe, expect } from 'vitest';
 
 /**
- * Benchmark: Tool Call Lookup Optimization (PR #34)
+ * Benchmark: Tool Call Lookup Optimization
  *
  * Compares Array.from().reverse().find() vs backward for-loop
  * for matching tool call elements by data attribute — the pattern
@@ -28,6 +28,9 @@ function buildContainer(elements: Element[]): HTMLElement {
   return container;
 }
 
+// Sink to prevent dead-code elimination
+let sink: Element | undefined;
+
 const SIZES = [50, 200, 1000];
 const TARGET_ID = 'target-tool-id';
 
@@ -38,40 +41,42 @@ for (const size of SIZES) {
   describe(`Tool ID lookup (${size} elements)`, () => {
     bench('Array.from().reverse().find()', () => {
       const toolMessages = Array.from(container.querySelectorAll('.tool-output'));
-      const _match = toolMessages
+      sink = toolMessages
         .reverse()
         .find((el) => el.getAttribute('data-tool-id') === TARGET_ID);
+      expect(sink).toBeDefined();
     });
 
-    bench('backward for loop (PR #34)', () => {
+    bench('backward for loop', () => {
       const toolMessages = container.querySelectorAll('.tool-output');
-      let _match: Element | undefined;
       for (let i = toolMessages.length - 1; i >= 0; i--) {
         if (toolMessages[i].getAttribute('data-tool-id') === TARGET_ID) {
-          _match = toolMessages[i];
+          sink = toolMessages[i];
           break;
         }
       }
+      expect(sink).toBeDefined();
     });
   });
 
   describe(`Tool name lookup (${size} elements)`, () => {
     bench('Array.from().reverse().find()', () => {
       const toolMessages = Array.from(container.querySelectorAll('.tool-output'));
-      const _match = toolMessages
+      sink = toolMessages
         .reverse()
         .find((el) => el.getAttribute('data-tool-name') === 'web_search');
+      expect(sink).toBeDefined();
     });
 
-    bench('backward for loop (PR #34)', () => {
+    bench('backward for loop', () => {
       const toolMessages = container.querySelectorAll('.tool-output');
-      let _match: Element | undefined;
       for (let i = toolMessages.length - 1; i >= 0; i--) {
         if (toolMessages[i].getAttribute('data-tool-name') === 'web_search') {
-          _match = toolMessages[i];
+          sink = toolMessages[i];
           break;
         }
       }
+      expect(sink).toBeDefined();
     });
   });
 }

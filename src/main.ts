@@ -1052,7 +1052,7 @@ listen<string>(EVENTS.AGENT_TOOL_RESULT, (event) => {
       const webSearchQueries = chatArea.querySelectorAll(".web-search-query");
       for (let i = webSearchQueries.length - 1; i >= 0; i--) {
         const el = webSearchQueries[i] as HTMLElement;
-        const resultSection = el.querySelector('.tool-result') as HTMLElement;
+        const resultSection = el.querySelector('.tool-result') as HTMLElement | null;
         // Find the one that doesn't have a result yet
         if (resultSection && resultSection.style.display === 'none') {
           matchingQuery = el;
