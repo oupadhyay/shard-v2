@@ -294,18 +294,22 @@ pub fn search_sessions_by_time(
         "yesterday" => {
             let start = now - chrono::Duration::days(1);
             let end = now;
-            conditions.push(format!("s.updated_at >= '{}' AND s.updated_at < '{}'", start.format("%Y-%m-%d"), end.format("%Y-%m-%d")));
+            conditions.push("s.updated_at >= ? AND s.updated_at < ?".to_string());
+            params.push(start.format("%Y-%m-%d").to_string());
+            params.push(end.format("%Y-%m-%d").to_string());
         }
         "last_week" => {
             let start = now - chrono::Duration::days(7);
-            conditions.push(format!("s.updated_at >= '{}'", start.format("%Y-%m-%d")));
+            conditions.push("s.updated_at >= ?".to_string());
+            params.push(start.format("%Y-%m-%d").to_string());
         }
         "last_conversation" => {
             // order by handled by main query
         }
         specific_date => {
             if specific_date.len() == 10 && specific_date.chars().filter(|c| *c == '-').count() == 2 {
-                conditions.push(format!("s.updated_at LIKE '{}%'", specific_date));
+                conditions.push("s.updated_at LIKE ?".to_string());
+                params.push(format!("{}%", specific_date));
             }
         }
     }
@@ -325,18 +329,15 @@ pub fn search_sessions_by_time(
     sql.push_str(" GROUP BY s.id HAVING COUNT(m.id) > 0");
     sql.push_str(" ORDER BY s.updated_at DESC");
     if limit > 0 {
-        sql.push_str(&format!(" LIMIT {}", limit));
+        sql.push_str(" LIMIT ?");
+        params.push(limit.to_string());
     }
 
     let mut stmt = store.conn.prepare(&sql).map_err(|e| e.to_string())?;
 
-    let mut rows = if params.is_empty() {
-        stmt.query([]).map_err(|e| e.to_string())?
-    } else if params.len() == 2 {
-        stmt.query([&params[0], &params[1]]).map_err(|e| e.to_string())?
-    } else {
-        return Err("Unexpected parameter count".to_string());
-    };
+    let mut rows = stmt
+        .query(rusqlite::params_from_iter(params))
+        .map_err(|e| e.to_string())?;
 
     let mut results = Vec::new();
     while let Ok(Some(row)) = rows.next() {
@@ -551,5 +552,23 @@ mod tests {
         assert_eq!(msg.reasoning.as_deref().unwrap(), "This is a test.\nSecond line.");
         assert_eq!(msg.tool_calls.as_ref().unwrap().len(), 1);
         assert_eq!(msg.tool_calls.as_ref().unwrap()[0].function.name, "web_search");
+    }
+
+    #[test]
+    fn test_search_sessions_injection_bypass() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.sqlite");
+        let store = VectorStore::open(&db_path).unwrap();
+
+        // 10 chars, 2 dashes: bypasses the current "defense"
+        let malicious_date = "23-01-' --";
+
+        // This should not crash or return a malformed query error if we were using parameters.
+        // Currently it might or might not depending on how SQLite handles the trailing --%
+        let result = search_sessions_by_time(&store, "", malicious_date, 10);
+
+        // If it was successful (even if it returns no results), it means the query was at least valid.
+        // But the vulnerability is that we are allowing potentially malicious strings into the query.
+        assert!(result.is_ok());
     }
 }
