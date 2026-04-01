@@ -6,6 +6,7 @@ import { formatSessionDate, logger } from '../ui/utils';
 
 describe('logger', () => {
   let consoleSpy: any;
+  let isDevSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     consoleSpy = {
@@ -14,28 +15,26 @@ describe('logger', () => {
       warn: vi.spyOn(console, 'warn').mockImplementation(() => {}),
       error: vi.spyOn(console, 'error').mockImplementation(() => {}),
     };
+    isDevSpy = vi.spyOn(logger, 'isDev');
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.unstubAllGlobals();
   });
 
   it('logs debug and info only in DEV mode', () => {
-    // Mock DEV mode
-    vi.stubGlobal('import.meta', { env: { DEV: true } });
+    isDevSpy.mockReturnValue(true);
 
     logger.debug('debug message');
     logger.info('info message');
     expect(consoleSpy.log).toHaveBeenCalledWith('debug message');
     expect(consoleSpy.info).toHaveBeenCalledWith('info message');
 
-    vi.restoreAllMocks();
     consoleSpy.log.mockClear();
     consoleSpy.info.mockClear();
 
-    // Mock PROD mode
-    vi.stubGlobal('import.meta', { env: { DEV: false } });
+    // Switch to PROD mode
+    isDevSpy.mockReturnValue(false);
     logger.debug('debug message');
     logger.info('info message');
     expect(consoleSpy.log).not.toHaveBeenCalled();
@@ -43,8 +42,7 @@ describe('logger', () => {
   });
 
   it('always logs warn and error', () => {
-    // Mock PROD mode
-    vi.stubGlobal('import.meta', { env: { DEV: false } });
+    isDevSpy.mockReturnValue(false);
 
     logger.warn('warn message');
     logger.error('error message');

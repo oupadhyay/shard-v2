@@ -531,7 +531,7 @@ async function updateButtonStates() {
       trashBtn.innerHTML = TRASH_ICON;
     }
   } catch (error) {
-    console.error("Error updating button states:", error);
+    logger.error("Error updating button states:", error);
   }
 }
 
@@ -1085,7 +1085,7 @@ listen(EVENTS.AGENT_PROCESSING_START, () => {
 // Listen for API errors and display with retry button
 listen<string>(EVENTS.AGENT_ERROR, (event) => {
   const errorText = event.payload;
-  console.error("API Error:", errorText);
+  logger.error("API Error:", errorText);
 
   // Remove loading indicator if present
   const loadingIndicator = chatArea.querySelector("#loading-indicator");

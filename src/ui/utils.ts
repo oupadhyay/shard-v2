@@ -39,22 +39,27 @@ export function formatSessionDate(raw: string, now?: Date): string {
 /**
  * Simple logger utility that only outputs to console in development mode
  * for debug and info levels. Warnings and errors are always shown.
+ *
+ * `isDev` is exposed as a method on `logger` for testability (can be spied on).
  */
 export const logger = {
-  debug: (...args: any[]) => {
-    if ((import.meta as any).env.DEV) {
+  isDev(): boolean {
+    return (import.meta as any).env.DEV;
+  },
+  debug(...args: any[]) {
+    if (this.isDev()) {
       console.log(...args);
     }
   },
-  info: (...args: any[]) => {
-    if ((import.meta as any).env.DEV) {
+  info(...args: any[]) {
+    if (this.isDev()) {
       console.info(...args);
     }
   },
-  warn: (...args: any[]) => {
+  warn(...args: any[]) {
     console.warn(...args);
   },
-  error: (...args: any[]) => {
+  error(...args: any[]) {
     console.error(...args);
   },
 };

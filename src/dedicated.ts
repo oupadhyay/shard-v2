@@ -82,7 +82,7 @@ async function returnToAmbient() {
   try {
     await invoke("close_dedicated_window");
   } catch (e) {
-    console.error("Failed to return to ambient:", e);
+    logger.error("Failed to return to ambient:", e);
     isClosing = false; // allow retry on error
   }
 }
@@ -105,7 +105,7 @@ document.addEventListener("click", (e) => {
   const anchor = target.closest("a");
   if (anchor?.href && (anchor.href.startsWith("http://") || anchor.href.startsWith("https://"))) {
     e.preventDefault();
-    openUrl(anchor.href).catch(console.error);
+    openUrl(anchor.href).catch((e: any) => logger.error(e));
   }
 });
 
@@ -158,7 +158,7 @@ async function handleInput(skipUi = false) {
 
     await invoke("chat", payload);
   } catch (error) {
-    console.error("Chat error:", error);
+    logger.error("Chat error:", error);
   } finally {
     state.isProcessing = false;
     stopBtn.classList.remove("loading");
@@ -179,7 +179,7 @@ async function handleInput(skipUi = false) {
       const allErrors = [...parseErrors, ...unrenderedErrors];
       if (allErrors.length > 0) {
         try { await invoke("retry_with_katex_hint", { katexErrors: allErrors }); }
-        catch (e) { console.error("[KaTeX] Retry failed:", e); }
+        catch (e) { logger.error("[KaTeX] Retry failed:", e); }
       }
     }
 
@@ -205,7 +205,7 @@ stopBtn?.addEventListener("click", async () => {
   if (stopBtn.dataset.mode === "resend") {
     state.attachedImages = [...state.lastAttachedImages];
     inputField.value = state.lastUserMessage;
-    try { await invoke("rewind_history"); } catch (e) { console.error(e); }
+    try { await invoke("rewind_history"); } catch (e) { logger.error(e); }
     handleInput(true);
     return;
   }
@@ -216,7 +216,7 @@ stopBtn?.addEventListener("click", async () => {
     stopBtn.classList.remove("loading");
     stopBtn.innerHTML = RESEND_ICON;
     stopBtn.dataset.mode = "resend";
-  } catch (e) { console.error(e); }
+  } catch (e) { logger.error(e); }
 });
 
 // ── OCR ───────────────────────────────────────────────────────────────────────
@@ -240,7 +240,7 @@ ocrBtn?.addEventListener("click", async () => {
         .catch(() => { newImage.ocrText = "[OCR failed]"; });
       inputField.focus();
     }
-  } catch (e) { console.error("OCR error:", e); }
+  } catch (e) { logger.error("OCR error:", e); }
 });
 
 function showImagePreview(imageData: AttachedImage) {
@@ -361,7 +361,7 @@ async function populateSettings() {
     updateToolAvailability();
     checkProviderConflict();
   } catch (e) {
-    console.error("Settings load error:", e);
+    logger.error("Settings load error:", e);
   }
 }
 
@@ -488,7 +488,7 @@ function renderSessions(sessions: SessionEntry[]) {
           // Reload sidebar list after state is updated
           await loadSessions();
         } catch (err) {
-          console.error("Failed to delete session:", err);
+          logger.error("Failed to delete session:", err);
         }
       });
 
@@ -518,13 +518,13 @@ async function loadSessions() {
       try {
         allSessions = JSON.parse(raw) as SessionEntry[];
       } catch (err) {
-        console.error("Mismatched or invalid session JSON:", err);
+        logger.error("Mismatched or invalid session JSON:", err);
         allSessions = [];
       }
     }
     renderSessions(allSessions);
   } catch (e) {
-    console.error("Failed to load sessions:", e);
+    logger.error("Failed to load sessions:", e);
   }
 }
 
@@ -541,7 +541,7 @@ async function loadSession(sessionId: string) {
       el.classList.toggle("active", elId === sessionId);
     });
   } catch (e) {
-    console.error("Failed to load session:", e);
+    logger.error("Failed to load session:", e);
   }
 }
 
@@ -565,12 +565,12 @@ newChatBtn?.addEventListener("click", async () => {
     // Pre-fetch immediately to show the "Active Session" stub, but real summary update
     // will arrive via `sessions-updated` event shortly after.
     await loadSessions();
-  } catch (e) { console.error(e); }
+  } catch (e) { logger.error(e); }
 });
 
 // Listen for background session analysis completion
 listen(EVENTS.SESSIONS_UPDATED, () => {
-  loadSessions().catch(e => console.error("Failed to reload sessions after update:", e));
+  loadSessions().catch(e => logger.error("Failed to reload sessions after update:", e));
 });
 
 // ── Load Chat History ─────────────────────────────────────────────────────────
@@ -623,7 +623,7 @@ async function loadChatHistory() {
     chatArea.scrollTop = chatArea.scrollHeight;
     updateNewChatButtonState();
   } catch (e) {
-    console.error("Failed to load chat history:", e);
+    logger.error("Failed to load chat history:", e);
     if (fragment.hasChildNodes()) chatArea.appendChild(fragment);
   }
 }
@@ -797,7 +797,7 @@ listen<string>(EVENTS.AGENT_RETRY, (event) => {
 
     chatArea.scrollTop = chatArea.scrollHeight;
   } catch (e) {
-    console.error("[Agent Retry] Failed to parse retry event:", e);
+    logger.error("[Agent Retry] Failed to parse retry event:", e);
   }
 });
 
@@ -809,14 +809,14 @@ listen<string>(EVENTS.AGENT_RETRY_EXHAUSTED, (event) => {
     const loadingIndicator = chatArea.querySelector("#loading-indicator");
     if (loadingIndicator) loadingIndicator.remove();
   } catch (e) {
-    console.error("[Agent Retry] Failed to parse exhausted event:", e);
+    logger.error("[Agent Retry] Failed to parse exhausted event:", e);
   }
 });
 
 // Listen for API errors and display with retry button
 listen<string>(EVENTS.AGENT_ERROR, (event) => {
   const errorText = event.payload;
-  console.error("API Error:", errorText);
+  logger.error("API Error:", errorText);
 
   // Create error message with accordion and retry button below
   const errorDiv = document.createElement("div");
@@ -856,28 +856,28 @@ async function init() {
     state.currentSessionId = await invoke<string>("get_current_session_id");
     logger.info("[Init] Current session ID synced:", state.currentSessionId);
   } catch (e) {
-    console.error("[Init] Failed to sync session ID:", e);
+    logger.error("[Init] Failed to sync session ID:", e);
   }
 
   // 2. Load chat history (uses the synced ID internally too, but safe)
   try {
     await loadChatHistory();
   } catch (e) {
-    console.error("[Init] Failed to load chat history:", e);
+    logger.error("[Init] Failed to load chat history:", e);
   }
 
   // 3. Load and render sessions (will highlight active one correctly)
   try {
     await loadSessions();
   } catch (e) {
-    console.error("[Init] Failed to load sessions:", e);
+    logger.error("[Init] Failed to load sessions:", e);
   }
 
   // 4. Populate settings (models, keys, etc.)
   try {
     await populateSettings();
   } catch (e) {
-    console.error("[Init] Failed to populate settings:", e);
+    logger.error("[Init] Failed to populate settings:", e);
   }
 
   updateNewChatButtonState();
