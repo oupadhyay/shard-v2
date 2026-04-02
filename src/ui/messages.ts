@@ -6,6 +6,7 @@ import { md, preprocessMarkdown } from "./markdown";
 import { COPY_ICON, CHECK_ICON, CROSS_ICON } from "./icons";
 import type { ImageAttachment, ProactiveMessage } from "../types";
 import { invoke } from "@tauri-apps/api/core";
+import { logger } from "./utils";
 
 // Track the current web search container for grouping
 let currentWebSearchContainer: HTMLElement | null = null;
@@ -429,7 +430,7 @@ function copyToClipboard(text: string, button: HTMLElement) {
       button.classList.remove("copied");
     }, 1500);
   }).catch((err) => {
-    console.error("Failed to copy:", err);
+    logger.error("Failed to copy:", err);
   });
 }
 
@@ -561,7 +562,7 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
         msgDiv.style.transform = "scale(0.98)";
         setTimeout(() => msgDiv.remove(), 200);
       } catch (e) {
-        console.error("Failed to mark as read:", e);
+        logger.error("Failed to mark as read:", e);
       }
     });
     headerDiv.appendChild(dismissBtn);
@@ -618,7 +619,7 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
         await invoke("approve_draft", { messageId: msg.id });
         actionsDiv.innerHTML = `<div class="proactive-status">${CHECK_ICON} Approved</div>`;
       } catch (e) {
-        console.error("Failed to approve:", e);
+        logger.error("Failed to approve:", e);
         approveBtn.disabled = false;
         rejectBtn.disabled = false;
       }
@@ -631,7 +632,7 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
         await invoke("reject_draft", { messageId: msg.id });
         actionsDiv.innerHTML = `<div class="proactive-status" style="color: #f87171;">${CROSS_ICON} Rejected</div>`;
       } catch (e) {
-        console.error("Failed to reject:", e);
+        logger.error("Failed to reject:", e);
         approveBtn.disabled = false;
         rejectBtn.disabled = false;
       }
