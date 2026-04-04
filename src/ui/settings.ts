@@ -1,5 +1,6 @@
 import type { ModelInfo, HeartbeatStatusInfo } from "../types";
 import { invoke } from "@tauri-apps/api/core";
+import { logger } from "./utils";
 /**
  * Settings modal UI component
  */
@@ -233,7 +234,7 @@ export async function populateHeartbeatsPanel(settingsModal: HTMLElement) {
     }
   } catch (e) {
     listEl.innerHTML = `<div class="heartbeat-empty">Failed to load heartbeats.</div>`;
-    console.error("Failed to load heartbeat status:", e);
+    logger.error("Failed to load heartbeat status:", e);
   }
 }
 

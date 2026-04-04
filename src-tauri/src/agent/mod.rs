@@ -150,9 +150,8 @@ impl Agent {
                 }
 
                 log::info!(
-                    "Loaded {} messages from SQLite for session {}",
+                    "Loaded {} messages from SQLite for session [redacted]",
                     history.len(),
-                    session_id
                 );
             } else {
                 let now = chrono::Utc::now().to_rfc3339();
