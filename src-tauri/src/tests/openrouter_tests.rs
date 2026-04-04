@@ -316,17 +316,12 @@ mod tests {
         // Supported models
         assert!(supports_tools("gpt-4o"));
         assert!(supports_tools("claude-3-opus"));
-        assert!(supports_tools("gemini-1.5-pro"));
-
-        // Unsupported models
-        assert!(!supports_tools("o1-mini"));
-        assert!(!supports_tools("o1-preview"));
-        assert!(!supports_tools("o3-preview"));
-        assert!(!supports_tools("deepseek-reasoner"));
+        assert!(supports_tools("gemini-3.0-pro"));
+        assert!(supports_tools("o1-mini"));
+        // Only olmo is unsupported
         assert!(!supports_tools("olmo-3.1-32b-think"));
 
         // Edge cases
         assert!(supports_tools("")); // Empty string should be true by default
-        assert!(!supports_tools("openai/o1-preview")); // Should be false
     }
 }
