@@ -728,16 +728,19 @@ pub fn run() {
             let app_handle_for_chunks = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 // Check if chunk index exists in VectorStore
-                let has_chunks = memories::get_vector_store(&app_handle_for_chunks)
+                let chunk_count = memories::get_vector_store(&app_handle_for_chunks)
                     .and_then(|store| store.chunk_count())
-                    .map(|count| count > 0)
-                    .unwrap_or(false);
+                    .unwrap_or(0);
 
-                if has_chunks {
+                if chunk_count > 0 {
+                    log::info!(
+                        "[Startup] Existing chunk index found with {} chunks; skipping auto-rebuild",
+                        chunk_count
+                    );
                     return;
                 }
 
-                // Chunk index missing or empty - check if topics/insights exist
+                // Chunk index missing or empty - attempt auto-rebuild if config is available
                 if let Ok(config) = config::load_config(&app_handle_for_chunks) {
                     auto_rebuild_chunk_index(app_handle_for_chunks, config).await;
                 }
