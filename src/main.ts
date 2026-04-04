@@ -5,7 +5,7 @@ import DOMPurify from "dompurify";
 import "katex/dist/katex.min.css";
 
 // Internal modules
-import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, ModelsResponse } from "./types";
+import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, ModelsResponse, ImageAttachment } from "./types";
 import { type SessionSummary, renderSessionItem } from "./ui/sessions";
 import { ChatState } from "./state";
 import { EVENTS } from "./events";
@@ -85,95 +85,120 @@ document.addEventListener("click", (e) => {
 });
 
 
+/**
+ * Prepares the payload for the chat API, including text and images.
+ */
+function prepareChatPayload(text: string, images: (AttachedImage | ImageAttachment)[]): ChatMessagePayload {
+  const payload: ChatMessagePayload = { message: text };
+  if (images.length > 0) {
+    payload.imagesBase64 = images.map((img) => img.base64);
+    payload.imagesMimeTypes = images.map((img) => img.mimeType);
+  }
+  return payload;
+}
+
+/**
+ * Sends the chat message payload to the backend.
+ */
+async function sendChatMessage(payload: ChatMessagePayload) {
+  logger.info("Sending payload to backend:", {
+    message: payload.message,
+    hasImage: !!payload.imagesBase64,
+    imageLen: payload.imagesBase64?.length,
+    mime: payload.imagesMimeTypes,
+  });
+  await invoke("chat", payload);
+}
+
+/**
+ * Checks the quality of the assistant's response (e.g., KaTeX errors)
+ * and triggers an automatic retry if necessary.
+ */
+async function checkResponseQuality() {
+  if (state.isCancelled) return;
+
+  const parseErrors = getKatexErrors();
+
+  // Find the last assistant message by iterating from the end
+  const allMessages = chatArea.querySelectorAll('.message.assistant:not(.tool-output):not(.thinking-output)');
+  const lastAssistant = allMessages.length > 0 ? allMessages[allMessages.length - 1] : null;
+  const responseText = lastAssistant?.getAttribute('data-raw') || '';
+
+  logger.debug("[KaTeX Check] Raw response text:", responseText.slice(0, 200));
+  const unrenderedErrors = detectUnrenderedLatex(responseText);
+
+  const allErrors = [...parseErrors, ...unrenderedErrors];
+
+  if (allErrors.length > 0) {
+    logger.info("[KaTeX] Detected rendering issues, requesting retry:", allErrors);
+    try {
+      await invoke("retry_with_katex_hint", { katexErrors: allErrors });
+    } catch (e) {
+      logger.error("[KaTeX] Retry request failed:", e);
+    }
+  }
+}
+
 // Helper: Handle Input
 async function handleInput(skipUi = false) {
   const text = inputField.value.trim();
   if ((!text && !skipUi) || state.isProcessing) return;
 
-  // Reset per-turn state
+  // 1. Reset per-turn state
   state.resetForNewTurn();
+  state.isCancelled = false;
 
-  // If skipping UI, we use the text passed in or the input value (which should be set by caller)
-  // But actually, if skipUi is true, we expect the caller to have set inputField.value.
-  // Let's stick to the plan: caller sets inputField.value.
+  // 2. Capture images for API call BEFORE clearing
+  const currentImages = [...state.attachedImages];
 
   if (!skipUi) {
     state.lastUserMessage = text;
-    state.isCancelled = false;
+    state.lastAttachedImages = currentImages; // Save for resend
 
-    // Capture current images state before clearing it
-    const currentImages = [...state.attachedImages];
-    state.lastAttachedImages = [...state.attachedImages]; // Save for resend
-
-    inputField.value = "";
-    inputField.style.height = "auto"; // Reset height
-    // Pass all images for display
+    // Update UI
     addMessage(chatArea, "user", text, currentImages);
+    inputField.value = "";
+    inputField.style.height = "auto";
 
-    // Clear image preview immediately to prevent duplication
+    // Clear attachment previews
     state.attachedImages = [];
     const container = document.getElementById("image-preview-container");
     if (container) container.innerHTML = "";
   } else {
-    // Resending: reset cancelled state
-    state.isCancelled = false;
-    // We don't clear inputField here because we assume it was set for the logic but we don't want to clear it if it wasn't used?
-    // Actually, handleInput clears it.
+    // Resending: attachedImages were restored by caller, text is already in inputField
     inputField.value = "";
-    inputField.style.height = "auto"; // Reset height
+    inputField.style.height = "auto";
   }
 
+  // Use the captured images
+  const finalImages = skipUi ? currentImages : state.lastAttachedImages;
+
+  // 3. Prepare UI for response
   state.isProcessing = true;
-
-  // Capture images for API call BEFORE any clearing.
-  // Normal sends: use lastAttachedImages (snapshot taken above before clearing).
-  // Resends (skipUi): attachedImages was restored by the caller.
-  const imagesToSend = skipUi ? [...state.attachedImages] : [...state.lastAttachedImages];
-
-  // Reset web search container for new response
   resetWebSearchContainer();
-
-  // Clear KaTeX errors for new response (for auto-retry tracking)
   clearKatexErrors();
 
-  // Reset stop button to stop mode
   stopBtn.style.display = "inline-flex";
   stopBtn.classList.add("loading");
-  stopBtn.innerHTML = STOP_ICON; // Ensure it shows stop icon
+  stopBtn.innerHTML = STOP_ICON;
   stopBtn.dataset.mode = "stop";
 
   try {
-    // Always send image binary data to backend — provider routing happens server-side
-    const messagePayload: ChatMessagePayload = { message: skipUi ? state.lastUserMessage : text };
-
-    if (imagesToSend.length > 0) {
-      messagePayload.imagesBase64 = imagesToSend.map((img) => img.base64);
-      messagePayload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
-    }
-
-    logger.info("Sending payload to backend:", {
-      message: messagePayload.message,
-      hasImage: !!messagePayload.imagesBase64,
-      imageLen: messagePayload.imagesBase64?.length,
-      mime: messagePayload.imagesMimeTypes,
-    });
-    await invoke("chat", messagePayload);
-    // Note: The actual response handling might need to be event-based if streaming
-    // For now, assuming the command returns when done or we listen for events.
-    // If `chat` returns void, we need to listen for "agent-response" events.
+    // 4. Execute Chat
+    const payload = prepareChatPayload(skipUi ? state.lastUserMessage : text, finalImages);
+    await sendChatMessage(payload);
   } catch (error) {
-    // API errors are handled by agent-error event listener
-    // This catch handles network/Tauri invoke errors only
     logger.error("Chat error:", error);
   } finally {
+    // 5. Post-process
     state.isProcessing = false;
-    stopBtn.classList.remove("loading"); // Remove loading state
+    stopBtn.classList.remove("loading");
 
     if (!state.isCancelled) {
-      stopBtn.style.display = "none"; // Hide Stop button only if NOT cancelled
+      stopBtn.style.display = "none";
     }
 
-    // Ensure any open thinking blocks are marked complete
+    // Mark thinking complete
     const openThinking = chatArea.querySelector('.thinking-output:not([data-complete="true"])');
     if (openThinking) {
       openThinking.setAttribute("data-complete", "true");
@@ -181,29 +206,8 @@ async function handleInput(skipUi = false) {
       if (summary) summary.textContent = "Thought";
     }
 
-    // Check for KaTeX errors (parse errors + unrendered LaTeX) and trigger retry if needed
-    if (!state.isCancelled) {
-      const parseErrors = getKatexErrors();
-
-      // Find the last assistant message by iterating from the end
-      const allMessages = chatArea.querySelectorAll('.message.assistant:not(.tool-output):not(.thinking-output)');
-      const lastAssistant = allMessages.length > 0 ? allMessages[allMessages.length - 1] : null;
-      const responseText = lastAssistant?.getAttribute('data-raw') || '';
-
-      logger.debug("[KaTeX Check] Raw response text:", responseText.slice(0, 200));
-      const unrenderedErrors = detectUnrenderedLatex(responseText);
-
-      const allErrors = [...parseErrors, ...unrenderedErrors];
-
-      if (allErrors.length > 0) {
-        logger.info("[KaTeX] Detected rendering issues, requesting retry:", allErrors);
-        try {
-          await invoke("retry_with_katex_hint", { katexErrors: allErrors });
-        } catch (e) {
-          logger.error("[KaTeX] Retry request failed:", e);
-        }
-      }
-    }
+    // Quality check (KaTeX errors)
+    await checkResponseQuality();
   }
 
   // Update button states after message
