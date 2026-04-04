@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -666,6 +666,22 @@ async fn capture_screen_context(
     Ok(context)
 }
 
+/// Helper function to trigger chunk index rebuild if needed during startup
+async fn auto_rebuild_chunk_index<R: Runtime>(app_handle: AppHandle<R>, config: config::AppConfig) {
+    let api_key = match config.gemini_api_key {
+        Some(key) => key,
+        None => return,
+    };
+
+    let http_client = reqwest::Client::new();
+    log::info!("[Startup] Chunk index missing, triggering auto-rebuild...");
+
+    match memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await {
+        Ok(count) => log::info!("[Startup] Auto-rebuilt chunk index with {} chunks", count),
+        Err(e) => log::warn!("[Startup] Failed to auto-rebuild chunk index: {}", e),
+    }
+}
+
 // --- Main Run Function ---
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -718,36 +734,21 @@ pub fn run() {
             let app_handle_for_chunks = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 // Check if chunk index exists in VectorStore
-                if let Ok(store) = memories::get_vector_store(&app_handle_for_chunks) {
-                    if let Ok(count) = store.chunk_count() {
-                        if count > 0 {
-                            log::info!("[Startup] Vector store found with {} chunks", count);
-                            return;
-                        }
-                    }
+                let chunk_count = memories::get_vector_store(&app_handle_for_chunks)
+                    .and_then(|store| store.chunk_count())
+                    .unwrap_or(0);
+
+                if chunk_count > 0 {
+                    log::info!(
+                        "[Startup] Existing chunk index found with {} chunks; skipping auto-rebuild",
+                        chunk_count
+                    );
+                    return;
                 }
 
-                // Chunk index missing or empty - check if topics/insights exist
+                // Chunk index missing or empty - attempt auto-rebuild if config is available
                 if let Ok(config) = config::load_config(&app_handle_for_chunks) {
-                    if let Some(api_key) = config.gemini_api_key {
-                        let http_client = reqwest::Client::new();
-                        log::info!("[Startup] Chunk index missing, triggering auto-rebuild...");
-                        match memories::rebuild_chunk_index(
-                            &app_handle_for_chunks,
-                            &http_client,
-                            &api_key,
-                        )
-                        .await
-                        {
-                            Ok(count) => log::info!(
-                                "[Startup] Auto-rebuilt chunk index with {} chunks",
-                                count
-                            ),
-                            Err(e) => {
-                                log::warn!("[Startup] Failed to auto-rebuild chunk index: {}", e)
-                            }
-                        }
-                    }
+                    auto_rebuild_chunk_index(app_handle_for_chunks, config).await;
                 }
             });
 
