@@ -292,37 +292,8 @@ fn load_topic_index<R: Runtime>(app_handle: &AppHandle<R>) -> Result<TopicIndex,
     match serde_json::from_str::<TopicIndex>(&content) {
         Ok(index) => Ok(index),
         Err(_) => {
-            // Backward-compat path: try to interpret the file as the old format.
-            // Old format could be either:
-            //   1. { "topics": { "topic_a": [...], "topic_b": [...] } } (wrapped)
-            //   2. { "topic_a": [...], "topic_b": [...] } (flat map)
-            let old_format: Result<HashMap<String, serde_json::Value>, _> =
-                serde_json::from_str(&content);
-
-            match old_format {
-                Ok(map) => {
-                    // Check if this is the wrapped format { "topics": { ... } }
-                    if map.len() == 1 && map.contains_key("topics") {
-                        if let Some(serde_json::Value::Object(inner)) = map.get("topics") {
-                            log::info!(
-                                "[Memories] Migrated topic index from wrapped legacy format"
-                            );
-                            let topics = inner.keys().cloned().collect();
-                            return Ok(TopicIndex { topics });
-                        }
-                    }
-                    // Otherwise, treat top-level keys as topic names (flat format)
-                    log::info!("[Memories] Migrated topic index from flat legacy format");
-                    let topics = map.keys().cloned().collect();
-                    Ok(TopicIndex { topics })
-                }
-                Err(_) => {
-                    // If we cannot parse the index in either format, treat it as invalid
-                    // and reset to an empty index, allowing the file to be rebuilt.
-                    log::warn!("[Memories] Failed to parse topic index, resetting to default");
-                    Ok(TopicIndex::default())
-                }
-            }
+            log::warn!("[Memories] Failed to parse topic index, resetting to default");
+            Ok(TopicIndex::default())
         }
     }
 }
@@ -1442,6 +1413,53 @@ pub fn read_memory_file_lines<R: Runtime>(
     );
 
     Ok(format!("{}{}", header, selected.join("\n")))
+}
+
+/// One-time migration: convert MEMORIES.json entries into Explicit observations.
+/// Deduplicates by content hash — safe to call multiple times.
+/// Returns the number of new observations created.
+pub fn migrate_memories_to_observations<R: Runtime>(app_handle: &AppHandle<R>) -> Result<usize, String> {
+    let store_data = load_memories_from_disk(app_handle)?;
+    if store_data.memories.is_empty() {
+        return Ok(0);
+    }
+
+    let vector_store = get_vector_store(app_handle)?;
+    let mut created = 0usize;
+
+    for memory in &store_data.memories {
+        let hash = crate::vector_store::compute_content_hash(&memory.content);
+        let exists: bool = vector_store.conn
+            .query_row(
+                "SELECT COUNT(*) FROM observations WHERE content_hash = ? AND deleted_at IS NULL",
+                [&hash], |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0) > 0;
+
+        if exists {
+            continue;
+        }
+
+        let obs = crate::observations::make_observation(
+            &memory.content,
+            crate::observations::ObservationLevel::Explicit,
+            vec![],
+            None,
+        );
+
+        match crate::observations::insert_observation(&vector_store, &obs, None) {
+            Ok(()) => {
+                log::info!("[Migration] Migrated memory to observation: {}", &memory.content);
+                created += 1;
+            }
+            Err(e) => {
+                log::warn!("[Migration] Failed to migrate memory: {}", e);
+            }
+        }
+    }
+
+    log::info!("[Migration] Migrated {} memories to observations", created);
+    Ok(created)
 }
 
 #[cfg(test)]

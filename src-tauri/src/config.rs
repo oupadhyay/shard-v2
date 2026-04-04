@@ -5,14 +5,6 @@ use tauri::{AppHandle, Manager, Runtime};
 
 const CONFIG_FILENAME: &str = "config.toml";
 
-/// DEPRECATED: Legacy cron job config. Kept only for backward-compatible deserialization
-/// during one-time migration to heartbeat specs. Will be removed in a future version.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct LegacyCronJob {
-    pub schedule: String,
-    pub prompt: String,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppConfig {
     // API keys - stored in OS keyring at runtime, but serializable to frontend
@@ -52,9 +44,6 @@ pub struct AppConfig {
     // Fallback model for quota errors
     #[serde(default)]
     pub fallback_model: Option<String>, // Default: openai/gpt-oss-120b:free
-    // DEPRECATED: Legacy cron jobs — migrated to heartbeat specs on first load, then cleared.
-    #[serde(default)]
-    pub cron_jobs: Option<Vec<LegacyCronJob>>,
     // Heartbeat engine configuration
     #[serde(default)]
     pub heartbeat_global_cooldown_secs: Option<u64>, // Default: 60
@@ -187,7 +176,6 @@ impl Default for AppConfig {
             compaction_preserve_turns: Some(5),
             // Fallback model for quota errors
             fallback_model: Some("openai/gpt-oss-120b:free".to_string()),
-            cron_jobs: None, // DEPRECATED
             heartbeat_global_cooldown_secs: Some(60),
         }
     }
@@ -203,13 +191,6 @@ pub fn get_config_path<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf,
 
 pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, String> {
     use crate::secrets::{self, ApiKeyType};
-    use std::sync::OnceLock;
-
-    // Migrate old separate keychain entries to consolidated format.
-    // OnceLock ensures this only runs on the first call per process lifetime,
-    // regardless of how many times load_config is called.
-    static MIGRATION_DONE: OnceLock<()> = OnceLock::new();
-    MIGRATION_DONE.get_or_init(|| secrets::migrate_legacy_entries());
 
     let config_path = get_config_path(app_handle)?;
     let mut loaded = if !config_path.exists() {
@@ -221,44 +202,6 @@ pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, S
             .map_err(|e| format!("Failed to parse config file: {}", e))?
     };
 
-    // Migrate any TOML-resident keys to keyring (one-time operation for upgrading users).
-    // Uses a second OnceLock so this also only happens once per process.
-    static TOML_MIGRATION_DONE: OnceLock<()> = OnceLock::new();
-    let mut needs_resave = false;
-    TOML_MIGRATION_DONE.get_or_init(|| {
-        use std::collections::HashMap;
-        let mut updates = HashMap::new();
-
-        let migrations = [
-            (&loaded.api_key, ApiKeyType::OpenAI),
-            (&loaded.gemini_api_key, ApiKeyType::Gemini),
-            (&loaded.openrouter_api_key, ApiKeyType::OpenRouter),
-            (&loaded.cerebras_api_key, ApiKeyType::Cerebras),
-            (&loaded.brave_api_key, ApiKeyType::Brave),
-            (&loaded.groq_api_key, ApiKeyType::Groq),
-        ];
-
-        for (toml_key, key_type) in migrations {
-            if let Some(key) = toml_key {
-                if !key.is_empty() {
-                    // Only migrate if keyring doesn't already have this key
-                    if secrets::get_secret(key_type).unwrap_or(None).is_none() {
-                        updates.insert(key_type, Some(key.clone()));
-                    }
-                    needs_resave = true;
-                }
-            }
-        }
-
-        if !updates.is_empty() {
-            if let Err(e) = secrets::store_secrets_batch(updates) {
-                log::warn!("[Config] Failed to migrate keys from TOML: {}", e);
-            } else {
-                log::info!("[Config] Successfully migrated keys from TOML to keyring");
-            }
-        }
-    });
-
     // Load all keys from keyring with a single cache-backed call.
     // secrets::get_all_secrets() reads the keychain at most once per process;
     // all subsequent calls serve from the in-memory cache.
@@ -269,13 +212,6 @@ pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, S
     loaded.cerebras_api_key = all_keys.get(ApiKeyType::Cerebras.key_name()).cloned();
     loaded.brave_api_key = all_keys.get(ApiKeyType::Brave.key_name()).cloned();
     loaded.groq_api_key = all_keys.get(ApiKeyType::Groq.key_name()).cloned();
-
-    // Re-save to remove migrated keys from TOML file
-    if needs_resave {
-        if let Err(e) = save_config_internal(&config_path, &loaded) {
-            log::warn!("[Config] Failed to clean TOML after migration: {}", e);
-        }
-    }
 
     // Merge with defaults for optional fields
     let defaults = AppConfig::default();
@@ -291,33 +227,6 @@ pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, S
     if loaded.heartbeat_global_cooldown_secs.is_none() {
         loaded.heartbeat_global_cooldown_secs = defaults.heartbeat_global_cooldown_secs;
     }
-
-    // Migrate legacy cron_jobs to heartbeat specs (one-time operation)
-    static CRON_MIGRATION_DONE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    CRON_MIGRATION_DONE.get_or_init(|| {
-        if let Some(cron_jobs) = &loaded.cron_jobs {
-            if !cron_jobs.is_empty() {
-                match crate::heartbeat::migrate_cron_jobs_to_heartbeats(app_handle, cron_jobs) {
-                    Ok(n) if n > 0 => {
-                        log::info!("[Config] Migrated {} cron jobs to heartbeat specs", n);
-                        // Clear cron_jobs from disk
-                        let mut cleared = loaded.clone();
-                        cleared.cron_jobs = None;
-                        if let Ok(path) = get_config_path(app_handle) {
-                            if let Err(e) = save_config_internal(&path, &cleared) {
-                                log::warn!("[Config] Failed to clear cron_jobs after migration: {}", e);
-                            }
-                        }
-                    }
-                    Ok(_) => {} // No new migrations needed
-                    Err(e) => log::warn!("[Config] Cron-to-heartbeat migration failed: {}", e),
-                }
-            }
-        }
-    });
-
-    // Clear stale cron_jobs from the returned config (already migrated or empty)
-    loaded.cron_jobs = None;
 
     Ok(loaded)
 }
@@ -522,24 +431,4 @@ mod tests {
         assert!(err.contains("OpenRouter"));
     }
 
-    #[test]
-    fn test_cron_jobs_deserialization() {
-        let toml_str = r#"
-            [[cron_jobs]]
-            schedule = "1/10 * * * * *"
-            prompt = "Test cron job 1"
-
-            [[cron_jobs]]
-            schedule = "0 30 8 * * *"
-            prompt = "Test cron job 2"
-        "#;
-
-        let config: AppConfig = toml::from_str(toml_str).unwrap();
-        let jobs = config.cron_jobs.unwrap();
-        assert_eq!(jobs.len(), 2);
-        assert_eq!(jobs[0].schedule, "1/10 * * * * *");
-        assert_eq!(jobs[0].prompt, "Test cron job 1");
-        assert_eq!(jobs[1].schedule, "0 30 8 * * *");
-        assert_eq!(jobs[1].prompt, "Test cron job 2");
-    }
 }

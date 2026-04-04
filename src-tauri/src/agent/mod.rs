@@ -5,7 +5,10 @@ mod gemini;
 pub(crate) mod openrouter;
 mod types;
 
-pub use gemini::{construct_gemini_messages, parse_gemini_chunk, AgentEvent};
+pub use gemini::{
+    construct_gemini_messages, construct_interactions_input, parse_gemini_chunk,
+    parse_interactions_sse_line, process_interactions_event, AgentEvent,
+};
 pub use openrouter::{has_images, supports_tools, to_multimodal_messages};
 pub use types::*;
 
@@ -20,6 +23,67 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::Mutex;
+
+/// Normalize a JSON Schema Value so it is compatible with Gemini's proto-backed
+/// function declaration schema.
+///
+/// Gemini's API uses a proto3 Schema message where `type` is a scalar enum field.
+/// OpenAI's JSON Schema extension allows `"type": ["X", "null"]` to represent
+/// nullable types, but proto3 scalars cannot start a JSON array — Gemini rejects
+/// the request with "Proto field is not repeating, cannot start list."
+///
+/// This function recursively:
+/// 1. Collapses `"type": ["X", "null"]` → `"type": "X"` (picks the non-null type).
+/// 2. Removes OpenAI-only fields (`additionalProperties`, `strict`) that Gemini
+///    does not recognize and would cause unknown-field errors.
+pub(crate) fn normalize_gemini_schema(schema: &mut Value) {
+    let obj = match schema.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+
+    // 1. Strip OpenAI-only top-level fields.
+    obj.remove("additionalProperties");
+    obj.remove("strict");
+
+    // 2. Collapse `"type": ["primary", "null"]` → `"type": "primary"`.
+    if let Some(type_val) = obj.get("type") {
+        if let Some(arr) = type_val.as_array() {
+            // Pick the first non-"null" element as the canonical type.
+            let primary = arr
+                .iter()
+                .find(|v| v.as_str().map_or(true, |s| s != "null"))
+                .or_else(|| arr.first())
+                .cloned();
+            if let Some(canonical) = primary {
+                obj.insert("type".to_string(), canonical);
+            }
+        }
+    }
+
+    // 3. Recurse into nested schemas (properties values, items, etc.).
+    let keys: Vec<String> = obj.keys().cloned().collect();
+    for key in keys {
+        if let Some(child) = obj.get_mut(&key) {
+            if key == "properties" {
+                // properties is an object whose values are sub-schemas.
+                if let Some(props) = child.as_object_mut() {
+                    for prop_schema in props.values_mut() {
+                        normalize_gemini_schema(prop_schema);
+                    }
+                }
+            } else if matches!(key.as_str(), "items" | "additionalItems" | "not") {
+                normalize_gemini_schema(child);
+            } else if matches!(key.as_str(), "allOf" | "anyOf" | "oneOf") {
+                if let Some(arr) = child.as_array_mut() {
+                    for sub in arr.iter_mut() {
+                        normalize_gemini_schema(sub);
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// The main AI Agent managing chat history and API interactions
 pub struct Agent {
@@ -85,29 +149,9 @@ impl Agent {
                     }
                 }
 
-                // Dynamic fallback for legacy markdown migrations
-                if history.len() == 1 {
-                    let first_msg = &history[0];
-                    if first_msg.role == "assistant"
-                        && first_msg
-                            .content
-                            .as_deref()
-                            .unwrap_or("")
-                            .starts_with("# Session Transcript")
-                    {
-                        let parsed = crate::db::sessions::parse_legacy_markdown_transcript(
-                            first_msg.content.as_deref().unwrap(),
-                        );
-                        if !parsed.is_empty() {
-                            history = parsed;
-                        }
-                    }
-                }
-
                 log::info!(
-                    "Loaded {} messages from SQLite for session {}",
+                    "Loaded {} messages from SQLite for session [redacted]",
                     history.len(),
-                    session_id
                 );
             } else {
                 let now = chrono::Utc::now().to_rfc3339();
@@ -349,25 +393,6 @@ impl Agent {
                     }
                 }
 
-                // Dynamic fallback for legacy markdown migrations
-                if history.len() == 1 {
-                    let first_msg = &history[0];
-                    if first_msg.role == "assistant"
-                        && first_msg
-                            .content
-                            .as_deref()
-                            .unwrap_or("")
-                            .starts_with("# Session Transcript")
-                    {
-                        let parsed = crate::db::sessions::parse_legacy_markdown_transcript(
-                            first_msg.content.as_deref().unwrap(),
-                        );
-                        if !parsed.is_empty() {
-                            history = parsed;
-                        }
-                    }
-                }
-
                 history
             } else {
                 return Err("Failed to open database".to_string());
@@ -489,7 +514,7 @@ impl Agent {
         let selected_model = config
             .selected_model
             .clone()
-            .unwrap_or("gemini-2.5-flash-lite".to_string());
+            .unwrap_or("gemini-3.1-flash-lite-preview".to_string());
 
         let is_gemini = crate::models::is_gemini_model(&selected_model);
 
@@ -503,11 +528,13 @@ impl Agent {
                 &selected_model,
                 api_key,
                 None,  // No RAG context for retry
+                None,  // No peer card for retry
+                None,  // No peer representation for retry
                 false, // Not research mode
             )
             .await?
         } else {
-            self.process_openrouter_turn(app_handle, config, &mut history, stream_id, None, false)
+            self.process_openrouter_turn(app_handle, config, &mut history, stream_id, None, None, None, false)
                 .await?
         };
 
@@ -588,7 +615,7 @@ impl Agent {
         let selected_model = config
             .selected_model
             .clone()
-            .unwrap_or("gemini-2.5-flash-lite".to_string());
+            .unwrap_or("gemini-3.1-flash-lite-preview".to_string());
         let is_gemini = crate::models::is_gemini_model(&selected_model);
         let has_native_vision = crate::models::model_supports_vision(&selected_model);
 
@@ -756,61 +783,24 @@ impl Agent {
             None
         };
 
-        let relevant_interactions = if let Some(emb) = &user_embedding {
-            // Use hybrid search with RRF fusion of BM25 and dense results
-            crate::interactions::hybrid_search_interactions(
-                app_handle, &message, emb, /* limit= */ 5,
+        // RAG + Honcho-style context assembly (replaces inline interaction/topic/insight search)
+        let (rag_context_str, peer_card_ctx, peer_rep_ctx) = if let Some(emb) = &user_embedding {
+            let session_ctx = crate::context::build_session_context(
+                app_handle,
+                &self.http_client,
+                config,
+                &message,
+                emb,
             )
-            .unwrap_or_default()
+            .await;
+            (
+                session_ctx.rag_context_str(),
+                session_ctx.peer_card_str().map(String::from),
+                session_ctx.peer_representation_str().map(String::from),
+            )
         } else {
-            Vec::new()
+            (None, None, None)
         };
-
-        let mut rag_context_str = if !relevant_interactions.is_empty() {
-            let mut s = String::from("\n\nRelevant Past Interactions:\n");
-            for entry in relevant_interactions {
-                s.push_str(&format!(
-                    "- [{}] {}: {}\n",
-                    entry.ts.format("%Y-%m-%d"),
-                    entry.role,
-                    entry.content
-                ));
-            }
-            Some(s)
-        } else {
-            None
-        };
-
-        // RAG: Context from Topics or Insights (Hybrid Vector/FTS)
-        if let Some(emb) = &user_embedding {
-            let handle = app_handle.clone();
-            let msg = message.clone();
-            let embedding = emb.clone();
-            let context_res = match tokio::task::spawn_blocking(move || {
-                crate::memories::find_relevant_context(&handle, &msg, &embedding)
-            })
-            .await
-            {
-                Ok(res) => res,
-                Err(e) => {
-                    log::error!("[Agent] Context lookup task panicked: {}", e);
-                    Ok(None) // Gracefully degrade — continue without context
-                }
-            };
-
-            if let Ok(Some((name, content, is_insight))) = context_res {
-                let s = rag_context_str.get_or_insert_with(String::new);
-                if is_insight {
-                    s.push_str("\n\nRelevant Insight:\n");
-                    s.push_str(&format!("### Insight: {}\n{}\n\n", name, content));
-                    log::debug!("[Agent] Using insight: {}", name);
-                } else {
-                    s.push_str("\n\nRelevant Topic Summary:\n");
-                    s.push_str(&format!("### Topic: {}\n{}\n\n", name, content));
-                    log::debug!("[Agent] Using topic: {}", name);
-                }
-            }
-        }
 
         // ====================================================================
         // Compaction: Check if we're approaching context window limits
@@ -827,7 +817,7 @@ impl Agent {
             let selected_model = config
                 .selected_model
                 .clone()
-                .unwrap_or("gemini-2.5-flash-lite".to_string());
+                .unwrap_or("gemini-3.1-flash-lite-preview".to_string());
             let threshold = config.compaction_threshold;
 
             let current_tokens = crate::compaction::estimate_history_tokens(&history);
@@ -970,7 +960,7 @@ impl Agent {
             let selected_model = config
                 .selected_model
                 .clone()
-                .unwrap_or("gemini-2.5-flash-lite".to_string());
+                .unwrap_or("gemini-3.1-flash-lite-preview".to_string());
 
             // Detect provider using centralized model registry
             let is_gemini = crate::models::is_gemini_model(&selected_model);
@@ -1000,6 +990,8 @@ impl Agent {
                     &selected_model,
                     api_key,
                     rag_context_str.as_deref(),
+                    peer_card_ctx.as_deref(),
+                    peer_rep_ctx.as_deref(),
                     is_research_mode,
                 )
                 .await?
@@ -1011,6 +1003,8 @@ impl Agent {
                     &mut history,
                     stream_id,
                     rag_context_str.as_deref(),
+                    peer_card_ctx.as_deref(),
+                    peer_rep_ctx.as_deref(),
                     is_research_mode,
                 )
                 .await?
@@ -1549,7 +1543,7 @@ impl Agent {
             }
             "load_persona" => {
                 let name = args["name"].as_str().unwrap_or_default();
-                if let Some(_content) = crate::personas::get_persona_content(name) {
+                if let Some(_content) = crate::personas::resolve_persona_content(name) {
                     let session_id = self.session_id.lock().await.clone();
                     if let Ok(store) = crate::memories::get_vector_store(app_handle) {
                         if let Ok(mut active_personas) = crate::db::sessions::get_active_skills(&store, &session_id) {
@@ -1695,7 +1689,7 @@ impl Agent {
     }
 
     async fn classify_intent(&self, query: &str, api_key: &str) -> Result<bool, String> {
-        let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
+        let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent";
 
         let payload = serde_json::json!({
             "contents": [{
@@ -1888,11 +1882,14 @@ impl Agent {
         selected_model: &str,
         api_key: &str,
         rag_context: Option<&str>,
+        peer_card: Option<&str>,
+        peer_representation: Option<&str>,
         is_research_mode: bool,
     ) -> Result<bool, String> {
         let enable_tools = config.enable_tools.unwrap_or(true);
+        // Interactions API: model-specific endpoint, model in path
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:interactions",
             selected_model
         );
 
@@ -1917,7 +1914,7 @@ impl Agent {
                 if !active_personas.is_empty() {
                     let mut active_skills_content = String::new();
                     for persona in active_personas {
-                        if let Some(content) = crate::personas::get_persona_content(&persona) {
+                        if let Some(content) = crate::personas::resolve_persona_content(&persona) {
                             active_skills_content.push_str(&format!("--- PERSONA: {} ---\n{}\n\n", persona, content));
                         }
                     }
@@ -1929,7 +1926,7 @@ impl Agent {
         }
 
         let system_prompt_content = if incognito_mode {
-            crate::prompts::get_default_system_prompt(None, None, available_skills_opt, active_skills_opt.as_deref())
+            crate::prompts::get_default_system_prompt(None, None, None, None, available_skills_opt, active_skills_opt.as_deref())
         } else if is_research_mode {
             crate::prompts::get_research_system_prompt(available_skills_opt, active_skills_opt.as_deref())
         } else {
@@ -1937,44 +1934,38 @@ impl Agent {
                 crate::prompts::get_default_system_prompt(
                     memory_context.as_deref(),
                     rag_context,
+                    peer_card,
+                    peer_representation,
                     available_skills_opt,
                     active_skills_opt.as_deref(),
                 )
             })
         };
 
-        let contents = construct_gemini_messages(history);
-        let system_instruction = Some(GeminiContent {
-            role: None,
-            parts: vec![GeminiPart::Text {
-                text: system_prompt_content.clone(),
-            }],
-        });
+        // Build stateless input from history
+        let input = construct_interactions_input(history);
 
         let session_id_str = self.session_id.lock().await.clone();
         let active_skills_list = crate::memories::get_vector_store(app_handle)
             .and_then(|store| crate::db::sessions::get_active_skills(&store, &session_id_str))
             .unwrap_or_default();
 
-        let gemini_tools = if enable_tools {
-            Some(vec![GeminiTool {
-                function_declarations: crate::tools::get_all_tools(&active_skills_list)
+        // Interactions API uses flat tool definitions: { type: "function", name, description, parameters }
+        let interactions_tools: Option<Vec<InteractionsTool>> = if enable_tools {
+            Some(
+                crate::tool_registry::global().get_definitions(&active_skills_list)
                     .iter()
                     .map(|t| {
-                        // Strip OpenAI-specific fields from parameters
                         let mut params = t.function.parameters.clone();
-                        if let Some(obj) = params.as_object_mut() {
-                            obj.remove("additionalProperties");
-                            obj.remove("strict");
-                        }
-                        GeminiFunctionDefinition {
+                        normalize_gemini_schema(&mut params);
+                        InteractionsTool::Function {
                             name: t.function.name.clone(),
                             description: t.function.description.clone(),
                             parameters: params,
                         }
                     })
                     .collect(),
-            }])
+            )
         } else {
             None
         };
@@ -1983,26 +1974,37 @@ impl Agent {
             || selected_model.contains("gemini-3")
             || selected_model.contains("thinking");
 
-        let request_body = GenerateContentRequest {
-            contents,
-            tools: gemini_tools,
-            system_instruction,
-            generation_config: Some(GenerationConfig {
-                thinking_config: if supports_thinking {
-                    Some(ThinkingConfig {
-                        include_thoughts: true,
-                        thinking_budget: Some(1024),
-                    })
-                } else {
-                    None
-                },
-            }),
+        let request_body = InteractionsRequest {
+            model: selected_model.to_string(),
+            input,
+            system_instruction: Some(system_prompt_content),
+            tools: interactions_tools,
+            generation_config: if supports_thinking {
+                Some(InteractionsGenerationConfig {
+                    thinking_level: Some("high".to_string()),
+                    thinking_summaries: Some("auto".to_string()),
+                    temperature: None,
+                    max_output_tokens: None,
+                })
+            } else {
+                None
+            },
+            stream: true,
+            store: Some(false), // We manage state locally
         };
 
+        // DEBUG: Output the raw REST JSON to terminal so we can see what's being rejected
+        if cfg!(debug_assertions) {
+            if let Ok(json) = serde_json::to_string_pretty(&request_body) {
+                println!("--- GEMINI REQUEST PAYLOAD ---\n{}\n------------------------------", json);
+            }
+        }
+
+        // Streaming via SSE: append ?alt=sse
         let response = self
             .http_client
-            .post(&url)
-            .header("X-Goog-Api-Key", api_key)
+            .post(format!("{}?alt=sse", url))
+            .header("x-goog-api-key", api_key)
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
@@ -2019,10 +2021,11 @@ impl Agent {
 
         use futures_util::StreamExt;
         let mut stream = response.bytes_stream();
-        let mut buffer = Vec::new();
+        let mut buffer = String::new();
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
-        let mut tool_calls: Vec<GeminiFunctionCallWithSignature> = Vec::new();
+        let mut tool_calls: Vec<(String, String, Value, Option<String>)> = Vec::new(); // (id, name, arguments, signature)
+        let mut current_signature: Option<String> = None;
 
         while let Some(item) = stream.next().await {
             if stream_id == crate::CANCELLED_STREAM_ID.load(std::sync::atomic::Ordering::Relaxed) {
@@ -2030,86 +2033,78 @@ impl Agent {
             }
 
             let chunk = item.map_err(|e| format!("Stream error: {}", e))?;
-            buffer.extend_from_slice(&chunk);
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&chunk_str);
 
-            let mut consumed = 0;
-            let mut depth = 0;
-            let mut in_string = false;
-            let mut escape = false;
-            let mut start_idx = None;
+            // Process complete SSE lines
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim_end_matches('\r').to_string();
+                buffer.drain(..newline_pos + 1);
 
-            for (idx, &b) in buffer.iter().enumerate() {
-                let c = b as char;
-                if !in_string {
-                    if c == '{' {
-                        if depth == 0 {
-                            start_idx = Some(idx);
-                        }
-                        depth += 1;
-                    } else if c == '}' {
-                        depth -= 1;
-                        if depth == 0 {
-                            if let Some(start) = start_idx {
-                                let slice = &buffer[start..=idx];
-                                if let Ok(json_obj) =
-                                    serde_json::from_slice::<GenerateContentResponse>(slice)
-                                {
-                                    if let Some(candidates) = json_obj.candidates {
-                                        for candidate in candidates {
-                                            for part in candidate.content.parts {
-                                                let events = parse_gemini_chunk(
-                                                    part,
-                                                    &mut full_text,
-                                                    &mut full_reasoning,
-                                                    &mut tool_calls,
-                                                );
-                                                for event in events {
-                                                    match event {
-                                                        AgentEvent::ResponseChunk(text) => {
-                                                            app_handle
-                                                                .emit("agent-response-chunk", text)
-                                                                .ok();
-                                                        }
-                                                        AgentEvent::ReasoningChunk(text) => {
-                                                            app_handle
-                                                                .emit("agent-reasoning-chunk", text)
-                                                                .ok();
-                                                        }
-                                                        AgentEvent::ToolCall(fc) => {
-                                                            let tool_call_event = serde_json::json!({
-                                                                "name": fc.function_call.name,
-                                                                "args": fc.function_call.args,
-                                                                "rawArgs": serde_json::to_string(&fc.function_call.args).unwrap_or_default(),
-                                                                "id": format!("call_{}", fc.function_call.name)
-                                                            });
-                                                            app_handle
-                                                                .emit("agent-tool-call", tool_call_event.to_string())
-                                                                .ok();
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
+                if line.is_empty() {
+                    continue;
+                }
+
+                if let Some(event) = parse_interactions_sse_line(&line) {
+                    let events = process_interactions_event(
+                        &event,
+                        &mut full_text,
+                        &mut full_reasoning,
+                    );
+                    for agent_event in events {
+                        match agent_event {
+                            AgentEvent::ResponseChunk(text) => {
+                                app_handle
+                                    .emit("agent-response-chunk", text)
+                                    .ok();
+                            }
+                            AgentEvent::ReasoningChunk(text) => {
+                                app_handle
+                                    .emit("agent-reasoning-chunk", text)
+                                    .ok();
+                            }
+                            AgentEvent::InteractionToolCall { id, name, arguments, signature } => {
+                                if let Some(sig) = signature {
+                                    // Try to attach signature to an existing tool call by id
+                                    if let Some(entry) = tool_calls.iter_mut().find(|e| e.0 == id) {
+                                        entry.3 = Some(sig);
+                                    } else {
+                                        current_signature = Some(sig);
                                     }
-                                    consumed = idx + 1;
-                                    start_idx = None;
+                                } else {
+                                    // Check if a placeholder already exists for this id (signature arrived first)
+                                    if let Some(entry) = tool_calls.iter_mut().find(|e| e.0 == id) {
+                                        entry.1 = name.clone();
+                                        entry.2 = arguments.clone();
+                                    } else {
+                                        tool_calls.push((id.clone(), name.clone(), arguments.clone(), current_signature.take()));
+                                    }
+                                    let tool_call_event = serde_json::json!({
+                                        "name": name,
+                                        "args": arguments,
+                                        "rawArgs": serde_json::to_string(&arguments).unwrap_or_default(),
+                                        "id": id,
+                                    });
+                                    app_handle
+                                        .emit("agent-tool-call", tool_call_event.to_string())
+                                        .ok();
                                 }
+                            }
+                            AgentEvent::ToolCall(fc) => {
+                                // Legacy path (should not fire for Interactions API)
+                                let tool_call_event = serde_json::json!({
+                                    "name": fc.function_call.name,
+                                    "args": fc.function_call.args,
+                                    "rawArgs": serde_json::to_string(&fc.function_call.args).unwrap_or_default(),
+                                    "id": format!("call_{}", fc.function_call.name)
+                                });
+                                app_handle
+                                    .emit("agent-tool-call", tool_call_event.to_string())
+                                    .ok();
                             }
                         }
                     }
                 }
-                if c == '"' && !escape {
-                    in_string = !in_string;
-                }
-                if c == '\\' && !escape {
-                    escape = true;
-                } else {
-                    escape = false;
-                }
-            }
-
-            if consumed > 0 {
-                buffer.drain(0..consumed);
             }
         }
 
@@ -2129,16 +2124,15 @@ impl Agent {
                 tool_calls: Some(
                     tool_calls
                         .iter()
-                        .enumerate()
-                        .map(|(idx, fc)| ToolCall {
-                            id: format!("call_{}_{}", fc.function_call.name, idx),
+                        .map(|(id, name, args, signature)| ToolCall {
+                            id: id.clone(),
                             tool_type: "function".to_string(),
                             function: FunctionCall {
-                                name: fc.function_call.name.clone(),
-                                arguments: serde_json::to_string(&fc.function_call.args)
+                                name: name.clone(),
+                                arguments: serde_json::to_string(args)
                                     .unwrap_or_default(),
                             },
-                            thought_signature: fc.thought_signature.clone(),
+                            thought_signature: signature.clone(),
                         })
                         .collect(),
                 ),
@@ -2149,19 +2143,13 @@ impl Agent {
             history.push(msg.clone());
             self.insert_single_message_to_db(app_handle, &msg).await;
 
-            for (idx, fc) in tool_calls.into_iter().enumerate() {
-                let function_name = &fc.function_call.name;
-                let args = &fc.function_call.args;
-
-                // Note: agent-tool-call was already emitted during streaming (with id for dedup).
-                // Emitting it again here (without id) caused duplicate cards in the frontend.
-
+            for (id, name, args, _) in tool_calls.iter() {
                 let tool_result = self
-                    .execute_tool(app_handle, function_name, args, config)
+                    .execute_tool(app_handle, name, args, config)
                     .await;
 
                 let result_payload = serde_json::json!({
-                    "name": function_name,
+                    "name": name,
                     "result": tool_result.clone()
                 });
                 app_handle
@@ -2173,7 +2161,7 @@ impl Agent {
                     content: Some(tool_result),
                     reasoning: None,
                     tool_calls: None,
-                    tool_call_id: Some(format!("call_{}_{}", fc.function_call.name, idx)),
+                    tool_call_id: Some(id.clone()),
                     is_cron: None,
                     images: None,
                 };
@@ -2212,12 +2200,14 @@ impl Agent {
         history: &mut Vec<ChatMessage>,
         stream_id: u64,
         rag_context: Option<&str>,
+        peer_card: Option<&str>,
+        peer_representation: Option<&str>,
         is_research_mode: bool,
     ) -> Result<bool, String> {
         let selected_model = config
             .selected_model
             .clone()
-            .unwrap_or("gemini-2.5-flash-lite".to_string());
+            .unwrap_or("gemini-3.1-flash-lite-preview".to_string());
         let enable_tools = config.enable_tools.unwrap_or(true);
 
         // Detect provider from model name and configure accordingly
@@ -2252,7 +2242,7 @@ impl Agent {
                 if !active_personas.is_empty() {
                     let mut active_skills_content = String::new();
                     for persona in active_personas {
-                        if let Some(content) = crate::personas::get_persona_content(&persona) {
+                        if let Some(content) = crate::personas::resolve_persona_content(&persona) {
                             active_skills_content.push_str(&format!("--- PERSONA: {} ---\n{}\n\n", persona, content));
                         }
                     }
@@ -2264,7 +2254,7 @@ impl Agent {
         }
 
         let system_prompt_content = if incognito_mode {
-            crate::prompts::get_default_system_prompt(None, None, available_skills_opt, active_skills_opt.as_deref())
+            crate::prompts::get_default_system_prompt(None, None, None, None, available_skills_opt, active_skills_opt.as_deref())
         } else if is_research_mode {
             crate::prompts::get_research_system_prompt(available_skills_opt, active_skills_opt.as_deref())
         } else {
@@ -2272,6 +2262,8 @@ impl Agent {
                 crate::prompts::get_default_system_prompt(
                     memory_context.as_deref(),
                     rag_context,
+                    peer_card,
+                    peer_representation,
                     available_skills_opt,
                     active_skills_opt.as_deref(),
                 )
@@ -2394,7 +2386,7 @@ impl Agent {
 
         let current_tools = if enable_tools && !is_olmo_think {
             Some(
-                crate::tools::get_all_tools(&active_skills_list)
+                crate::tool_registry::global().get_definitions(&active_skills_list)
                     .iter()
                     .map(|t| ToolDefinition {
                         tool_type: t.tool_type.clone(),
