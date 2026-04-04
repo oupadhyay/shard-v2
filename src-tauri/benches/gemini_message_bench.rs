@@ -16,6 +16,7 @@ fn build_history(tool_rounds: usize) -> Vec<ChatMessage> {
         tool_calls: None,
         tool_call_id: None,
         images: None,
+        is_cron: None,
     });
 
     for i in 0..tool_rounds {
@@ -38,6 +39,7 @@ fn build_history(tool_rounds: usize) -> Vec<ChatMessage> {
             }]),
             tool_call_id: None,
             images: None,
+            is_cron: None,
         });
 
         // Tool response
@@ -48,6 +50,7 @@ fn build_history(tool_rounds: usize) -> Vec<ChatMessage> {
             tool_calls: None,
             tool_call_id: Some(call_id),
             images: None,
+            is_cron: None,
         });
 
         // Assistant follow-up
@@ -58,6 +61,7 @@ fn build_history(tool_rounds: usize) -> Vec<ChatMessage> {
             tool_calls: None,
             tool_call_id: None,
             images: None,
+            is_cron: None,
         });
     }
 
