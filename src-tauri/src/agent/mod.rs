@@ -1887,11 +1887,8 @@ impl Agent {
         is_research_mode: bool,
     ) -> Result<bool, String> {
         let enable_tools = config.enable_tools.unwrap_or(true);
-        // Interactions API: model-specific endpoint, model in path
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:interactions",
-            selected_model
-        );
+        // Interactions API: flat endpoint, model specified in request body
+        let url = "https://generativelanguage.googleapis.com/v1beta/interactions".to_string();
 
         // Load memories for injection into system prompt (skip in incognito mode)
         let incognito_mode = config.incognito_mode.unwrap_or(false);
@@ -2012,11 +2009,16 @@ impl Agent {
             .map_err(|e| format!("API network error: {}", e))?;
 
         if !response.status().is_success() {
+            let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            app_handle
-                .emit("agent-error", format!("Gemini API Error: {}", error_text))
-                .ok();
-            return Err(format!("Gemini API Error: {}", error_text));
+            let msg = if error_text.is_empty() {
+                format!("Gemini API Error (HTTP {})", status)
+            } else {
+                format!("Gemini API Error (HTTP {}): {}", status, error_text)
+            };
+            log::warn!("[Gemini] {}", msg);
+            app_handle.emit("agent-error", &msg).ok();
+            return Err(msg);
         }
 
         use futures_util::StreamExt;

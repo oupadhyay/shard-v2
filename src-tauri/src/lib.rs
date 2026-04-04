@@ -13,6 +13,7 @@ mod background;
 mod cache;
 pub mod compaction;
 mod config;
+pub mod context;
 pub mod db;
 mod gemini_files;
 mod heartbeat;
@@ -20,17 +21,16 @@ mod integrations;
 mod interactions;
 pub mod memories;
 mod models;
+pub mod observations;
+pub mod personas;
 mod prompts;
 pub mod retrieval;
+mod sandbox;
 mod secrets;
 pub mod sessions;
-pub mod personas;
-mod sandbox;
 pub mod tool_registry;
-pub mod observations;
 pub mod vector_store;
 mod webhook;
-pub mod context;
 
 #[cfg(test)]
 mod tests;
@@ -371,7 +371,10 @@ async fn open_dedicated_window(app_handle: AppHandle) -> Result<(), String> {
             // Best effort so we don't return an error and confuse the UI if it fails.
             if let Some(win) = main_win {
                 if let Err(e) = win.hide() {
-                    log::warn!("Failed to hide main window after creating dedicated window: {}", e);
+                    log::warn!(
+                        "Failed to hide main window after creating dedicated window: {}",
+                        e
+                    );
                 }
             }
         }
@@ -531,34 +534,23 @@ async fn get_proactive_messages(
 }
 
 #[tauri::command]
-async fn review_proactive_message(
-    app_handle: AppHandle,
-    message_id: String,
-) -> Result<(), String> {
+async fn review_proactive_message(app_handle: AppHandle, message_id: String) -> Result<(), String> {
     heartbeat::review_proactive_message(&app_handle, &message_id, None)
 }
 
 #[tauri::command]
-async fn approve_draft(
-    app_handle: AppHandle,
-    message_id: String,
-) -> Result<String, String> {
+async fn approve_draft(app_handle: AppHandle, message_id: String) -> Result<String, String> {
     // Execute the draft-gated tool and mark as approved
     heartbeat::execute_approved_draft(&app_handle, &message_id).await
 }
 
 #[tauri::command]
-async fn reject_draft(
-    app_handle: AppHandle,
-    message_id: String,
-) -> Result<(), String> {
+async fn reject_draft(app_handle: AppHandle, message_id: String) -> Result<(), String> {
     heartbeat::review_proactive_message(&app_handle, &message_id, Some(false))
 }
 
 #[tauri::command]
-async fn get_proactive_count(
-    app_handle: AppHandle,
-) -> Result<usize, String> {
+async fn get_proactive_count(app_handle: AppHandle) -> Result<usize, String> {
     heartbeat::get_unreviewed_count(&app_handle, None)
 }
 
@@ -624,8 +616,7 @@ async fn rebuild_all_indexes(app_handle: AppHandle) -> Result<RebuildAllResult, 
     let bm25_docs = retrieval::rebuild_bm25_index(&app_handle)?;
 
     // 4. Rebuild chunk index (re-embeds everything with current model)
-    let chunks =
-        memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await?;
+    let chunks = memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await?;
 
     log::info!(
         "[RebuildAll] Complete: {} topics, {} insights, {} BM25 docs, {} chunks, {} cache entries cleared",
@@ -735,7 +726,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 // Check if chunk index exists in VectorStore
                 let chunk_count = memories::get_vector_store(&app_handle_for_chunks)
-                    .and_then(|store| store.chunk_count())
+                    .and_then(|store| store.chunk_count().map_err(|e| e.to_string()))
                     .unwrap_or(0);
 
                 if chunk_count > 0 {
