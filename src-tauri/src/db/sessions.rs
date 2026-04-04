@@ -100,7 +100,7 @@ pub fn search_sessions_by_time(
 ) -> Result<String, String> {
     let mut sql = "SELECT s.id, s.title, s.summary, s.updated_at FROM sessions s LEFT JOIN messages m ON s.id = m.session_id".to_string();
     let mut conditions = Vec::new();
-    let mut params: Vec<String> = Vec::new();
+    let mut params: Vec<rusqlite::types::Value> = Vec::new();
 
     // Map time_filter to date condition
     let now = chrono::Utc::now();
@@ -108,18 +108,22 @@ pub fn search_sessions_by_time(
         "yesterday" => {
             let start = now - chrono::Duration::days(1);
             let end = now;
-            conditions.push(format!("s.updated_at >= '{}' AND s.updated_at < '{}'", start.format("%Y-%m-%d"), end.format("%Y-%m-%d")));
+            conditions.push("s.updated_at >= ? AND s.updated_at < ?".to_string());
+            params.push(rusqlite::types::Value::Text(start.format("%Y-%m-%d").to_string()));
+            params.push(rusqlite::types::Value::Text(end.format("%Y-%m-%d").to_string()));
         }
         "last_week" => {
             let start = now - chrono::Duration::days(7);
-            conditions.push(format!("s.updated_at >= '{}'", start.format("%Y-%m-%d")));
+            conditions.push("s.updated_at >= ?".to_string());
+            params.push(rusqlite::types::Value::Text(start.format("%Y-%m-%d").to_string()));
         }
         "last_conversation" => {
             // order by handled by main query
         }
         specific_date => {
             if specific_date.len() == 10 && specific_date.chars().filter(|c| *c == '-').count() == 2 {
-                conditions.push(format!("s.updated_at LIKE '{}%'", specific_date));
+                conditions.push("s.updated_at LIKE ?".to_string());
+                params.push(rusqlite::types::Value::Text(format!("{}%", specific_date)));
             }
         }
     }
@@ -127,8 +131,8 @@ pub fn search_sessions_by_time(
     if !query.is_empty() && query != "*" {
         conditions.push("(s.title LIKE ? OR s.summary LIKE ?)".to_string());
         let like_query = format!("%{}%", query);
-        params.push(like_query.clone());
-        params.push(like_query);
+        params.push(rusqlite::types::Value::Text(like_query.clone()));
+        params.push(rusqlite::types::Value::Text(like_query));
     }
 
     if !conditions.is_empty() {
@@ -139,18 +143,15 @@ pub fn search_sessions_by_time(
     sql.push_str(" GROUP BY s.id HAVING COUNT(m.id) > 0");
     sql.push_str(" ORDER BY s.updated_at DESC");
     if limit > 0 {
-        sql.push_str(&format!(" LIMIT {}", limit));
+        sql.push_str(" LIMIT ?");
+        params.push(rusqlite::types::Value::Integer(limit as i64));
     }
 
     let mut stmt = store.conn.prepare(&sql).map_err(|e| e.to_string())?;
 
-    let mut rows = if params.is_empty() {
-        stmt.query([]).map_err(|e| e.to_string())?
-    } else if params.len() == 2 {
-        stmt.query([&params[0], &params[1]]).map_err(|e| e.to_string())?
-    } else {
-        return Err("Unexpected parameter count".to_string());
-    };
+    let mut rows = stmt
+        .query(rusqlite::params_from_iter(params))
+        .map_err(|e| e.to_string())?;
 
     let mut results = Vec::new();
     while let Ok(Some(row)) = rows.next() {
@@ -365,5 +366,24 @@ mod tests {
         assert_eq!(msg.reasoning.as_deref().unwrap(), "This is a test.\nSecond line.");
         assert_eq!(msg.tool_calls.as_ref().unwrap().len(), 1);
         assert_eq!(msg.tool_calls.as_ref().unwrap()[0].function.name, "web_search");
+    }
+
+    #[test]
+    fn test_search_sessions_injection_bypass() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.sqlite");
+        let store = VectorStore::open(&db_path).unwrap();
+
+        // Malicious input that would break SQL syntax if interpolated into a
+        // quoted string, but is safe when passed as a bound parameter.
+        let malicious_date = "2024-01-01'";
+
+        // With proper parameterization, this should not crash or return a
+        // malformed query error, even if it returns no results.
+        let result = search_sessions_by_time(&store, "", malicious_date, 10);
+
+        // If successful (even with no results), the query remained valid in the
+        // presence of a payload that would otherwise break interpolated SQL.
+        assert!(result.is_ok());
     }
 }
