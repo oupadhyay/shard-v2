@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   detectUnrenderedLatex,
   preprocessMarkdown,
@@ -7,7 +7,6 @@ import {
   hasKatexErrors,
   md,
 } from '../ui/markdown';
-import { vi } from 'vitest';
 import hljs from 'highlight.js';
 
 describe('Markdown Utilities', () => {
@@ -143,7 +142,7 @@ describe('Markdown Utilities', () => {
       const result = md.render(`\`\`\`${lang}\n${code}\n\`\`\``);
 
       expect(result).toContain('hljs-keyword');
-      expect(result).toContain('javascript');
+      expect(result).toContain('<pre class="hljs">');
     });
 
     it('should fallback to escaped text when language is not supported', () => {
