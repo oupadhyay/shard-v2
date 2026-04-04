@@ -87,7 +87,7 @@ pub async fn archive_session_transcript<R: Runtime>(
     if let Ok(store) = crate::memories::get_vector_store(app_handle) {
         let now = chrono::Utc::now().to_rfc3339();
 
-        // Try to preserve original created_at and active_skills if modifying an existing session
+        // Try to preserve original created_at and active_personas if modifying an existing session
         let existing = store.conn.query_row(
             "SELECT created_at, active_skills FROM sessions WHERE id = ?1",
             rusqlite::params![session_id],
@@ -106,7 +106,7 @@ pub async fn archive_session_transcript<R: Runtime>(
             summary: Some(summary.clone()),
             created_at: existing.0.unwrap_or_else(|| now.clone()),
             updated_at: now,
-            active_skills: existing.1.or(Some("[]".to_string())),
+            active_personas: existing.1.or(Some("[]".to_string())),
         };
 
         if let Err(e) = crate::db::sessions::insert_session(&store, &session_row) {

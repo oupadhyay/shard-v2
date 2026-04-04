@@ -15,6 +15,7 @@ pub mod compaction;
 mod config;
 pub mod db;
 mod gemini_files;
+mod heartbeat;
 mod integrations;
 mod interactions;
 pub mod memories;
@@ -23,11 +24,13 @@ mod prompts;
 pub mod retrieval;
 mod secrets;
 pub mod sessions;
-pub mod skills;
+pub mod personas;
 mod sandbox;
-mod tools;
+pub mod tool_registry;
+pub mod observations;
 pub mod vector_store;
 mod webhook;
+pub mod context;
 
 #[cfg(test)]
 mod tests;
@@ -401,7 +404,7 @@ async fn delete_session(
                     summary: None,
                     created_at: now.clone(),
                     updated_at: now,
-                    active_skills: Some("[]".to_string()),
+                    active_personas: Some("[]".to_string()),
                 };
                 let _ = crate::db::sessions::insert_session(&store, &session);
             }
@@ -495,6 +498,71 @@ async fn force_summary(app_handle: AppHandle) -> Result<SummaryStats, String> {
 }
 
 #[tauri::command]
+async fn force_deriver(app_handle: AppHandle) -> Result<background::ExtractionResult, String> {
+    background::force_deriver(&app_handle).await
+}
+
+#[tauri::command]
+async fn force_dream(app_handle: AppHandle) -> Result<background::DreamResult, String> {
+    background::force_dream(&app_handle).await
+}
+
+// ============================================================================
+// Heartbeat Dashboard Commands
+// ============================================================================
+
+#[tauri::command]
+async fn get_heartbeat_status(
+    app_handle: AppHandle,
+) -> Result<Vec<heartbeat::HeartbeatStatusInfo>, String> {
+    Ok(heartbeat::get_heartbeat_status_list(&app_handle))
+}
+
+// ============================================================================
+// Proactive Queue Commands
+// ============================================================================
+
+#[tauri::command]
+async fn get_proactive_messages(
+    app_handle: AppHandle,
+    limit: Option<usize>,
+) -> Result<Vec<heartbeat::ProactiveMessage>, String> {
+    heartbeat::get_unreviewed_messages(&app_handle, limit.unwrap_or(20))
+}
+
+#[tauri::command]
+async fn review_proactive_message(
+    app_handle: AppHandle,
+    message_id: String,
+) -> Result<(), String> {
+    heartbeat::review_proactive_message(&app_handle, &message_id, None)
+}
+
+#[tauri::command]
+async fn approve_draft(
+    app_handle: AppHandle,
+    message_id: String,
+) -> Result<String, String> {
+    // Execute the draft-gated tool and mark as approved
+    heartbeat::execute_approved_draft(&app_handle, &message_id).await
+}
+
+#[tauri::command]
+async fn reject_draft(
+    app_handle: AppHandle,
+    message_id: String,
+) -> Result<(), String> {
+    heartbeat::review_proactive_message(&app_handle, &message_id, Some(false))
+}
+
+#[tauri::command]
+async fn get_proactive_count(
+    app_handle: AppHandle,
+) -> Result<usize, String> {
+    heartbeat::get_unreviewed_count(&app_handle, None)
+}
+
+#[tauri::command]
 fn rebuild_topic_index(app_handle: AppHandle) -> Result<usize, String> {
     // TopicIndex no longer stores embeddings, just file names
     memories::rebuild_topic_index(&app_handle)
@@ -519,6 +587,58 @@ async fn rebuild_chunk_index(app_handle: AppHandle) -> Result<usize, String> {
         .ok_or("No Gemini API key configured for embedding generation")?;
     let http_client = reqwest::Client::new();
     memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await
+}
+
+/// Rebuild all indexes in one shot: clears embedding cache, then rebuilds
+/// topic index, insight index, BM25 index, and chunk index (with re-embedding).
+#[derive(serde::Serialize)]
+struct RebuildAllResult {
+    topics: usize,
+    insights: usize,
+    bm25_docs: usize,
+    chunks: usize,
+    cache_cleared: usize,
+}
+
+#[tauri::command]
+async fn rebuild_all_indexes(app_handle: AppHandle) -> Result<RebuildAllResult, String> {
+    let config = config::load_config(&app_handle)?;
+    let api_key = config
+        .gemini_api_key
+        .ok_or("No Gemini API key configured for embedding generation")?;
+    let http_client = reqwest::Client::new();
+
+    // 1. Clear embedding cache (old model embeddings are incompatible)
+    let cache_cleared = {
+        let store = memories::get_vector_store(&app_handle)?;
+        store
+            .clear_embedding_cache()
+            .map_err(|e| format!("Failed to clear embedding cache: {}", e))?
+    };
+
+    // 2. Rebuild metadata indexes
+    let topics = memories::rebuild_topic_index(&app_handle)?;
+    let insights = memories::rebuild_insight_index(&app_handle)?;
+
+    // 3. Rebuild BM25 index
+    let bm25_docs = retrieval::rebuild_bm25_index(&app_handle)?;
+
+    // 4. Rebuild chunk index (re-embeds everything with current model)
+    let chunks =
+        memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await?;
+
+    log::info!(
+        "[RebuildAll] Complete: {} topics, {} insights, {} BM25 docs, {} chunks, {} cache entries cleared",
+        topics, insights, bm25_docs, chunks, cache_cleared
+    );
+
+    Ok(RebuildAllResult {
+        topics,
+        insights,
+        bm25_docs,
+        chunks,
+        cache_cleared,
+    })
 }
 
 /// Capture screen context and return suggestions
@@ -570,19 +690,16 @@ pub fn run() {
         .setup(|app| {
             let _app_handle = app.handle();
 
-            // Start background jobs
-            background::start_background_jobs(app.handle().clone());
+            // Start maintenance background jobs (Summary + Cleanup)
+            background::start_maintenance_jobs(app.handle().clone());
+
+            // Start heartbeat engine (replaces old cron_jobs)
+            heartbeat::start_heartbeat_engine(app.handle().clone());
 
             let webhook_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 crate::webhook::start_webhook_server(webhook_handle).await;
             });
-
-            if let Ok(store) = memories::get_vector_store(&app.handle().clone()) {
-                if let Err(e) = crate::db::sessions::run_migration(&app.handle().clone(), &store) {
-                    log::warn!("[Startup] Session migration failed: {}", e);
-                }
-            }
 
             let agent = Arc::new(Agent::new(app.handle().clone()));
             // Initialize memory store cache
@@ -631,6 +748,29 @@ pub fn run() {
                             }
                         }
                     }
+                }
+            });
+
+            // One-time: migrate MEMORIES.json entries to observations
+            let app_handle_clone = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let handle = app_handle_clone.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let store = memories::get_vector_store(&handle)?;
+                    let obs_count = crate::observations::count_observations(&store, "user").unwrap_or(0);
+                    if obs_count == 0 {
+                        drop(store);
+                        memories::migrate_memories_to_observations(&handle)
+                    } else {
+                        Ok(0)
+                    }
+                }).await;
+
+                match result {
+                    Ok(Ok(n)) if n > 0 => log::info!("[Setup] Migrated {} memories to observations", n),
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => log::warn!("[Setup] Memory migration failed: {}", e),
+                    Err(e) => log::warn!("[Setup] Memory migration task panicked: {}", e),
                 }
             });
 
@@ -796,12 +936,21 @@ pub fn run() {
             get_current_session_id,
             force_cleanup,
             force_summary,
+            force_deriver,
+            force_dream,
             rebuild_topic_index,
             rebuild_insight_index,
             rebuild_bm25_index,
             rebuild_chunk_index,
+            rebuild_all_indexes,
             retry_with_katex_hint,
-            capture_screen_context
+            capture_screen_context,
+            get_proactive_messages,
+            review_proactive_message,
+            approve_draft,
+            reject_draft,
+            get_proactive_count,
+            get_heartbeat_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -8,7 +8,7 @@ Shard is a high-performance, privacy-focused AI assistant built with **Tauri 2**
 - **Autonomous Tools** — Weather, Wikipedia, Stocks, ArXiv (HTML parsing), Web Search (Brave), URL reader. Results are cached with per-tool TTLs.
 - **Multimodal Intelligence** — Screenshot-to-chat via `Ctrl+Space`. Gemini models use the native Files API; non-vision models route through a Vision LLM pipeline (Molmo, Nemotron, Qwen 2.5 VL).
 - **Deep Research Mode** — Multi-step synthesis from ArXiv, Wikipedia, and web sources for complex queries.
-- **Skills Engine** — Load / unload specialized personas and instruction sets on-demand via `load_skill` / `unload_skill` tools. Skills are `.md` files with optional YAML frontmatter for `required_tools`.
+- **Personas Engine** — Load / unload specialized personas and instruction sets on-demand via `load_persona` / `unload_persona` tools. Personas are `.md` files with optional YAML frontmatter for `required_tools`.
 - **Persistent Sessions** — SQLite-backed session management with LLM-generated titles, summaries, and full message history. Switch between conversations via the Sessions modal.
 - **5-Tier Memory** — Core facts → Topic summaries → Atomic insights → Session transcripts → Interaction JSONL, all backed by SQLite with sqlite-vec embeddings and FTS5 keyword search.
 - **Background Jobs** — Automated 6-hour cycles for memory summarization, cleanup, insight extraction, and up-leveling — powered by free-tier background LLMs.
@@ -22,7 +22,7 @@ Shard is a high-performance, privacy-focused AI assistant built with **Tauri 2**
 | **Frontend** | TypeScript + Vite + Vanilla CSS                  | `src/main.ts`, `src/state.ts`, `src/ui/`, `src/styles.css`               |
 | **Backend**  | Rust + Tauri 2 + SQLite + sqlite-vec             | `src-tauri/src/` (20+ modules)                                           |
 | **IPC**      | Tauri commands + event emitter                   | `#[tauri::command]` ↔ `invoke<T>()`                                      |
-| **Data**     | `~/Library/Application Support/dev.ojasw.shard/` | `memories.sqlite`, `tool_cache.json`, `skills/`, `last_run.json`         |
+| **Data**     | `~/Library/Application Support/dev.ojasw.shard/` | `memories.sqlite`, `tool_cache.json`, `personas/`, `last_run.json`         |
 
 See [`AGENTS.md`](./AGENTS.md) for the full module-level architecture reference.
 

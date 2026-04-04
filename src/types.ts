@@ -81,3 +81,26 @@ export interface ModelsResponse {
   vision_models: ModelInfo[];
   background_models: ModelInfo[];
 }
+
+// Proactive message from the heartbeat engine
+export interface ProactiveMessage {
+  id: string;
+  heartbeat_session: string;
+  content: string;
+  draft_payload?: string | null;
+  needs_approval: boolean;
+  reviewed_at?: string | null;
+  approved?: boolean | null;
+  created_at: string;
+}
+
+// Heartbeat spec status for the dashboard
+export interface HeartbeatStatusInfo {
+  filename: string;
+  schedule: string;
+  session: string;
+  persona: string | null;
+  max_tool_calls: number;
+  max_runs_per_day: number | null;
+  prompt_preview: string;
+}

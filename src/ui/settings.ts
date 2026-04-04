@@ -1,4 +1,6 @@
-import type { ModelInfo } from "../types";
+import type { ModelInfo, HeartbeatStatusInfo } from "../types";
+import { invoke } from "@tauri-apps/api/core";
+import { logger } from "./utils";
 /**
  * Settings modal UI component
  */
@@ -7,9 +9,10 @@ export const SETTINGS_MODAL_HTML = `
   <div class="settings-content">
     <!-- Tab Navigation -->
     <div class="settings-tabs">
-      <button class="settings-tab active" data-tab="api-keys">API Keys</button>
+      <button class="settings-tab active" data-tab="api-keys">Keys</button>
       <button class="settings-tab" data-tab="models">Models</button>
       <button class="settings-tab" data-tab="capabilities">Capabilities</button>
+      <button class="settings-tab" data-tab="heartbeats">Heartbeats</button>
     </div>
 
     <!-- Tab Panels -->
@@ -76,6 +79,21 @@ export const SETTINGS_MODAL_HTML = `
             <input type="checkbox" id="enable-screen-context" />
             <span class="checkbox-label">Screen Context (Beta)</span>
           </label>
+        </div>
+      </div>
+
+      <!-- Heartbeats Panel -->
+      <div class="settings-panel" id="panel-heartbeats">
+        <div class="setting-group">
+          <label>Global Cooldown (seconds)</label>
+          <input type="number" id="heartbeat-cooldown" min="0" max="3600" step="10" placeholder="60" />
+          <span class="setting-hint">Minimum gap between any two heartbeat runs</span>
+        </div>
+        <div class="setting-group">
+          <label>Active Heartbeats</label>
+          <div id="heartbeat-list" class="heartbeat-list">
+            <div class="heartbeat-empty">Loading...</div>
+          </div>
         </div>
       </div>
     </div>
@@ -172,4 +190,54 @@ export function populateModelDropdown(
       selectEl.value = selectedValue;
     }
   }
+}
+
+/**
+ * Populate the Heartbeats dashboard panel
+ */
+export async function populateHeartbeatsPanel(settingsModal: HTMLElement) {
+  const listEl = settingsModal.querySelector("#heartbeat-list");
+  if (!listEl) return;
+
+  try {
+    const heartbeats = await invoke<HeartbeatStatusInfo[]>("get_heartbeat_status");
+
+    if (heartbeats.length === 0) {
+      listEl.innerHTML = `<div class="heartbeat-empty">No heartbeats configured.<br><span class="setting-hint">Add .toml files to the heartbeats/ folder in the app data directory</span></div>`;
+      return;
+    }
+
+    listEl.innerHTML = "";
+    for (const hb of heartbeats) {
+      const card = document.createElement("div");
+      card.className = "heartbeat-card";
+
+      const personaBadge = hb.persona
+        ? `<span class="heartbeat-badge persona">${escapeHtml(hb.persona)}</span>`
+        : "";
+      const capBadge = hb.max_runs_per_day !== null
+        ? `<span class="heartbeat-badge cap">${hb.max_runs_per_day}/day</span>`
+        : `<span class="heartbeat-badge cap">unlimited</span>`;
+
+      card.innerHTML = `
+        <div class="heartbeat-card-header">
+          <span class="heartbeat-name">${escapeHtml(hb.filename)}</span>
+          <div class="heartbeat-badges">${personaBadge}${capBadge}</div>
+        </div>
+        <div class="heartbeat-meta">
+          <span>⏱ <code>${escapeHtml(hb.schedule)}</code></span>
+          <span>📁 <code>${escapeHtml(hb.session)}</code></span>
+        </div>
+        <div class="heartbeat-prompt">${escapeHtml(hb.prompt_preview)}</div>
+      `;
+      listEl.appendChild(card);
+    }
+  } catch (e) {
+    listEl.innerHTML = `<div class="heartbeat-empty">Failed to load heartbeats.</div>`;
+    logger.error("Failed to load heartbeat status:", e);
+  }
+}
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }

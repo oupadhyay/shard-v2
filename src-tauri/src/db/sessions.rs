@@ -1,10 +1,8 @@
-use crate::agent::{ChatMessage, PersistedChatState};
+use crate::agent::ChatMessage;
 use crate::vector_store::VectorStore;
 use chrono::Utc;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionRow {
@@ -13,7 +11,8 @@ pub struct SessionRow {
     pub summary: Option<String>,
     pub created_at: String,
     pub updated_at: String,
-    pub active_skills: Option<String>, // JSON array of skill names
+    #[serde(rename = "active_skills")]
+    pub active_personas: Option<String>, // JSON array of persona names
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,14 +36,14 @@ pub fn insert_session(store: &VectorStore, session: &SessionRow) -> Result<(), S
                 session.summary,
                 session.created_at,
                 session.updated_at,
-                session.active_skills.clone().unwrap_or_else(|| "[]".to_string())
+                session.active_personas.clone().unwrap_or_else(|| "[]".to_string())
             ],
         )
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-/// Get active skills for a session
+/// Get active personas for a session
 pub fn get_active_skills(store: &VectorStore, session_id: &str) -> Result<Vec<String>, String> {
     let result: Option<String> = store
         .conn
@@ -63,7 +62,7 @@ pub fn get_active_skills(store: &VectorStore, session_id: &str) -> Result<Vec<St
     }
 }
 
-/// Update active skills for a session (expects a JSON array string)
+/// Update active personas for a session (expects a JSON array string)
 pub fn update_active_skills(store: &VectorStore, session_id: &str, skills_json: &str) -> Result<(), String> {
     store
         .conn
@@ -90,191 +89,6 @@ pub fn insert_message(store: &VectorStore, msg: &MessageRow) -> Result<(), Strin
             ],
         )
         .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Helper: Check if migration has run
-fn is_migration_completed(store: &VectorStore) -> Result<bool, String> {
-    let result: Option<String> = store
-        .conn
-        .query_row(
-            "SELECT value FROM metadata WHERE key = 'session_migration_completed'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e: rusqlite::Error| e.to_string())?;
-
-    Ok(result == Some("true".to_string()))
-}
-
-/// Helper: Mark migration as completed
-fn mark_migration_completed(store: &VectorStore) -> Result<(), String> {
-    store
-        .conn
-        .execute(
-            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('session_migration_completed', 'true')",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Run the migration from legacy JSON/Markdown to SQLite
-pub fn run_migration(app_handle: &AppHandle, store: &VectorStore) -> Result<(), String> {
-    if is_migration_completed(store)? {
-        log::info!("[db::sessions] Migration already completed, skipping.");
-        return Ok(());
-    }
-
-    log::info!("[db::sessions] Starting legacy session migration to SQLite...");
-
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|_| "Failed to get app_data_dir".to_string())?;
-
-    // 1. Migrate active chat from chat_history.json
-    let history_path = app_data_dir.join("chat_history.json");
-    if history_path.exists() {
-        if let Ok(contents) = fs::read_to_string(&history_path) {
-            log::info!("[db::sessions] Found chat_history.json, parsing...");
-            let (history, mut session_id) = if let Ok(state) = serde_json::from_str::<PersistedChatState>(&contents) {
-                (state.history, state.session_id)
-            } else if let Ok(msgs) = serde_json::from_str::<Vec<ChatMessage>>(&contents) {
-                (msgs, uuid::Uuid::new_v4().to_string())
-            } else {
-                (Vec::<ChatMessage>::new(), uuid::Uuid::new_v4().to_string())
-            };
-
-            if !history.is_empty() {
-                if session_id.is_empty() {
-                    session_id = uuid::Uuid::new_v4().to_string();
-                }
-
-                let now = Utc::now().to_rfc3339();
-                let session = SessionRow {
-                    id: session_id.clone(),
-                    title: "Active Session".to_string(),
-                    summary: None,
-                    created_at: now.clone(),
-                    updated_at: now.clone(),
-                    active_skills: Some("[]".to_string()),
-                };
-
-                if let Err(e) = insert_session(store, &session) {
-                    log::warn!("[db::sessions] Failed to insert active session: {}", e);
-                } else {
-                    for chat_msg in history {
-                        let msg_row = MessageRow {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            session_id: session_id.clone(),
-                            role: chat_msg.role.clone(),
-                            content: serde_json::to_string(&chat_msg).unwrap_or_else(|_| "{}".to_string()),
-                            created_at: now.clone(), // We don't have per-message timestamps in the legacy schema
-                        };
-                        let _ = insert_message(store, &msg_row);
-                    }
-                    log::info!("[db::sessions] Migrated active session: {}", session_id);
-                }
-            }
-        }
-    }
-
-    // 2. Migrate archived sessions from memories/sessions/*.md
-    if let Ok(memory_dir) = crate::memories::get_memory_transcripts_dir(app_handle) {
-        if let Ok(entries) = fs::read_dir(&memory_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                    if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
-                        log::info!("[db::sessions] Migrating archived file: {}", filename);
-                        // Pattern: YYYY-MM-DD-slug-UUID
-                        // Let's extract the UUID from the end if possible
-                        let mut parts: Vec<&str> = filename.split('-').collect();
-                        let mut session_id = uuid::Uuid::new_v4().to_string(); // fallback
-
-                        // UUIDs are typically 36 chars long (with hyphens), but here it might be split
-                        // So finding a strict UUID might be tough if it's split.
-                        // Wait, UUIDs have hyphens, so they split into 5 parts.
-                        if parts.len() >= 5 {
-                            let possible_uuid = parts[parts.len()-5..].join("-");
-                            if uuid::Uuid::parse_str(&possible_uuid).is_ok() {
-                                session_id = possible_uuid;
-                                parts.truncate(parts.len() - 5);
-                            } else {
-                                // Maybe the UUID has no hyphens or something else?
-                                // We'll just generate one if parsing fails.
-                            }
-                        }
-
-                        // Construct a title from the remaining parts
-                        let mut title = if parts.len() > 3 {
-                            parts[3..].join(" ") // skipping YYYY-MM-DD
-                        } else {
-                            "Archived Session".to_string()
-                        };
-
-                        if title.is_empty() {
-                            title = "Archived Session".to_string();
-                        }
-
-                        let content = fs::read_to_string(&path).unwrap_or_default();
-
-                        // Extract summary if present
-                        let mut summary = None;
-                        if let Some(summary_idx) = content.find("## Summary\n\n") {
-                            let start = summary_idx + 12;
-                            if let Some(end_idx) = content[start..].find("\n\n---") {
-                                summary = Some(content[start..start+end_idx].trim().to_string());
-                            }
-                        }
-
-                        let modified_time = fs::metadata(&path)
-                            .and_then(|m| m.modified())
-                            .map(|m| chrono::DateTime::<Utc>::from(m).to_rfc3339())
-                            .unwrap_or_else(|_| Utc::now().to_rfc3339());
-
-                        let session = SessionRow {
-                            id: session_id.clone(),
-                            title,
-                            summary,
-                            created_at: modified_time.clone(),
-                            updated_at: modified_time.clone(),
-                            active_skills: Some("[]".to_string()),
-                        };
-
-                        if insert_session(store, &session).is_ok() {
-                            // Insert a single summary message containing the whole transcript to preserve context
-                            let dummy_chat = ChatMessage {
-                                role: "assistant".to_string(),
-                                content: Some(content.clone()),
-                                reasoning: None,
-                                tool_calls: None,
-                                tool_call_id: None,
-                                is_cron: None,
-                                images: None,
-                            };
-
-                            let msg_row = MessageRow {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                session_id: session_id.clone(),
-                                role: "assistant".to_string(),
-                                content: serde_json::to_string(&dummy_chat).unwrap_or_else(|_| "{}".to_string()),
-                                created_at: modified_time.clone(),
-                            };
-                            let _ = insert_message(store, &msg_row);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Mark as completed
-    mark_migration_completed(store)?;
-    log::info!("[db::sessions] Session migration complete.");
-
     Ok(())
 }
 

@@ -57,7 +57,7 @@ pub struct VectorStore {
     pub(crate) conn: Connection,
 }
 
-/// Embedding dimension (Gemini text-embedding-004)
+/// Embedding dimension (Gemini Embedding 2 with output_dimensionality=768)
 const EMBEDDING_DIM: usize = 768;
 
 impl VectorStore {
@@ -92,29 +92,6 @@ impl VectorStore {
         // Initialize schema
         conn.execute_batch(include_str!("schema.sql"))?;
 
-        // Auto-migrate schema for existing databases (add active_skills)
-        if let Err(e) = conn.execute(
-            "ALTER TABLE sessions ADD COLUMN active_skills TEXT DEFAULT '[]';",
-            [],
-        ) {
-            match &e {
-                rusqlite::Error::SqliteFailure(_, Some(msg))
-                    if msg.contains("duplicate column name") =>
-                {
-                    log::debug!(
-                        "[VectorStore] sessions.active_skills column already exists: {}",
-                        msg
-                    );
-                }
-                _ => {
-                    log::warn!(
-                        "[VectorStore] Failed to auto-migrate sessions.active_skills column: {}",
-                        e
-                    );
-                }
-            }
-        }
-
         log::info!("[VectorStore] Opened database at {:?}", db_path);
 
         Ok(Self { conn })
@@ -130,12 +107,6 @@ impl VectorStore {
         let result = f(self, &tx)?;
         tx.commit()?;
         Ok(result)
-    }
-
-    /// Compute SHA256 hash of content for cache key
-    #[deprecated(since = "1.0.0", note = "use compute_content_hash instead")]
-    pub fn content_hash(text: &str) -> String {
-        compute_content_hash(text)
     }
 
     /// Get the number of chunks in the store
@@ -557,6 +528,16 @@ impl VectorStore {
         // Collect with error propagation instead of silently dropping errors
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(VectorStoreError::from)
+    }
+
+    /// Clear the embedding cache (e.g. after switching embedding models)
+    pub fn clear_embedding_cache(&self) -> Result<usize, VectorStoreError> {
+        let deleted = self.conn.execute("DELETE FROM embedding_cache", [])?;
+        log::info!(
+            "[VectorStore] Cleared embedding cache ({} entries)",
+            deleted
+        );
+        Ok(deleted)
     }
 
     /// Clear all data (for testing)

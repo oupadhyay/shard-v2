@@ -112,87 +112,6 @@ fn save_all_keys(keys: &ApiKeysStore) -> Result<(), String> {
     Ok(())
 }
 
-/// Old entry names from the pre-consolidation format
-const OLD_ENTRY_NAMES: &[(&str, ApiKeyType)] = &[
-    ("api_key", ApiKeyType::OpenAI),
-    ("gemini_api_key", ApiKeyType::Gemini),
-    ("openrouter_api_key", ApiKeyType::OpenRouter),
-    ("cerebras_api_key", ApiKeyType::Cerebras),
-    ("brave_api_key", ApiKeyType::Brave),
-    ("groq_api_key", ApiKeyType::Groq),
-];
-
-/// Migrate old separate keychain entries to new consolidated format.
-///
-/// Should be called ONCE at startup via `ensure_migrated`. The migration
-/// reads individual legacy entries and merges them into the consolidated
-/// `api_keys` entry, then deletes the old entries.
-pub fn migrate_legacy_entries() {
-    // Optimization: If we already have ANY keys in the consolidated store,
-    // assume migration is either finished or not needed. This avoids the
-    // "legacy check prompts" on every startup once the user is set up.
-    if let Ok(existing) = load_all_keys() {
-        if !existing.is_empty() {
-            log::debug!("[Secrets] Consolidated store not empty, skipping legacy migration check");
-            return;
-        }
-    }
-
-    let mut migrated_keys: ApiKeysStore = HashMap::new();
-    let mut entries_to_delete: Vec<Entry> = Vec::new();
-
-    // First pass: collect all keys from old entries (don't delete yet)
-    for (old_name, key_type) in OLD_ENTRY_NAMES {
-        if let Ok(entry) = Entry::new(SERVICE_NAME, old_name) {
-            if let Ok(password) = entry.get_password() {
-                if !password.is_empty() {
-                    log::info!("[Secrets] Found legacy entry: {}", old_name);
-                    migrated_keys.insert(key_type.key_name().to_string(), password);
-                    entries_to_delete.push(entry);
-                }
-            }
-        }
-    }
-
-    if migrated_keys.is_empty() {
-        return; // No legacy entries to migrate
-    }
-
-    // Merge with any existing consolidated keys (already in cache from load_all_keys)
-    if let Ok(existing) = load_all_keys() {
-        for (k, v) in existing {
-            migrated_keys.entry(k).or_insert(v);
-        }
-    }
-
-    // Save the merged result - only proceed with deletion if this succeeds
-    match save_all_keys(&migrated_keys) {
-        Ok(()) => {
-            log::info!(
-                "[Secrets] Migration saved: {} keys consolidated",
-                migrated_keys.len()
-            );
-            let count = entries_to_delete.len();
-            // Now safe to delete old entries
-            for entry in entries_to_delete {
-                if let Err(e) = entry.delete_credential() {
-                    if !matches!(e, keyring::Error::NoEntry) {
-                        log::warn!("[Secrets] Failed to delete legacy entry: {}", e);
-                    }
-                }
-            }
-            log::info!(
-                "[Secrets] Migration complete: deleted {} legacy entries",
-                count
-            );
-        }
-        Err(e) => {
-            log::error!("[Secrets] Migration failed, keeping legacy entries: {}", e);
-            // Don't delete old entries - they're still the only copies!
-        }
-    }
-}
-
 /// Store multiple secrets in the OS keyring in a single operation.
 ///
 /// Use this in batch operations (like migration or save_config) to avoid
@@ -228,14 +147,6 @@ pub fn store_secrets_batch(
         save_all_keys(&keys)?;
     }
     Ok(())
-}
-
-/// Retrieve a secret from the OS keyring
-pub fn get_secret(key_type: ApiKeyType) -> Result<Option<String>, String> {
-    let keys = load_all_keys()?;
-    let result = keys.get(key_type.key_name()).cloned();
-
-    Ok(result)
 }
 
 /// Retrieve all secrets at once, returning the full map.
