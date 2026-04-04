@@ -167,27 +167,30 @@ with open('test.txt', 'r') as f:
 
     #[tokio::test]
     async fn test_sandbox_isolation() {
-        // Attempt to read a host file via path traversal out of the sandbox scratch dir
-        let code = r#"
-try:
-    with open('../Cargo.toml', 'r') as f:
-        print(f.read())
+        // Attempt a path-traversal escape out of the WASI scratch directory.
+        // The only preopened dir is /scratch, so ../../ should be blocked.
+        let unique = uuid::Uuid::new_v4();
+        let escape_path = format!("../../shard_escape_{}", unique);
+        let code = format!(
+            r#"try:
+    with open('{}', 'w') as f:
+        f.write('escape attempt')
+    print('ESCAPE_SUCCESS')
 except Exception as e:
-    print(f"ERROR: {e}")
-"#;
+    print(f'ESCAPE_FAILED: {{e}}')"#,
+            escape_path
+        );
         let result = sandbox::execute_python(
-            code,
+            &code,
             std::path::PathBuf::from("resources"),
             10,
         )
         .await
-        .expect("execute_python should succeed");
+        .expect("execute_python should succeed even when code fails to write file");
 
-        // Assert on a generic error indicator, not a specific OS error string,
-        // which may vary across WASI implementations and environments.
         assert!(
-            result.stdout.contains("ERROR") || result.stdout.is_empty(),
-            "Sandbox should have blocked host file access, but got output: {}",
+            result.stdout.contains("ESCAPE_FAILED"),
+            "Python code should not be able to escape the scratch dir, got: {}",
             result.stdout
         );
     }

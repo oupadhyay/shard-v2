@@ -38,10 +38,9 @@ pub async fn execute_python(
         timeout_secs
     };
 
-    // Always use WASI sandbox for security (true isolation)
+    // Use WASI sandbox exclusively for security
     execute_python_wasi(code, resource_dir, timeout).await
 }
-
 
 // ── WASI Sandbox ─────────────────────────────────────────────────────────────
 
