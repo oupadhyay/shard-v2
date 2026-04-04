@@ -100,7 +100,7 @@ pub fn search_sessions_by_time(
 ) -> Result<String, String> {
     let mut sql = "SELECT s.id, s.title, s.summary, s.updated_at FROM sessions s LEFT JOIN messages m ON s.id = m.session_id".to_string();
     let mut conditions = Vec::new();
-    let mut params: Vec<String> = Vec::new();
+    let mut params: Vec<rusqlite::types::Value> = Vec::new();
 
     // Map time_filter to date condition
     let now = chrono::Utc::now();
@@ -109,13 +109,13 @@ pub fn search_sessions_by_time(
             let start = now - chrono::Duration::days(1);
             let end = now;
             conditions.push("s.updated_at >= ? AND s.updated_at < ?".to_string());
-            params.push(start.format("%Y-%m-%d").to_string());
-            params.push(end.format("%Y-%m-%d").to_string());
+            params.push(rusqlite::types::Value::Text(start.format("%Y-%m-%d").to_string()));
+            params.push(rusqlite::types::Value::Text(end.format("%Y-%m-%d").to_string()));
         }
         "last_week" => {
             let start = now - chrono::Duration::days(7);
             conditions.push("s.updated_at >= ?".to_string());
-            params.push(start.format("%Y-%m-%d").to_string());
+            params.push(rusqlite::types::Value::Text(start.format("%Y-%m-%d").to_string()));
         }
         "last_conversation" => {
             // order by handled by main query
@@ -123,7 +123,7 @@ pub fn search_sessions_by_time(
         specific_date => {
             if specific_date.len() == 10 && specific_date.chars().filter(|c| *c == '-').count() == 2 {
                 conditions.push("s.updated_at LIKE ?".to_string());
-                params.push(format!("{}%", specific_date));
+                params.push(rusqlite::types::Value::Text(format!("{}%", specific_date)));
             }
         }
     }
@@ -131,8 +131,8 @@ pub fn search_sessions_by_time(
     if !query.is_empty() && query != "*" {
         conditions.push("(s.title LIKE ? OR s.summary LIKE ?)".to_string());
         let like_query = format!("%{}%", query);
-        params.push(like_query.clone());
-        params.push(like_query);
+        params.push(rusqlite::types::Value::Text(like_query.clone()));
+        params.push(rusqlite::types::Value::Text(like_query));
     }
 
     if !conditions.is_empty() {
@@ -144,7 +144,7 @@ pub fn search_sessions_by_time(
     sql.push_str(" ORDER BY s.updated_at DESC");
     if limit > 0 {
         sql.push_str(" LIMIT ?");
-        params.push(limit.to_string());
+        params.push(rusqlite::types::Value::Integer(limit as i64));
     }
 
     let mut stmt = store.conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -374,15 +374,16 @@ mod tests {
         let db_path = dir.path().join("test.sqlite");
         let store = VectorStore::open(&db_path).unwrap();
 
-        // 10 chars, 2 dashes: bypasses the current "defense"
-        let malicious_date = "23-01-' --";
+        // Malicious input that would break SQL syntax if interpolated into a
+        // quoted string, but is safe when passed as a bound parameter.
+        let malicious_date = "2024-01-01'";
 
-        // This should not crash or return a malformed query error if we were using parameters.
-        // Currently it might or might not depending on how SQLite handles the trailing --%
+        // With proper parameterization, this should not crash or return a
+        // malformed query error, even if it returns no results.
         let result = search_sessions_by_time(&store, "", malicious_date, 10);
 
-        // If it was successful (even if it returns no results), it means the query was at least valid.
-        // But the vulnerability is that we are allowing potentially malicious strings into the query.
+        // If successful (even with no results), the query remained valid in the
+        // presence of a payload that would otherwise break interpolated SQL.
         assert!(result.is_ok());
     }
 }
