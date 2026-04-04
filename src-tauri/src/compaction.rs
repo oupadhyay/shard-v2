@@ -238,6 +238,39 @@ pub async fn pre_compaction_flush<R: Runtime>(
     let content = format!("{}{}\n", header, response);
     crate::memories::append_to_daily_log(app_handle, &content)?;
 
+    // Also extract observations from the flush response
+    {
+        let handle = app_handle.clone();
+        let response_clone = response.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(store) = crate::memories::get_vector_store(&handle) {
+                for line in response_clone.lines() {
+                    let trimmed = line.trim();
+                    if let Some(fact) = trimmed.strip_prefix("- ") {
+                        if fact.len() < 10 { continue; } // skip trivially short
+                        let hash = crate::vector_store::compute_content_hash(fact);
+                        let exists: bool = store.conn
+                            .query_row(
+                                "SELECT COUNT(*) FROM observations WHERE content_hash = ? AND deleted_at IS NULL",
+                                [&hash], |row| row.get::<_, i64>(0),
+                            )
+                            .unwrap_or(0) > 0;
+                        if !exists {
+                            let obs = crate::observations::make_observation(
+                                fact,
+                                crate::observations::ObservationLevel::Explicit,
+                                vec![],
+                                None,
+                            );
+                            let _ = crate::observations::insert_observation(&store, &obs, None);
+                        }
+                    }
+                }
+            }
+        }).await;
+    }
+    log::info!("[Compaction] Also extracted observations from flush");
+
     log::info!(
         "[Compaction] Pre-flush: Extracted {} facts to daily log",
         fact_count
@@ -397,7 +430,7 @@ mod tests {
     #[test]
     fn test_get_context_size_gemini() {
         assert_eq!(get_context_size("gemini-2.5-flash"), 1_000_000);
-        assert_eq!(get_context_size("gemini-2.5-flash-lite"), 1_000_000);
+        assert_eq!(get_context_size("gemini-3.1-flash-lite-preview"), 1_000_000);
         assert_eq!(get_context_size("gemini-3-flash-preview"), 1_000_000);
     }
 

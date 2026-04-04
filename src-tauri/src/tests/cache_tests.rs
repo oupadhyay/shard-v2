@@ -62,9 +62,9 @@ mod tests {
         let args = serde_json::json!({"query": "rust programming"});
         let key = make_cache_key("web_search", &args);
 
-        // Key should be in format "tool_name:hex_hash"
-        assert!(key.starts_with("web_search:"));
-        assert!(key.len() > "web_search:".len());
+        // Key should be in format "v2:tool_name:hex_hash"
+        assert!(key.starts_with("v2:web_search:"));
+        assert!(key.len() > "v2:web_search:".len());
     }
 
     #[test]
@@ -72,6 +72,6 @@ mod tests {
         let args = serde_json::json!({});
         let key = make_cache_key("refresh_memories", &args);
 
-        assert!(key.starts_with("refresh_memories:"));
+        assert!(key.starts_with("v2:refresh_memories:"));
     }
 }

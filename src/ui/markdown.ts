@@ -7,6 +7,7 @@ import MarkdownIt from "markdown-it";
 import mk from "@vscode/markdown-it-katex";
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.css";
+import { logger } from "./utils";
 
 // ============================================================================
 // KaTeX Error Tracking
@@ -59,11 +60,9 @@ export function detectUnrenderedLatex(text: string): string[] {
   }
 
   // Check for unbalanced single $ (trickier - need to exclude $$)
-  const textWithoutDisplay = text.replace(/\$\$/g, '');
-  const inlineDelimiters = (textWithoutDisplay.match(/\$/g) || []).length;
-  if (inlineDelimiters % 2 !== 0) {
-    errors.push('Unbalanced $: missing opening or closing delimiter for inline math');
-  }
+  // Note: We deliberately DO NOT check for unbalanced single $ delimiters here anymore.
+  // It frequently causes false positives on USD currency values (e.g. "The price is $300")
+  // and inline KaTeX errors fall back to raw text gracefully anyway.
 
   // Remove content inside $ delimiters (properly rendered math)
   const textWithoutMath = text
@@ -112,7 +111,7 @@ md.use(mk, {
   errorCallback: (msg: string, err: Error) => {
     const errorMsg = `${msg}: ${err.message}`;
     katexErrors.push(errorMsg);
-    console.warn('[KaTeX Error]', errorMsg);
+    logger.warn('[KaTeX Error]', errorMsg);
   }
 });
 
