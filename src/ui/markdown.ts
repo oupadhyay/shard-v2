@@ -7,6 +7,7 @@ import MarkdownIt from "markdown-it";
 import mk from "@vscode/markdown-it-katex";
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.css";
+import { logger } from "./utils";
 
 // ============================================================================
 // KaTeX Error Tracking
@@ -110,7 +111,7 @@ md.use(mk, {
   errorCallback: (msg: string, err: Error) => {
     const errorMsg = `${msg}: ${err.message}`;
     katexErrors.push(errorMsg);
-    console.warn('[KaTeX Error]', errorMsg);
+    logger.warn('[KaTeX Error]', errorMsg);
   }
 });
 

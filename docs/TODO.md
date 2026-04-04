@@ -2,12 +2,15 @@
 
 ## P0: Code Review Issues (Feb 2026)
 
-- [ ] **Manual config merging** - (Deferred) Using `#[serde(default)]` patterns, full refactor to `figment` deemed too large for this pass.
 - [ ] **Monolithic handleInput** ([main.ts:69-224](../src/main.ts)) - Split into `preparePayload`, `sendChatMessage`, etc.
 
-## P1: Password Prompts
+## P1: Auto-Testing (Evaluator-as-a-Judge)
 
-- [ ] Still requires 2 passwords prompts (there is always allow but 2 shouldn't be necessary?)
+- [ ] Automate actual testing with the model using an **Evaluator-as-a-Judge** pattern:
+  1. **Automated UI**: Use **Playwright** or **Cypress** with the Tauri WebDriver to drive the frontend.
+  2. **Synthetic User**: Script a separate LLM (e.g., GPT-4o or a local Llama instance) to generate prompts, send them to Shard, and wait for the UI to update.
+  3. **Verification**: Have the Evaluator LLM check the final DOM state or your `interactions.jsonl` against a set of "ground truth" requirements.
+  4. **Mocking**: Use a test flag to swap real tool calls (like `web_search`) with static JSON mocks to keep tests deterministic and save your quota.
 
 ## P2: Light Mode Theme Support
 
@@ -30,6 +33,37 @@
   - Consider separating retry logic, tool execution, and streaming handling
 - [ ] Migrate from `screenshots` crate to `xcap` for screen capture (P2)
 - [ ] Update models supported (especially with OpenRouter free model router)
+
+## P2: Platform Gateway
+
+- [ ] Build a gateway layer so Shard can receive/send messages via external platforms
+  - Discord bot (via `serenity` or gateway API)
+  - Email (IMAP polling + SMTP send)
+  - SMS/iMessage (Shortcuts automation or Twilio)
+  - Slack (webhook + Bolt API)
+- [ ] Route inbound messages through the same `process_message()` pipeline as the chat UI
+- [ ] Per-platform formatting (markdown → Discord flavored, plaintext for SMS, etc.)
+- [ ] Platform-aware session management (one session per channel/thread/conversation)
+- [ ] Rate limiting and authentication per platform
+
+## P2: Sub-Agent Support
+
+- [ ] Allow the primary agent to spawn sub-agents for parallel tool execution
+  - Leverage `ToolRegistry::should_parallelize()` metadata (already exists, not yet wired)
+  - Sub-agents share the same session context but run tool calls concurrently
+- [ ] Orchestrator pattern: primary agent decomposes tasks, delegates to sub-agents, merges results
+- [ ] Sub-agent isolation: each gets its own tool call budget and timeout
+- [ ] Support for specialized sub-agents (e.g., research sub-agent with `research_mode`, code sub-agent with `run_python`)
+- [ ] Progress streaming: sub-agent results streamed back to UI as they complete
+
+## P2: Skill Auto-Creation (Procedural Memory)
+
+- [ ] Agent automatically creates/improves personas from experience
+  - After complex tasks (5+ tool calls), agent saves the working approach as a new persona
+  - When user corrects the agent's approach, agent patches the relevant persona
+  - `skill_manage` tool with actions: `create`, `patch`, `edit`, `delete`, `write_file`
+- [ ] Track skill usage and success rate to prune stale personas
+- [ ] Progressive disclosure: list names/descriptions first (~3k tokens), load full content only when needed
 
 ## P2: Multi-Provider Support
 

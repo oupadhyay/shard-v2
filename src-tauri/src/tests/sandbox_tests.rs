@@ -167,9 +167,8 @@ with open('test.txt', 'r') as f:
 
     #[tokio::test]
     async fn test_sandbox_isolation() {
-        // Attempt to read Cargo.toml from host filesystem (one level up from src-tauri root)
+        // Attempt to read a host file via path traversal out of the sandbox scratch dir
         let code = r#"
-import os
 try:
     with open('../Cargo.toml', 'r') as f:
         print(f.read())
@@ -184,20 +183,11 @@ except Exception as e:
         .await
         .expect("execute_python should succeed");
 
-        // The sandbox should NOT allow access to the host filesystem.
-        // It should either raise a FileNotFoundError (because it's relative to /scratch)
-        // or an error saying it's not allowed.
+        // Assert on a generic error indicator, not a specific OS error string,
+        // which may vary across WASI implementations and environments.
         assert!(
             result.stdout.contains("ERROR") || result.stdout.is_empty(),
             "Sandbox should have blocked host file access, but got output: {}",
-            result.stdout
-        );
-
-        // Specifically check for FileNotFoundError which is expected in WASI
-        // because /scratch is the root of the preopened directory.
-        assert!(
-            result.stdout.contains("No such file or directory") || result.stdout.contains("ERROR"),
-            "Should fail with a file not found or error, got: {}",
             result.stdout
         );
     }

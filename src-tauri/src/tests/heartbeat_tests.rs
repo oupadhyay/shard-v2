@@ -334,20 +334,20 @@ fn test_load_heartbeat_specs_from_directory() {
 
 #[test]
 fn test_is_draft_gated() {
-    use crate::tools::is_draft_gated;
+    let reg = crate::tool_registry::global();
 
     // High-risk tools should be gated
-    assert!(is_draft_gated("edit_config"));
-    assert!(is_draft_gated("create_heartbeat"));
-    assert!(is_draft_gated("delete_heartbeat"));
-    assert!(is_draft_gated("edit_heartbeat"));
+    assert!(reg.is_draft_gated("edit_config"));
+    assert!(reg.is_draft_gated("create_heartbeat"));
+    assert!(reg.is_draft_gated("delete_heartbeat"));
+    assert!(reg.is_draft_gated("edit_heartbeat"));
 
     // Safe tools should NOT be gated
-    assert!(!is_draft_gated("web_search"));
-    assert!(!is_draft_gated("save_memory"));
-    assert!(!is_draft_gated("run_python"));
-    assert!(!is_draft_gated("wake_me_up_in"));
-    assert!(!is_draft_gated("load_persona"));
+    assert!(!reg.is_draft_gated("web_search"));
+    assert!(!reg.is_draft_gated("save_memory"));
+    assert!(!reg.is_draft_gated("run_python"));
+    assert!(!reg.is_draft_gated("wake_me_up_in"));
+    assert!(!reg.is_draft_gated("load_persona"));
 }
 
 #[test]
@@ -375,9 +375,7 @@ fn test_draft_payload_serialization() {
 
 #[test]
 fn test_heartbeat_tools_include_draft_gated() {
-    use crate::tools::get_heartbeat_tools;
-
-    let tools = get_heartbeat_tools(&[]);
+    let tools = crate::tool_registry::global().get_heartbeat_definitions(&[]);
     let tool_names: Vec<&str> = tools.iter().map(|t| t.function.name.as_str()).collect();
 
     // Should include global tools

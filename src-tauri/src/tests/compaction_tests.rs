@@ -24,7 +24,7 @@ fn make_message(role: &str, content_len: usize) -> ChatMessage {
 #[test]
 fn test_get_context_size_gemini() {
     assert_eq!(get_context_size("gemini-2.5-flash"), 1_000_000);
-    assert_eq!(get_context_size("gemini-2.5-flash-lite"), 1_000_000);
+    assert_eq!(get_context_size("gemini-3.1-flash-lite-preview"), 1_000_000);
     assert_eq!(get_context_size("gemini-3-flash-preview"), 1_000_000);
 }
 
