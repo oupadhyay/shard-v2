@@ -63,6 +63,11 @@ pub struct FlushResult {
 
 /// Get the context window size for a given model (in tokens)
 pub fn get_context_size(model: &str) -> usize {
+    // Gemma models (256K context)
+    if model.starts_with("gemma") {
+        return 256_000;
+    }
+
     // Gemini models (no slash, no provider suffix)
     if model.starts_with("gemini") {
         return GEMINI_CONTEXT_SIZE;
@@ -425,6 +430,11 @@ mod tests {
             is_cron: None,
             images: None,
         }
+    }
+
+    #[test]
+    fn test_get_context_size_gemma() {
+        assert_eq!(get_context_size("gemma-4-31b-it"), 256_000);
     }
 
     #[test]

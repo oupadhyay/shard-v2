@@ -111,7 +111,7 @@ impl AppConfig {
                 .trim()
                 .to_string();
             let model_id = if model_id.is_empty() {
-                "google/gemma-3-27b-it:free".to_string()
+                "google/gemma-4-31b-it:free".to_string()
             } else {
                 model_id
             };
