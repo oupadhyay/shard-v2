@@ -317,18 +317,14 @@ impl HeartbeatRateLimiter {
         if let Ok(mut backoffs) = self.backoff_until.lock() {
             let current_backoff = backoffs.get(session).copied().unwrap_or(0);
             // Exponential: 2m → 4m → 8m → 16m (capped)
-            let elapsed_from_backoff = if current_backoff > now {
-                current_backoff - now
-            } else {
-                0
-            };
+            let elapsed_from_backoff = current_backoff.saturating_sub(now);
             let next_backoff_secs = if elapsed_from_backoff == 0 {
                 120 // Initial: 2 minutes
             } else {
                 (elapsed_from_backoff * 2).min(960) // Max: 16 minutes
             };
             // Add jitter (0-30s)
-            let jitter = (now % 30) as u64;
+            let jitter = now % 30;
             let until = now + next_backoff_secs + jitter;
             backoffs.insert(session.to_string(), until);
             log::warn!(
@@ -498,8 +494,7 @@ pub fn get_unreviewed_count<R: Runtime>(
 /// 3. Enters a tool-calling loop:
 ///    a. Calls the background LLM with tool definitions from `get_heartbeat_tools()`.
 ///    b. Safe tools are executed inline and fed back to the LLM.
-///    c. Draft-gated tools (config/heartbeat mutations) are intercepted,
-///       serialized as drafts into `proactive_queue`, and the loop halts.
+///    c. Draft-gated tools (config/heartbeat mutations) are intercepted, serialized as drafts into `proactive_queue`, and the loop halts.
 ///    d. Loop continues until "stop" or `max_tool_calls` reached.
 /// 4. Persists the final messages to the heartbeat's session.
 /// 5. Returns the LLM response content (or inserts into proactive_queue).

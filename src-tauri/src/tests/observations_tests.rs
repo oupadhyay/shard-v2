@@ -322,12 +322,12 @@ fn test_make_observation_defaults() {
 fn test_observation_level_roundtrip() {
     for level in &[ObservationLevel::Explicit, ObservationLevel::Deductive, ObservationLevel::Inductive, ObservationLevel::Contradiction] {
         let s = level.as_str();
-        let parsed = ObservationLevel::from_str(s).unwrap();
+        let parsed = ObservationLevel::parse_level(s).unwrap();
         assert_eq!(*level, parsed);
     }
 }
 
 #[test]
 fn test_observation_level_invalid() {
-    assert!(ObservationLevel::from_str("bogus").is_none());
+    assert!(ObservationLevel::parse_level("bogus").is_none());
 }

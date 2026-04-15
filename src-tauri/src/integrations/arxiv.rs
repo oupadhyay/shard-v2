@@ -66,7 +66,7 @@ pub async fn perform_arxiv_lookup(
         ("max_results", &max_results.to_string()),
     ];
 
-    let sanitized_query = query.replace('\n', " ").replace('\r', " ");
+    let sanitized_query = query.replace(['\n', '\r'], " ");
     log::info!("Performing ArXiv lookup for: {}", sanitized_query);
 
     let response = client
@@ -152,7 +152,7 @@ pub fn extract_arxiv_id(input: &str) -> Option<String> {
             let after = after.trim_start_matches('/');
             // Take until next slash, query param, or end - also strip version suffix like v1
             let id: String = after
-                .split(|c| c == '/' || c == '?' || c == '#')
+                .split(['/', '?', '#'])
                 .next()
                 .unwrap_or(after)
                 .to_string();
@@ -187,7 +187,7 @@ pub async fn read_arxiv_paper(
         .ok_or_else(|| "Could not extract ArXiv ID".to_string())?;
 
     let url = format!("https://ar5iv.labs.arxiv.org/html/{}", id);
-    let sanitized_url = url.replace('\n', " ").replace('\r', " ");
+    let sanitized_url = url.replace(['\n', '\r'], " ");
     log::info!("Fetching ArXiv paper from ar5iv: {}", sanitized_url);
 
     let response = client

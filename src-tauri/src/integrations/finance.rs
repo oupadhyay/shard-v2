@@ -3,7 +3,7 @@ use time::Duration;
 use yahoo_finance_api as yfa;
 
 pub async fn perform_finance_lookup(ticker: &str) -> Result<String, String> {
-    let sanitized_ticker = ticker.replace('\n', " ").replace('\r', " ");
+    let sanitized_ticker = ticker.replace(['\n', '\r'], " ");
     log::info!("Performing Finance lookup for: {}", sanitized_ticker);
 
     let provider = yfa::YahooConnector::new()

@@ -118,7 +118,7 @@ pub fn get_persona_required_tools(name: &str) -> Vec<String> {
                         in_required_tools = true;
                     } else if in_required_tools {
                         if trimmed.starts_with('-') {
-                            let tool = trimmed[1..].trim();
+                            let tool = trimmed.strip_prefix('-').unwrap().trim();
                             // If it's wrapped in quotes, strip them
                             let tool = tool.trim_matches(|c| c == '\'' || c == '"');
                             if !tool.is_empty() {
@@ -166,7 +166,7 @@ fn collect_personas_recursive(base: &std::path::Path, current: &std::path::Path,
                     // Register the parent directory as a persona
                     if let Ok(relative) = current.strip_prefix(base) {
                         let name = relative.to_string_lossy().to_string();
-                        if !name.is_empty() && name.split('/').all(|c| is_safe_filename(c)) {
+                        if !name.is_empty() && name.split('/').all(is_safe_filename) {
                             out.push(name);
                         }
                     }
@@ -236,14 +236,14 @@ fn parse_frontmatter_fields(content: &str) -> (Option<String>, Vec<String>, Opti
 
                 if trimmed.starts_with("description:") {
                     in_required_tools = false;
-                    let val = trimmed["description:".len()..].trim();
+                    let val = trimmed.strip_prefix("description:").unwrap().trim();
                     let val = val.trim_matches(|c| c == '\'' || c == '"');
                     if !val.is_empty() {
                         description = Some(val.to_string());
                     }
                 } else if trimmed.starts_with("category:") {
                     in_required_tools = false;
-                    let val = trimmed["category:".len()..].trim();
+                    let val = trimmed.strip_prefix("category:").unwrap().trim();
                     let val = val.trim_matches(|c| c == '\'' || c == '"');
                     if !val.is_empty() {
                         category = Some(val.to_string());
@@ -252,7 +252,7 @@ fn parse_frontmatter_fields(content: &str) -> (Option<String>, Vec<String>, Opti
                     in_required_tools = true;
                 } else if in_required_tools {
                     if trimmed.starts_with('-') {
-                        let tool = trimmed[1..].trim();
+                        let tool = trimmed.strip_prefix('-').unwrap().trim();
                         let tool = tool.trim_matches(|c| c == '\'' || c == '"');
                         if !tool.is_empty() {
                             required_tools.push(tool.to_string());

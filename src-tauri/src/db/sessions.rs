@@ -279,34 +279,32 @@ pub fn parse_legacy_markdown_transcript(content: &str) -> Vec<ChatMessage> {
                 current_text.push_str(line);
                 current_text.push('\n');
             }
-        } else {
-            if !current_role.is_empty() {
-                if in_thought_details {
-                    // Skip the <summary> line itself if it's separate
-                    if !line.starts_with("<summary>") {
-                        current_reasoning.push_str(line);
-                        current_reasoning.push('\n');
-                    }
-                } else if in_thought_blockquote {
-                    if line.starts_with(">") {
-                        let content = line.trim_start_matches('>').trim_start_matches(' ');
-                        current_reasoning.push_str(content);
-                        current_reasoning.push('\n');
-                    } else if line.trim().is_empty() {
-                        current_reasoning.push('\n');
-                    } else {
-                        // Non-empty line without '>', exits blockquote thought
-                        in_thought_blockquote = false;
-                        current_text.push_str(line);
-                        current_text.push('\n');
-                    }
-                } else if in_tool_call {
-                    // we SHOULD convert them to actual `tool_calls`.
-                    current_text.push_str(&format!("`{}`\n", line)); // Fallback inner content
+        } else if !current_role.is_empty() {
+            if in_thought_details {
+                // Skip the <summary> line itself if it's separate
+                if !line.starts_with("<summary>") {
+                    current_reasoning.push_str(line);
+                    current_reasoning.push('\n');
+                }
+            } else if in_thought_blockquote {
+                if line.starts_with(">") {
+                    let content = line.trim_start_matches('>').trim_start_matches(' ');
+                    current_reasoning.push_str(content);
+                    current_reasoning.push('\n');
+                } else if line.trim().is_empty() {
+                    current_reasoning.push('\n');
                 } else {
+                    // Non-empty line without '>', exits blockquote thought
+                    in_thought_blockquote = false;
                     current_text.push_str(line);
                     current_text.push('\n');
                 }
+            } else if in_tool_call {
+                // we SHOULD convert them to actual `tool_calls`.
+                current_text.push_str(&format!("`{}`\n", line)); // Fallback inner content
+            } else {
+                current_text.push_str(line);
+                current_text.push('\n');
             }
         }
     }

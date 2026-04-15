@@ -1302,11 +1302,11 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
                     Err(_) => {
                         if let Ok(updates) = parse_topic_updates(&response_clone) {
                             for update in updates {
-                                if let Ok(_) = crate::memories::update_topic_summary(
+                                if crate::memories::update_topic_summary(
                                     &handle,
                                     &update.topic,
                                     &update.summary,
-                                ) {
+                                ).is_ok() {
                                     topics.push(update.topic);
                                 }
                             }
@@ -2228,7 +2228,8 @@ fn gather_recent_interactions(
 
         if let Ok(file) = fs::File::open(&path) {
             let reader = BufReader::new(file);
-            for line in reader.lines().flatten() {
+            #[allow(clippy::lines_filter_map_ok)]
+            for line in reader.lines().filter_map(Result::ok) {
                 if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
                     stats.total_interactions += 1;
 
@@ -2373,7 +2374,8 @@ fn remove_entries_by_timestamp(
             let mut kept_lines = Vec::new();
             let mut removed_in_file = 0;
 
-            for line in reader.lines().flatten() {
+            #[allow(clippy::lines_filter_map_ok)]
+            for line in reader.lines().filter_map(Result::ok) {
                 if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
                     let ts = entry.get("ts").and_then(|v| v.as_str()).unwrap_or("");
 

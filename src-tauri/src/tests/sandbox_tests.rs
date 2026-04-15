@@ -145,9 +145,9 @@ print(factorial(10))
     #[tokio::test]
     async fn test_scratch_dir_works() {
         let code = r#"
-with open('test.txt', 'w') as f:
+with open('/scratch/test.txt', 'w') as f:
     f.write('hello from scratch')
-with open('test.txt', 'r') as f:
+with open('/scratch/test.txt', 'r') as f:
     print(f.read())
 "#;
         let result = sandbox::execute_python(

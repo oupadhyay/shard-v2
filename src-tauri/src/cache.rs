@@ -108,9 +108,7 @@ pub fn get_cached_result<R: Runtime>(
     args: &serde_json::Value,
 ) -> Option<String> {
     // Check if this tool is cacheable
-    if get_ttl_for_tool(tool_name).is_none() {
-        return None;
-    }
+    get_ttl_for_tool(tool_name)?;
 
     let cache = load_cache(app_handle);
     let key = make_cache_key(tool_name, args);

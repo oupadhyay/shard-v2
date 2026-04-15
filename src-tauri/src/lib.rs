@@ -84,7 +84,7 @@ struct OcrResult {
 #[tauri::command]
 async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String> {
     // Wrap all blocking I/O in spawn_blocking to avoid starving the async executor
-    let result = tokio::task::spawn_blocking(move || perform_ocr_capture_blocking())
+    let result = tokio::task::spawn_blocking(perform_ocr_capture_blocking)
         .await
         .map_err(|e| {
             if e.is_cancelled() {
