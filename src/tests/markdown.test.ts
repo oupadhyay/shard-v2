@@ -5,6 +5,7 @@ import {
   clearKatexErrors,
   getKatexErrors,
   hasKatexErrors,
+  __setKatexErrorsForTesting,
   md,
 } from '../ui/markdown';
 import hljs from 'highlight.js';
@@ -122,7 +123,12 @@ describe('Markdown Utilities', () => {
     it('should clear errors', () => {
       // Set up errors manually to verify clearing works
       // (In production, KaTeX would populate these via errorCallback)
+      __setKatexErrorsForTesting(['Error 1', 'Error 2']);
+      expect(hasKatexErrors()).toBe(true);
+      expect(getKatexErrors()).toEqual(['Error 1', 'Error 2']);
+
       clearKatexErrors();
+
       expect(hasKatexErrors()).toBe(false);
       expect(getKatexErrors()).toEqual([]);
     });

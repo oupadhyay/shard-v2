@@ -17,6 +17,14 @@ import { logger } from "./utils";
 
 let katexErrors: string[] = [];
 
+/** Test helper to populate KaTeX errors — only usable in test mode */
+export function __setKatexErrorsForTesting(errors: string[]): void {
+  if (import.meta.env.MODE !== 'test') {
+    throw new Error('__setKatexErrorsForTesting is only available in test mode');
+  }
+  katexErrors = [...errors];
+}
+
 /** Clear KaTeX errors before a new render */
 export function clearKatexErrors(): void {
   katexErrors = [];
