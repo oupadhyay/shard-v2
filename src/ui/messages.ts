@@ -526,6 +526,79 @@ export function addMessage(
 }
 
 /**
+ * Creates a new assistant message element for streaming, with content wrapper
+ * and copy button. Used by both ambient and dedicated windows.
+ */
+export function createStreamingAssistantMessage(): HTMLElement {
+  const msgDiv = document.createElement("div");
+  msgDiv.className = "message assistant markdown-body";
+
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "message-content";
+  msgDiv.appendChild(contentDiv);
+
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "copy-btn";
+  copyBtn.title = "Copy as Markdown";
+  copyBtn.setAttribute("aria-label", "Copy as Markdown");
+  copyBtn.innerHTML = COPY_ICON;
+  copyBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const raw = msgDiv.getAttribute("data-raw") || "";
+    copyToClipboard(raw, copyBtn);
+  });
+  msgDiv.appendChild(copyBtn);
+
+  return msgDiv;
+}
+
+/**
+ * Renders accumulated streaming text into sanitized HTML, handling inline
+ * <think> tags from models like DeepSeek. Returns HTML ready for innerHTML.
+ */
+export function renderStreamingContent(rawText: string): string {
+  if (rawText.includes("<think>")) {
+    const openThink = rawText.indexOf("<think>");
+    const closeThink = rawText.indexOf("</think>");
+
+    if (closeThink !== -1 && closeThink > openThink) {
+      const thought = rawText.substring(openThink + 7, closeThink);
+      const rest = rawText.substring(closeThink + 8);
+      return `
+        <details class="thought-block">
+          <summary>Thought</summary>
+          <div class="thought-content">${DOMPurify.sanitize(thought)}</div>
+        </details>
+        ${DOMPurify.sanitize(md.render(preprocessMarkdown(rest)))}
+      `;
+    } else {
+      const thought = rawText.substring(openThink + 7);
+      return `
+        <details class="thought-block" open>
+          <summary>Thinking...</summary>
+          <div class="thought-content">${DOMPurify.sanitize(thought)}</div>
+        </details>
+      `;
+    }
+  }
+
+  return DOMPurify.sanitize(md.render(preprocessMarkdown(rawText)));
+}
+
+/**
+ * Determines if an incoming streaming chunk should be skipped because it
+ * would create an empty assistant bubble from leading whitespace.
+ */
+export function shouldSkipStreamingChunk(lastElement: Element | null, chunk: string): boolean {
+  const isNewMessage = !lastElement ||
+    !lastElement.classList.contains("assistant") ||
+    lastElement.classList.contains("tool-output") ||
+    lastElement.classList.contains("thinking-output");
+
+  return isNewMessage && chunk.trim().length === 0;
+}
+
+/**
  * Render a proactive message with optional approve/reject buttons
  */
 export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, msg: ProactiveMessage) {

@@ -13,7 +13,10 @@ export {
   resetWebSearchContainer,
   isWebSearchTool,
   createWebSearchQueryElement,
-  updateWebSearchCount
+  updateWebSearchCount,
+  createStreamingAssistantMessage,
+  renderStreamingContent,
+  shouldSkipStreamingChunk,
 } from "./messages";
 export { RESEND_ICON, STOP_ICON, TRASH_ICON, UNDO_ICON, RETRY_ICON, COPY_ICON, CHECK_ICON } from "./icons";
 export { SETTINGS_MODAL_HTML, initSettingsTabs, populateModelDropdown, populateHeartbeatsPanel } from "./settings";

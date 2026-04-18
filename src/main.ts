@@ -14,7 +14,6 @@ import {
   clearKatexErrors,
   getKatexErrors,
   detectUnrenderedLatex,
-  preprocessMarkdown,
   createThinkingElement,
   updateThinkingElement,
   createToolCallElement,
@@ -26,13 +25,14 @@ import {
   isWebSearchTool,
   createWebSearchQueryElement,
   updateWebSearchCount,
+  createStreamingAssistantMessage,
+  renderStreamingContent,
+  shouldSkipStreamingChunk,
   RESEND_ICON,
   STOP_ICON,
   TRASH_ICON,
   UNDO_ICON,
   RETRY_ICON,
-  COPY_ICON,
-  CHECK_ICON,
   SETTINGS_MODAL_HTML,
   SESSIONS_MODAL_HTML,
   initSettingsTabs,
@@ -826,65 +826,25 @@ listen<import("./types").ProactiveMessage>(EVENTS.PROACTIVE_MESSAGE, async (even
 // Listen for agent streaming response chunks
 listen<string>(EVENTS.AGENT_RESPONSE_CHUNK, (event) => {
   const chunk = event.payload;
-
-  // Ignore empty chunks
   if (!chunk) return;
 
   let lastMsg = chatArea.lastElementChild;
 
-  // If we would create a new message, check if chunk is just whitespace
-  // This prevents creating empty bubbles from leading newlines/spaces
-  const isNewMessage =
-    !lastMsg ||
-    !lastMsg.classList.contains("assistant") ||
-    lastMsg.classList.contains("tool-output") ||
-    lastMsg.classList.contains("thinking-output");
-
-  if (isNewMessage && chunk.trim().length === 0) {
-    return;
-  }
+  // Skip whitespace-only chunks that would create empty bubbles
+  if (shouldSkipStreamingChunk(lastMsg, chunk)) return;
 
   // Remove loading indicator if present
   const loadingIndicator = chatArea.querySelector("#loading-indicator");
-  if (loadingIndicator) {
-    loadingIndicator.remove();
-  }
+  if (loadingIndicator) loadingIndicator.remove();
 
-  // Create or update assistant message (skip if last is thinking or tool)
+  // Create new assistant message if needed (skip if last is thinking or tool)
   if (
     !lastMsg ||
     !lastMsg.classList.contains("assistant") ||
     lastMsg.classList.contains("tool-output") ||
     lastMsg.classList.contains("thinking-output")
   ) {
-    const msgDiv = document.createElement("div");
-    msgDiv.className = "message assistant markdown-body";
-
-    // Create content wrapper for streaming updates
-    const contentDiv = document.createElement("div");
-    contentDiv.className = "message-content";
-    msgDiv.appendChild(contentDiv);
-
-    // Add copy button
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "copy-btn";
-    copyBtn.title = "Copy as Markdown";
-    copyBtn.innerHTML = COPY_ICON;
-    copyBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const raw = msgDiv.getAttribute("data-raw") || "";
-      navigator.clipboard.writeText(raw).then(() => {
-        const originalHTML = copyBtn.innerHTML;
-        copyBtn.innerHTML = CHECK_ICON;
-        copyBtn.classList.add("copied");
-        setTimeout(() => {
-          copyBtn.innerHTML = originalHTML;
-          copyBtn.classList.remove("copied");
-        }, 1500);
-      }).catch((err) => logger.error("Failed to copy:", err));
-    });
-    msgDiv.appendChild(copyBtn);
-
+    const msgDiv = createStreamingAssistantMessage();
     chatArea.appendChild(msgDiv);
     lastMsg = msgDiv;
   }
@@ -894,7 +854,6 @@ listen<string>(EVENTS.AGENT_RESPONSE_CHUNK, (event) => {
   lastMsg.setAttribute("data-raw", rawText);
 
   // Only mark thinking as complete if we have substantial content (> 10 chars)
-  // This prevents marking it complete on the very first chunk (which might be interleaved with thinking)
   if (rawText.length > 10) {
     const openThinking = chatArea.querySelector('.thinking-output:not([data-complete="true"])');
     if (openThinking) {
@@ -902,45 +861,13 @@ listen<string>(EVENTS.AGENT_RESPONSE_CHUNK, (event) => {
     }
   }
 
-  let html = "";
-
-  if (rawText.includes("<think>")) {
-    // Handle <think> tags in content (for models that embed thinking in content)
-    const openThink = rawText.indexOf("<think>");
-    const closeThink = rawText.indexOf("</think>");
-
-    if (closeThink !== -1) {
-      // Closed thought
-      const thought = rawText.substring(openThink + 7, closeThink);
-      const rest = rawText.substring(closeThink + 8);
-      html = `
-            <details class="thought-block">
-              <summary>Thought</summary>
-              <div class="thought-content">${DOMPurify.sanitize(thought)}</div>
-            </details>
-            ${DOMPurify.sanitize(md.render(preprocessMarkdown(rest)))}
-          `;
-    } else {
-      // Open thought (still streaming)
-      const thought = rawText.substring(openThink + 7);
-      html = `
-            <details class="thought-block" open>
-              <summary>Thinking...</summary>
-              <div class="thought-content">${DOMPurify.sanitize(thought)}</div>
-            </details>
-          `;
-    }
-  } else {
-    // No thought tags, render normally with preprocessing for KaTeX
-    html = DOMPurify.sanitize(md.render(preprocessMarkdown(rawText)));
-  }
+  const html = renderStreamingContent(rawText);
 
   // Update only the content div, not the full innerHTML (preserves copy button)
   const contentDiv = lastMsg.querySelector(".message-content");
   if (contentDiv) {
     contentDiv.innerHTML = html;
   } else {
-  // Fallback for messages without content wrapper (shouldn't happen)
     lastMsg.innerHTML = html;
   }
   chatArea.scrollTop = chatArea.scrollHeight;
