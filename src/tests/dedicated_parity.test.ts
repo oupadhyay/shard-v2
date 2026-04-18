@@ -9,6 +9,9 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const dedicatedSrc = fs.readFileSync(
   path.resolve(__dirname, '../dedicated.ts'),
@@ -55,6 +58,7 @@ describe('Dedicated window event listener parity', () => {
     it(`intentionally omits ambient-only EVENTS.${event}`, () => {
       // These should NOT be in dedicated.ts (they're ambient-specific)
       // AGENT_PROCESSING_START is a no-op, others are window-visibility related
+      expect(dedicatedSrc).not.toContain(`EVENTS.${event}`);
     });
   }
 });

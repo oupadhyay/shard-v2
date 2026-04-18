@@ -502,7 +502,7 @@ async function populateSettings() {
       enableScreenContextCheckbox.disabled = incognitoModeCheckbox.checked;
     }
     if (heartbeatCooldownInput) {
-      heartbeatCooldownInput.value = String((config as any).heartbeat_global_cooldown_secs ?? 60);
+      heartbeatCooldownInput.value = String(config.heartbeat_global_cooldown_secs ?? 60);
     }
 
     updateToolAvailability();

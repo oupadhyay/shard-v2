@@ -526,9 +526,6 @@ export function addMessage(
 }
 
 /**
- * Render a proactive message with optional approve/reject buttons
- */
-/**
  * Creates a new assistant message element for streaming, with content wrapper
  * and copy button. Used by both ambient and dedicated windows.
  */
@@ -564,7 +561,7 @@ export function renderStreamingContent(rawText: string): string {
     const openThink = rawText.indexOf("<think>");
     const closeThink = rawText.indexOf("</think>");
 
-    if (closeThink !== -1) {
+    if (closeThink !== -1 && closeThink > openThink) {
       const thought = rawText.substring(openThink + 7, closeThink);
       const rest = rawText.substring(closeThink + 8);
       return `
@@ -601,6 +598,9 @@ export function shouldSkipStreamingChunk(lastElement: Element | null, chunk: str
   return isNewMessage && chunk.trim().length === 0;
 }
 
+/**
+ * Render a proactive message with optional approve/reject buttons
+ */
 export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, msg: ProactiveMessage) {
   const msgDiv = document.createElement("div");
   msgDiv.className = "message proactive-message";
