@@ -55,21 +55,22 @@ describe('ChatState', () => {
     state.currentScreenContextImage = mockScreenImage;
     state.currentSuggestions = ['Suggestion 1', 'Suggestion 2'];
 
-    // In a real environment ReturnType<typeof setTimeout> might be a number or an object
-    const timeout = setTimeout(() => {}, 1000) as any;
+    const timeout: ReturnType<typeof setTimeout> = setTimeout(() => {}, 1000);
     state.suggestionTimeout = timeout;
 
-    expect(state.currentScreenContextImage).toEqual(mockScreenImage);
-    expect(state.currentSuggestions).toEqual(['Suggestion 1', 'Suggestion 2']);
-    expect(state.suggestionTimeout).toBe(timeout);
-
-    clearTimeout(timeout);
+    try {
+      expect(state.currentScreenContextImage).toEqual(mockScreenImage);
+      expect(state.currentSuggestions).toEqual(['Suggestion 1', 'Suggestion 2']);
+      expect(state.suggestionTimeout).toBe(timeout);
+    } finally {
+      clearTimeout(timeout);
+    }
   });
 
   it('should reset turn-specific state in resetForNewTurn', () => {
     // Set properties that should be reset
     state.fallbackShownThisTurn = true;
-    const mockDiv = { nodeType: 1 } as unknown as HTMLElement;
+    const mockDiv = document.createElement('div');
     state.currentThinkingBlock = mockDiv;
 
     // Set properties that should NOT be reset
