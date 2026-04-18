@@ -7,6 +7,7 @@ import MarkdownIt from "markdown-it";
 import mk from "@vscode/markdown-it-katex";
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.css";
+import { logger } from "./utils";
 
 // ============================================================================
 // KaTeX Error Tracking
@@ -100,13 +101,14 @@ export const md: MarkdownIt = new MarkdownIt({
   highlight: function (str, lang) {
     if (lang && hljs.getLanguage(lang)) {
       try {
-        return '<pre class="hljs"><code>' +
-               hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
-               '</code></pre>';
-      } catch (__) {}
+        const highlighted = hljs.highlight(str, { language: lang, ignoreIllegals: true }).value;
+        return `<pre class="hljs"><code>${highlighted}</code></pre>`;
+      } catch (error) {
+        console.warn('[Markdown-it highlight] error:', error);
+      }
     }
 
-    return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
+    return `<pre class="hljs"><code>${md.utils.escapeHtml(str)}</code></pre>`;
   }
 });
 
@@ -118,7 +120,7 @@ md.use(mk, {
   errorCallback: (msg: string, err: Error) => {
     const errorMsg = `${msg}: ${err.message}`;
     katexErrors.push(errorMsg);
-    console.warn('[KaTeX Error]', errorMsg);
+    logger.warn('[KaTeX Error]', errorMsg);
   }
 });
 

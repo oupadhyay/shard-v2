@@ -1,8 +1,55 @@
 // Force UTC timezone for deterministic date comparisons
 process.env.TZ = 'UTC';
 
-import { describe, it, expect } from 'vitest';
-import { formatSessionDate } from '../ui/utils';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { formatSessionDate, logger } from '../ui/utils';
+
+describe('logger', () => {
+  let consoleSpy: any;
+  let isDevSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = {
+      log: vi.spyOn(console, 'log').mockImplementation(() => {}),
+      info: vi.spyOn(console, 'info').mockImplementation(() => {}),
+      warn: vi.spyOn(console, 'warn').mockImplementation(() => {}),
+      error: vi.spyOn(console, 'error').mockImplementation(() => {}),
+    };
+    isDevSpy = vi.spyOn(logger, 'isDev');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('logs debug and info only in DEV mode', () => {
+    isDevSpy.mockReturnValue(true);
+
+    logger.debug('debug message');
+    logger.info('info message');
+    expect(consoleSpy.log).toHaveBeenCalledWith('debug message');
+    expect(consoleSpy.info).toHaveBeenCalledWith('info message');
+
+    consoleSpy.log.mockClear();
+    consoleSpy.info.mockClear();
+
+    // Switch to PROD mode
+    isDevSpy.mockReturnValue(false);
+    logger.debug('debug message');
+    logger.info('info message');
+    expect(consoleSpy.log).not.toHaveBeenCalled();
+    expect(consoleSpy.info).not.toHaveBeenCalled();
+  });
+
+  it('always logs warn and error', () => {
+    isDevSpy.mockReturnValue(false);
+
+    logger.warn('warn message');
+    logger.error('error message');
+    expect(consoleSpy.warn).toHaveBeenCalledWith('warn message');
+    expect(consoleSpy.error).toHaveBeenCalledWith('error message');
+  });
+});
 
 describe('formatSessionDate', () => {
   // Fixed reference: 2026-03-03 noon UTC

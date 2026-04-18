@@ -24,6 +24,15 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::Mutex;
 
+/// Context passed into each LLM turn (RAG, peer info, mode flags).
+#[derive(Default)]
+pub(crate) struct TurnContext<'a> {
+    pub rag_context: Option<&'a str>,
+    pub peer_card: Option<&'a str>,
+    pub peer_representation: Option<&'a str>,
+    pub is_research_mode: bool,
+}
+
 /// Normalize a JSON Schema Value so it is compatible with Gemini's proto-backed
 /// function declaration schema.
 ///
@@ -52,7 +61,7 @@ pub(crate) fn normalize_gemini_schema(schema: &mut Value) {
             // Pick the first non-"null" element as the canonical type.
             let primary = arr
                 .iter()
-                .find(|v| v.as_str().map_or(true, |s| s != "null"))
+                .find(|v| v.as_str().is_none_or(|s| s != "null"))
                 .or_else(|| arr.first())
                 .cloned();
             if let Some(canonical) = primary {
@@ -150,9 +159,8 @@ impl Agent {
                 }
 
                 log::info!(
-                    "Loaded {} messages from SQLite for session {}",
+                    "Loaded {} messages from SQLite for session [redacted]",
                     history.len(),
-                    session_id
                 );
             } else {
                 let now = chrono::Utc::now().to_rfc3339();
@@ -301,7 +309,7 @@ impl Agent {
         if !uris_to_delete.is_empty() {
             if let Some(key) = api_key {
                 for uri in uris_to_delete.iter() {
-                    if let Some(file_name) = uri.split('/').last() {
+                    if let Some(file_name) = uri.rsplit('/').next() {
                         let delete_url = format!(
                             "https://generativelanguage.googleapis.com/v1beta/files/{}",
                             file_name
@@ -387,10 +395,8 @@ impl Agent {
                         }),
                     )
                 }) {
-                    for msg_res in msg_iter {
-                        if let Ok(msg) = msg_res {
-                            history.push(msg);
-                        }
+                    for msg in msg_iter.flatten() {
+                        history.push(msg);
                     }
                 }
 
@@ -520,22 +526,16 @@ impl Agent {
         let is_gemini = crate::models::is_gemini_model(&selected_model);
 
         let _continue_turn = if is_gemini {
-            let api_key = config.gemini_api_key.as_ref().ok_or("No Gemini API key")?;
             self.process_gemini_turn(
                 app_handle,
                 config,
                 &mut history,
                 stream_id,
-                &selected_model,
-                api_key,
-                None,  // No RAG context for retry
-                None,  // No peer card for retry
-                None,  // No peer representation for retry
-                false, // Not research mode
+                &TurnContext::default(),
             )
             .await?
         } else {
-            self.process_openrouter_turn(app_handle, config, &mut history, stream_id, None, None, None, false)
+            self.process_openrouter_turn(app_handle, config, &mut history, stream_id, &TurnContext::default())
                 .await?
         };
 
@@ -981,19 +981,19 @@ impl Agent {
                 self.insert_single_message_to_db(app_handle, &msg).await;
             }
 
+            let turn_ctx = TurnContext {
+                rag_context: rag_context_str.as_deref(),
+                peer_card: peer_card_ctx.as_deref(),
+                peer_representation: peer_rep_ctx.as_deref(),
+                is_research_mode,
+            };
             let continue_turn = if is_gemini {
-                let api_key = config.gemini_api_key.as_ref().ok_or("No Gemini API key")?;
                 self.process_gemini_turn(
                     app_handle,
                     config,
                     &mut history,
                     stream_id,
-                    &selected_model,
-                    api_key,
-                    rag_context_str.as_deref(),
-                    peer_card_ctx.as_deref(),
-                    peer_rep_ctx.as_deref(),
-                    is_research_mode,
+                    &turn_ctx,
                 )
                 .await?
             } else {
@@ -1003,10 +1003,7 @@ impl Agent {
                     config,
                     &mut history,
                     stream_id,
-                    rag_context_str.as_deref(),
-                    peer_card_ctx.as_deref(),
-                    peer_rep_ctx.as_deref(),
-                    is_research_mode,
+                    &turn_ctx,
                 )
                 .await?
             };
@@ -1880,19 +1877,20 @@ impl Agent {
         config: &crate::config::AppConfig,
         history: &mut Vec<ChatMessage>,
         stream_id: u64,
-        selected_model: &str,
-        api_key: &str,
-        rag_context: Option<&str>,
-        peer_card: Option<&str>,
-        peer_representation: Option<&str>,
-        is_research_mode: bool,
+        ctx: &TurnContext<'_>,
     ) -> Result<bool, String> {
+        let rag_context = ctx.rag_context;
+        let peer_card = ctx.peer_card;
+        let peer_representation = ctx.peer_representation;
+        let is_research_mode = ctx.is_research_mode;
+        let selected_model = config
+            .selected_model
+            .clone()
+            .unwrap_or("gemini-3.1-flash-lite-preview".to_string());
+        let api_key = config.gemini_api_key.as_ref().ok_or("No Gemini API key")?;
         let enable_tools = config.enable_tools.unwrap_or(true);
-        // Interactions API: model-specific endpoint, model in path
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:interactions",
-            selected_model
-        );
+        // Interactions API: flat endpoint, model specified in request body
+        let url = "https://generativelanguage.googleapis.com/v1beta/interactions".to_string();
 
         // Load memories for injection into system prompt (skip in incognito mode)
         let incognito_mode = config.incognito_mode.unwrap_or(false);
@@ -2013,11 +2011,16 @@ impl Agent {
             .map_err(|e| format!("API network error: {}", e))?;
 
         if !response.status().is_success() {
+            let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            app_handle
-                .emit("agent-error", format!("Gemini API Error: {}", error_text))
-                .ok();
-            return Err(format!("Gemini API Error: {}", error_text));
+            let msg = if error_text.is_empty() {
+                format!("Gemini API Error (HTTP {})", status)
+            } else {
+                format!("Gemini API Error (HTTP {}): {}", status, error_text)
+            };
+            log::warn!("[Gemini] {}", msg);
+            app_handle.emit("agent-error", &msg).ok();
+            return Err(msg);
         }
 
         use futures_util::StreamExt;
@@ -2200,11 +2203,12 @@ impl Agent {
         config: &crate::config::AppConfig,
         history: &mut Vec<ChatMessage>,
         stream_id: u64,
-        rag_context: Option<&str>,
-        peer_card: Option<&str>,
-        peer_representation: Option<&str>,
-        is_research_mode: bool,
+        ctx: &TurnContext<'_>,
     ) -> Result<bool, String> {
+        let rag_context = ctx.rag_context;
+        let peer_card = ctx.peer_card;
+        let peer_representation = ctx.peer_representation;
+        let is_research_mode = ctx.is_research_mode;
         let selected_model = config
             .selected_model
             .clone()
@@ -2531,8 +2535,7 @@ impl Agent {
                 let content_to_process = &buffer[..last_newline];
                 for line in content_to_process.lines() {
                     let line = line.trim();
-                    if line.starts_with("data: ") {
-                        let json_str = &line[6..];
+                    if let Some(json_str) = line.strip_prefix("data: ") {
                         if json_str == "[DONE]" {
                             continue;
                         }

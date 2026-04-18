@@ -3,6 +3,14 @@
  *
  * Reuses all backend Tauri commands and shared UI modules from src/ui/.
  * Renders a wider, sidebar-first layout with session management.
+ *
+ * Feature parity with main.ts (ambient):
+ * - Streaming with copy button, <think> tag handling, whitespace guard
+ * - Clipboard image paste + backspace-to-remove
+ * - Cron job display, proactive messages, provider fallback notifications
+ * - Focus tracking for blur-state CSS
+ * - OCR shortcut listener, error retry with history rewind
+ * - Full settings including heartbeat dashboard & cooldown
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -12,7 +20,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
 import "katex/dist/katex.min.css";
 
-import type { AttachedImage, ChatMessage, AppConfig, OcrResult, ModelsResponse } from "./types";
+import type { AttachedImage, ChatMessage, AppConfig, OcrResult, ModelsResponse, ProactiveMessage } from "./types";
 import { ChatState } from "./state";
 import { EVENTS } from "./events";
 import {
@@ -20,24 +28,30 @@ import {
   clearKatexErrors,
   getKatexErrors,
   detectUnrenderedLatex,
-  preprocessMarkdown,
   createThinkingElement,
   updateThinkingElement,
   createToolCallElement,
   updateToolResult,
   addMessage,
+  addProactiveMessage,
   getOrCreateWebSearchContainer,
   resetWebSearchContainer,
   isWebSearchTool,
   createWebSearchQueryElement,
   updateWebSearchCount,
+  createStreamingAssistantMessage,
+  renderStreamingContent,
+  shouldSkipStreamingChunk,
   RESEND_ICON,
   STOP_ICON,
   RETRY_ICON,
   SETTINGS_MODAL_HTML,
   initSettingsTabs,
+  populateHeartbeatsPanel,
   populateModelDropdown,
+  resizeImage,
   formatSessionDate,
+  logger,
 } from "./ui";
 
 // ── DOM References ────────────────────────────────────────────────────────────
@@ -81,7 +95,7 @@ async function returnToAmbient() {
   try {
     await invoke("close_dedicated_window");
   } catch (e) {
-    console.error("Failed to return to ambient:", e);
+    logger.error("Failed to return to ambient:", e);
     isClosing = false; // allow retry on error
   }
 }
@@ -90,13 +104,12 @@ closeBtn?.addEventListener("click", returnToAmbient);
 ambientBtn?.addEventListener("click", returnToAmbient);
 
 // Intercept Cmd+W / OS titlebar close — same returnToAmbient path.
-// When win.close() fires from Rust, onCloseRequested re-fires but isClosing=true,
-// so we skip preventDefault and let the OS close proceed normally.
 appWindow.onCloseRequested(async (event) => {
   if (isClosing) return; // second fire after Rust win.close() — let it through
   event.preventDefault();
   await returnToAmbient();
 });
+
 // ── Open external links in browser ───────────────────────────────────────────
 
 document.addEventListener("click", (e) => {
@@ -104,12 +117,34 @@ document.addEventListener("click", (e) => {
   const anchor = target.closest("a");
   if (anchor?.href && (anchor.href.startsWith("http://") || anchor.href.startsWith("https://"))) {
     e.preventDefault();
-    openUrl(anchor.href).catch(console.error);
+    openUrl(anchor.href).catch((e: any) => logger.error(e));
   }
 });
 
-// ── Chat Helpers ──────────────────────────────────────────────────────────────
+// ── Focus Tracking ────────────────────────────────────────────────────────────
 
+(function () {
+  const root = document.documentElement;
+
+  function setFocused(focused: boolean) {
+    root.classList.toggle("app-focused", focused);
+    root.classList.toggle("app-unfocused", !focused);
+  }
+
+  setFocused(document.hasFocus());
+
+  window.addEventListener("focus", () => setFocused(true));
+  window.addEventListener("blur", () => setFocused(false));
+
+  let lastFocus = document.hasFocus();
+  setInterval(() => {
+    const now = document.hasFocus();
+    if (now !== lastFocus) {
+      lastFocus = now;
+      setFocused(now);
+    }
+  }, 2000);
+})();
 
 // ── Input Handling ────────────────────────────────────────────────────────────
 
@@ -118,12 +153,13 @@ async function handleInput(skipUi = false) {
   if ((!text && !skipUi) || state.isProcessing) return;
 
   state.resetForNewTurn();
+  state.isCancelled = false;
+
+  const currentImages = [...state.attachedImages];
 
   if (!skipUi) {
     state.lastUserMessage = text;
-    state.isCancelled = false;
-    const currentImages = [...state.attachedImages];
-    state.lastAttachedImages = [...state.attachedImages];
+    state.lastAttachedImages = [...currentImages];
     inputField.value = "";
     inputField.style.height = "auto";
     addMessage(chatArea, "user", text, currentImages);
@@ -132,13 +168,13 @@ async function handleInput(skipUi = false) {
     const container = document.getElementById("dedicated-image-preview-container");
     if (container) container.innerHTML = "";
   } else {
-    state.isCancelled = false;
     inputField.value = "";
     inputField.style.height = "auto";
   }
 
+  const finalImages = skipUi ? currentImages : state.lastAttachedImages;
+
   state.isProcessing = true;
-  const imagesToSend = skipUi ? [...state.attachedImages] : [...state.lastAttachedImages];
   resetWebSearchContainer();
   clearKatexErrors();
   stopBtn.style.display = "inline-flex";
@@ -147,17 +183,16 @@ async function handleInput(skipUi = false) {
   stopBtn.dataset.mode = "stop";
 
   try {
-    // Always send image binary data to backend — provider routing happens server-side
     const payload: Record<string, unknown> = { message: skipUi ? state.lastUserMessage : text };
 
-    if (imagesToSend.length > 0) {
-      payload.imagesBase64 = imagesToSend.map((img) => img.base64);
-      payload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
+    if (finalImages.length > 0) {
+      payload.imagesBase64 = finalImages.map((img) => img.base64);
+      payload.imagesMimeTypes = finalImages.map((img) => img.mimeType);
     }
 
     await invoke("chat", payload);
   } catch (error) {
-    console.error("Chat error:", error);
+    logger.error("Chat error:", error);
   } finally {
     state.isProcessing = false;
     stopBtn.classList.remove("loading");
@@ -178,12 +213,11 @@ async function handleInput(skipUi = false) {
       const allErrors = [...parseErrors, ...unrenderedErrors];
       if (allErrors.length > 0) {
         try { await invoke("retry_with_katex_hint", { katexErrors: allErrors }); }
-        catch (e) { console.error("[KaTeX] Retry failed:", e); }
+        catch (e) { logger.error("[KaTeX] Retry failed:", e); }
       }
     }
 
     // Reset streaming state and refresh session sidebar
-    currentAssistantEl = null;
     loadSessions();
   }
 }
@@ -197,14 +231,98 @@ inputField?.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     handleInput();
+  } else if (e.key === "Backspace" && inputField.value === "" && state.attachedImages.length > 0) {
+    e.preventDefault();
+    state.attachedImages.pop();
+    const container = document.getElementById("dedicated-image-preview-container");
+    if (container) {
+      const lastPreview = container.lastElementChild;
+      if (lastPreview) lastPreview.remove();
+    }
+  }
+});
+
+// ── Clipboard Image Paste ─────────────────────────────────────────────────────
+
+inputField?.addEventListener("paste", async (e) => {
+  const clipboardData = e.clipboardData;
+  if (!clipboardData) return;
+
+  const items = Array.from(clipboardData.items);
+  const imageItem = items.find((item) => item.type.startsWith("image/"));
+
+  if (imageItem) {
+    e.preventDefault();
+
+    const file = imageItem.getAsFile();
+    if (!file) return;
+
+    setTimeout(() => {
+      const objectUrl = URL.createObjectURL(file);
+      const mimeType = file.type;
+
+      const ocrTask = async () => {
+        try {
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve((reader.result as string).split(",")[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+
+          imageData.base64 = base64;
+
+          const resizedBase64 = await resizeImage(base64, mimeType, 1024);
+          const text = await invoke<string>("ocr_image", { imageBase64: resizedBase64 });
+          return text;
+        } catch (e) {
+          logger.error("OCR Process failed:", e);
+          return "[OCR failed]";
+        }
+      };
+
+      const imageData: AttachedImage = {
+        base64: "",
+        mimeType,
+        ocrText: "[Processing...]",
+        previewUrl: objectUrl,
+        ocrPromise: ocrTask()
+      };
+
+      showImagePreview(imageData);
+
+      if (imageData.ocrPromise) {
+        imageData.ocrPromise.then(text => {
+          imageData.ocrText = text;
+        });
+      }
+
+      inputField.focus();
+    }, 0);
   }
 });
 
 stopBtn?.addEventListener("click", async () => {
   if (stopBtn.dataset.mode === "resend") {
+    // Remove failed assistant output from UI
+    while (chatArea.lastElementChild) {
+      const el = chatArea.lastElementChild;
+      if (el.classList.contains("user")) break;
+      if (
+        el.classList.contains("assistant") ||
+        el.classList.contains("tool-output") ||
+        el.classList.contains("thinking-output") ||
+        el.classList.contains("web-search-container")
+      ) {
+        el.remove();
+      } else {
+        break;
+      }
+    }
+
     state.attachedImages = [...state.lastAttachedImages];
     inputField.value = state.lastUserMessage;
-    try { await invoke("rewind_history"); } catch (e) { console.error(e); }
+    try { await invoke("rewind_history"); } catch (e) { logger.error(e); }
     handleInput(true);
     return;
   }
@@ -215,7 +333,7 @@ stopBtn?.addEventListener("click", async () => {
     stopBtn.classList.remove("loading");
     stopBtn.innerHTML = RESEND_ICON;
     stopBtn.dataset.mode = "resend";
-  } catch (e) { console.error(e); }
+  } catch (e) { logger.error(e); }
 });
 
 // ── OCR ───────────────────────────────────────────────────────────────────────
@@ -239,7 +357,37 @@ ocrBtn?.addEventListener("click", async () => {
         .catch(() => { newImage.ocrText = "[OCR failed]"; });
       inputField.focus();
     }
-  } catch (e) { console.error("OCR error:", e); }
+  } catch (e) { logger.error("OCR error:", e); }
+});
+
+// Listen for OCR trigger from global shortcut
+listen(EVENTS.TRIGGER_OCR, async () => {
+  inputField.focus();
+  try {
+    const result = await invoke<OcrResult>("perform_ocr_capture");
+    if (result) {
+      const ocrPromise = invoke<string>("ocr_image", { imageBase64: result.image_base64 });
+      const newImage: AttachedImage = {
+        base64: result.image_base64,
+        mimeType: result.mime_type,
+        ocrText: "[Processing...]",
+        ocrPromise,
+      };
+      showImagePreview(newImage);
+
+      ocrPromise.then(text => {
+        newImage.ocrText = text;
+      }).catch(err => {
+        logger.error("OCR failed:", err);
+        newImage.ocrText = "[OCR failed]";
+      });
+
+      inputField.focus();
+    }
+  } catch (error) {
+    logger.error("OCR error:", error);
+    inputField.focus();
+  }
 });
 
 function showImagePreview(imageData: AttachedImage) {
@@ -277,8 +425,6 @@ function showImagePreview(imageData: AttachedImage) {
 
 // ── Settings Modal ────────────────────────────────────────────────────────────
 
-
-
 settingsModal.innerHTML = DOMPurify.sanitize(SETTINGS_MODAL_HTML);
 initSettingsTabs(settingsModal);
 
@@ -288,6 +434,7 @@ const providerConflictWarning = settingsModal.querySelector("#provider-conflict-
 const enableToolsCheckbox = settingsModal.querySelector("#enable-tools") as HTMLInputElement;
 const incognitoModeCheckbox = settingsModal.querySelector("#incognito-mode") as HTMLInputElement;
 const enableScreenContextCheckbox = settingsModal.querySelector("#enable-screen-context") as HTMLInputElement;
+const heartbeatCooldownInput = settingsModal.querySelector("#heartbeat-cooldown") as HTMLInputElement;
 const geminiKeyInput = settingsModal.querySelector("#gemini-key") as HTMLInputElement;
 const openRouterKeyInput = settingsModal.querySelector("#openrouter-key") as HTMLInputElement;
 const cerebrasKeyInput = settingsModal.querySelector("#cerebras-key") as HTMLInputElement;
@@ -326,8 +473,6 @@ const checkProviderConflict = () => {
   }
 };
 
-
-
 modelInput.addEventListener("change", () => {
   updateToolAvailability();
   checkProviderConflict();
@@ -356,11 +501,17 @@ async function populateSettings() {
       enableScreenContextCheckbox.checked = config.enable_screen_context || false;
       enableScreenContextCheckbox.disabled = incognitoModeCheckbox.checked;
     }
+    if (heartbeatCooldownInput) {
+      heartbeatCooldownInput.value = String(config.heartbeat_global_cooldown_secs ?? 60);
+    }
 
     updateToolAvailability();
     checkProviderConflict();
+
+    // Populate heartbeats dashboard (async, non-blocking)
+    populateHeartbeatsPanel(settingsModal);
   } catch (e) {
-    console.error("Settings load error:", e);
+    logger.error("Settings load error:", e);
   }
 }
 
@@ -377,6 +528,7 @@ async function saveSettings() {
     enable_tools: enableToolsCheckbox.checked,
     incognito_mode: incognitoModeCheckbox.checked,
     enable_screen_context: enableScreenContextCheckbox.checked,
+    heartbeat_global_cooldown_secs: parseInt(heartbeatCooldownInput?.value) || 60,
   };
 
   try {
@@ -400,12 +552,11 @@ settingsModal.querySelector("#close-settings")?.addEventListener("click", () => 
 
 // ── Session Sidebar ───────────────────────────────────────────────────────────
 
-// Bug fix #2: Backend returns {session_id, title, summary, date} — not {id, created_at}
 interface SessionEntry {
   session_id: string;
   title: string;
   summary: string;
-  date: string; // e.g. "2026-02-28 07:42:10" — SQLite datetime string
+  date: string;
 }
 
 let allSessions: SessionEntry[] = [];
@@ -441,14 +592,12 @@ function renderSessions(sessions: SessionEntry[]) {
       item.className = "sidebar-session-item";
       item.setAttribute("role", "button");
       item.setAttribute("tabindex", "0");
-      // Bug fix #5: use session_id not id
       item.setAttribute("data-session-id", session.session_id);
       item.title = session.title;
       if (state.currentSessionId === session.session_id) {
         item.classList.add("active");
       }
 
-      // Wrap title and preview in a container to avoid clobbering by sanitize
       const contentWrapper = document.createElement("div");
       contentWrapper.className = "sidebar-session-content";
       contentWrapper.innerHTML = DOMPurify.sanitize(
@@ -467,32 +616,24 @@ function renderSessions(sessions: SessionEntry[]) {
         e.stopPropagation();
         try {
           await invoke("delete_session", { sessionId: session.session_id });
-          console.log(`[Delete] Deleted session: ${session.session_id}`);
 
-          // If deleted session was active, clear chat and fetch the new active session ID
           if (state.currentSessionId === session.session_id || item.classList.contains("active")) {
-            console.log("[Delete] Deleted active session. Clearing chat area.");
-            state.currentSessionId = null; // Clear immediately to avoid race
+            state.currentSessionId = null;
             chatArea.innerHTML = "";
             state.currentThinkingBlock = null;
-            currentAssistantEl = null;
 
-            // Fetch the new active session ID generated by the backend
             const nextId = await invoke<string>("get_current_session_id");
             state.currentSessionId = nextId;
-            console.log(`[Delete] New active session ID: ${state.currentSessionId}`);
             updateNewChatButtonState();
           }
 
-          // Reload sidebar list after state is updated
           await loadSessions();
         } catch (err) {
-          console.error("Failed to delete session:", err);
+          logger.error("Failed to delete session:", err);
         }
       });
 
       item.appendChild(deleteBtn);
-      // Bug fix #5: pass session.session_id
       const handleSelect = () => loadSession(session.session_id);
       item.addEventListener("click", handleSelect);
       item.addEventListener("keydown", (e) => {
@@ -509,21 +650,19 @@ function renderSessions(sessions: SessionEntry[]) {
 async function loadSessions() {
   try {
     const raw = await invoke<string>("get_recent_sessions", { limit: 30 });
-    // Backend returns "No matching sessions found." string on empty
-    // Backend returns "No matching sessions found." string on empty
     if (typeof raw === "string" && raw === "No matching sessions found.") {
       allSessions = [];
     } else {
       try {
         allSessions = JSON.parse(raw) as SessionEntry[];
       } catch (err) {
-        console.error("Mismatched or invalid session JSON:", err);
+        logger.error("Mismatched or invalid session JSON:", err);
         allSessions = [];
       }
     }
     renderSessions(allSessions);
   } catch (e) {
-    console.error("Failed to load sessions:", e);
+    logger.error("Failed to load sessions:", e);
   }
 }
 
@@ -533,14 +672,13 @@ async function loadSession(sessionId: string) {
     state.currentSessionId = sessionId;
     chatArea.innerHTML = "";
     state.currentThinkingBlock = null;
-    currentAssistantEl = null;
     await loadChatHistory();
     sessionsList.querySelectorAll(".sidebar-session-item").forEach((el) => {
       const elId = (el as HTMLElement).dataset.sessionId;
       el.classList.toggle("active", elId === sessionId);
     });
   } catch (e) {
-    console.error("Failed to load session:", e);
+    logger.error("Failed to load session:", e);
   }
 }
 
@@ -559,17 +697,14 @@ newChatBtn?.addEventListener("click", async () => {
     state.currentSessionId = null;
     chatArea.innerHTML = "";
     state.currentThinkingBlock = null;
-    currentAssistantEl = null;
     updateNewChatButtonState();
-    // Pre-fetch immediately to show the "Active Session" stub, but real summary update
-    // will arrive via `sessions-updated` event shortly after.
     await loadSessions();
-  } catch (e) { console.error(e); }
+  } catch (e) { logger.error(e); }
 });
 
 // Listen for background session analysis completion
 listen(EVENTS.SESSIONS_UPDATED, () => {
-  loadSessions().catch(e => console.error("Failed to reload sessions after update:", e));
+  loadSessions().catch(e => logger.error("Failed to reload sessions after update:", e));
 });
 
 // ── Load Chat History ─────────────────────────────────────────────────────────
@@ -577,7 +712,6 @@ listen(EVENTS.SESSIONS_UPDATED, () => {
 async function loadChatHistory() {
   const fragment = document.createDocumentFragment();
   try {
-    // Sync current session ID from backend
     state.currentSessionId = await invoke<string>("get_current_session_id");
 
     const history = await invoke<ChatMessage[]>("get_chat_history");
@@ -621,43 +755,80 @@ async function loadChatHistory() {
     chatArea.appendChild(fragment);
     chatArea.scrollTop = chatArea.scrollHeight;
     updateNewChatButtonState();
+
+    // Load pending proactive messages at the end of chat history
+    await loadProactiveMessages();
   } catch (e) {
-    console.error("Failed to load chat history:", e);
+    logger.error("Failed to load chat history:", e);
     if (fragment.hasChildNodes()) chatArea.appendChild(fragment);
+  }
+}
+
+async function loadProactiveMessages() {
+  try {
+    const activeSessionId = await invoke<string>("get_current_session_id").catch(() => "");
+    const messages = await invoke<ProactiveMessage[]>("get_proactive_messages");
+
+    for (const msg of messages) {
+      if (msg.heartbeat_session === activeSessionId) {
+        addProactiveMessage(chatArea, msg);
+      }
+    }
+  } catch (error) {
+    logger.error("Failed to load proactive messages:", error);
   }
 }
 
 // ── Tauri Event Listeners ─────────────────────────────────────────────────────
 
-let currentAssistantEl: HTMLElement | null = null;
-
 listen<string>(EVENTS.AGENT_RESPONSE_CHUNK, (event) => {
   const chunk = event.payload;
   if (!chunk) return;
 
+  let lastMsg = chatArea.lastElementChild;
+
+  // Skip whitespace-only chunks that would create empty bubbles
+  if (shouldSkipStreamingChunk(lastMsg, chunk)) return;
+
+  // Remove loading indicator if present
   const loadingIndicator = chatArea.querySelector("#loading-indicator");
-  if (loadingIndicator && currentAssistantEl === loadingIndicator) {
-    // If the current assistant element IS the loading indicator, clear it out
-    // so we can start fresh.
-    loadingIndicator.remove();
-    currentAssistantEl = null;
-  } else if (loadingIndicator) {
-    loadingIndicator.remove();
+  if (loadingIndicator) loadingIndicator.remove();
+
+  // Create new assistant message if needed
+  if (
+    !lastMsg ||
+    !lastMsg.classList.contains("assistant") ||
+    lastMsg.classList.contains("tool-output") ||
+    lastMsg.classList.contains("thinking-output")
+  ) {
+    const msgDiv = createStreamingAssistantMessage();
+    chatArea.appendChild(msgDiv);
+    lastMsg = msgDiv;
   }
 
-  if (!currentAssistantEl) {
-    currentAssistantEl = document.createElement("div");
-    currentAssistantEl.className = "message assistant";
-    chatArea.appendChild(currentAssistantEl);
-  }
-  const prev = currentAssistantEl.getAttribute("data-raw") || "";
+  const prev = lastMsg.getAttribute("data-raw") || "";
   const combined = prev + chunk;
-  currentAssistantEl.setAttribute("data-raw", combined);
-  currentAssistantEl.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(combined)));
+  lastMsg.setAttribute("data-raw", combined);
+
+  // Mark thinking complete if we have substantial content
+  if (combined.length > 10) {
+    const openThinking = chatArea.querySelector('.thinking-output:not([data-complete="true"])');
+    if (openThinking) {
+      updateThinkingElement(openThinking as HTMLElement, openThinking.getAttribute("data-thinking") || "", true);
+    }
+  }
+
+  const html = renderStreamingContent(combined);
+
+  const contentDiv = lastMsg.querySelector(".message-content");
+  if (contentDiv) {
+    contentDiv.innerHTML = html;
+  } else {
+    lastMsg.innerHTML = html;
+  }
   chatArea.scrollTop = chatArea.scrollHeight;
 });
 
-// Bug fix #3: Use state.currentThinkingBlock + updateThinkingElement (same pattern as main.ts)
 listen<string>(EVENTS.AGENT_REASONING_CHUNK, (event) => {
   const content = event.payload;
   if (!state.currentThinkingBlock || !chatArea.contains(state.currentThinkingBlock)) {
@@ -670,7 +841,6 @@ listen<string>(EVENTS.AGENT_REASONING_CHUNK, (event) => {
   chatArea.scrollTop = chatArea.scrollHeight;
 });
 
-// Bug fix #3: AGENT_TOOL_CALL payload is {name, args, id, rawArgs} — not {function:{name,arguments}}
 listen<string>(EVENTS.AGENT_TOOL_CALL, (event) => {
   const payload = JSON.parse(event.payload);
 
@@ -730,10 +900,8 @@ listen<string>(EVENTS.AGENT_TOOL_RESULT, (event) => {
   const result = payload.result;
 
   if (isWebSearchTool(name)) {
-    // 1. Try to find by ID if provided (preferred)
     let matchingQuery = payload.id ? chatArea.querySelector(`[data-tool-id="${payload.id}"]`) as HTMLElement : null;
 
-    // 2. Fallback to finding the last search query without a result
     if (!matchingQuery) {
       const webSearchQueries = Array.from(chatArea.querySelectorAll(".web-search-query"));
       matchingQuery = webSearchQueries
@@ -791,12 +959,9 @@ listen<string>(EVENTS.AGENT_RETRY, (event) => {
     retryingDiv.innerHTML = `<span class="loading-dots">Retrying (${escapedAttempt}/${escapedMax})...</span>`;
     chatArea.appendChild(retryingDiv);
 
-    // Ensure the stream knows the active element is the loading indicator so it clears it
-    currentAssistantEl = retryingDiv;
-
     chatArea.scrollTop = chatArea.scrollHeight;
   } catch (e) {
-    console.error("[Agent Retry] Failed to parse retry event:", e);
+    logger.error("[Agent Retry] Failed to parse retry event:", e);
   }
 });
 
@@ -804,20 +969,23 @@ listen<string>(EVENTS.AGENT_RETRY, (event) => {
 listen<string>(EVENTS.AGENT_RETRY_EXHAUSTED, (event) => {
   try {
     const payload = JSON.parse(event.payload);
-    console.log("[Agent Retry] Retries exhausted:", payload);
+    logger.info("[Agent Retry] Retries exhausted:", payload);
     const loadingIndicator = chatArea.querySelector("#loading-indicator");
     if (loadingIndicator) loadingIndicator.remove();
   } catch (e) {
-    console.error("[Agent Retry] Failed to parse exhausted event:", e);
+    logger.error("[Agent Retry] Failed to parse exhausted event:", e);
   }
 });
 
 // Listen for API errors and display with retry button
 listen<string>(EVENTS.AGENT_ERROR, (event) => {
   const errorText = event.payload;
-  console.error("API Error:", errorText);
+  logger.error("API Error:", errorText);
 
-  // Create error message with accordion and retry button below
+  // Remove loading indicator if present
+  const loadingIndicator = chatArea.querySelector("#loading-indicator");
+  if (loadingIndicator) loadingIndicator.remove();
+
   const errorDiv = document.createElement("div");
   errorDiv.className = "message error-message";
   errorDiv.innerHTML = DOMPurify.sanitize(`
@@ -833,55 +1001,112 @@ listen<string>(EVENTS.AGENT_ERROR, (event) => {
   const detailsEl = errorDiv.querySelector('.error-details');
   if (detailsEl) detailsEl.textContent = errorText;
 
-  // Wire retry button
+  // Wire retry button — rewind history to avoid duplicating the failed user message
   const retryBtn = errorDiv.querySelector(".retry-btn");
   retryBtn?.addEventListener("click", async () => {
     errorDiv.remove();
+    try { await invoke("rewind_history"); } catch (e) { logger.error("Failed to rewind history:", e); }
+    state.attachedImages = [...state.lastAttachedImages];
     inputField.value = state.lastUserMessage;
-    handleInput(false);
+    handleInput(true);
   });
 
   chatArea.appendChild(errorDiv);
   chatArea.scrollTop = chatArea.scrollHeight;
+
+  // Reset processing state
+  state.isProcessing = false;
+  stopBtn.classList.remove("loading");
+  stopBtn.style.display = "none";
+});
+
+// Listen for provider fallback notifications (rate limit → OpenRouter)
+listen<string>(EVENTS.AGENT_FALLBACK, (event) => {
+  if (state.fallbackShownThisTurn) return;
+  state.fallbackShownThisTurn = true;
+
+  try {
+    const data = JSON.parse(event.payload);
+    const title = data.title || "Provider Fallback";
+    const details = data.details || "";
+
+    logger.info("[Fallback]", title, details);
+
+    const fallbackDiv = document.createElement("div");
+    fallbackDiv.className = "message fallback-message";
+    fallbackDiv.innerHTML = DOMPurify.sanitize(`
+      <details class="fallback-accordion">
+        <summary class="fallback-summary"></summary>
+        <div class="fallback-details"></div>
+      </details>
+    `);
+    const summaryEl = fallbackDiv.querySelector('.fallback-summary');
+    if (summaryEl) summaryEl.textContent = title;
+    const detailsEl = fallbackDiv.querySelector('.fallback-details');
+    if (detailsEl) detailsEl.textContent = details;
+
+    chatArea.appendChild(fallbackDiv);
+    chatArea.scrollTop = chatArea.scrollHeight;
+  } catch (e) {
+    logger.error("Failed to parse fallback event:", e);
+  }
+});
+
+// Listen for background cron jobs starting
+listen<string>(EVENTS.AGENT_CRON_STARTED, (event) => {
+  const prompt = DOMPurify.sanitize(event.payload);
+  resetWebSearchContainer();
+  addMessage(chatArea, "cron", prompt, undefined);
+});
+
+// Listen for incoming proactive messages/drafts
+listen<ProactiveMessage>(EVENTS.PROACTIVE_MESSAGE, async (event) => {
+  logger.info("[Proactive] Received new proactive action:", event.payload);
+
+  const activeSessionId = await invoke<string>("get_current_session_id").catch(() => "");
+
+  if (event.payload.heartbeat_session === activeSessionId) {
+    addProactiveMessage(chatArea, event.payload);
+  }
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 async function init() {
-  console.log("[Init] Starting dedicated window initialization...");
+  logger.info("[Init] Starting dedicated window initialization...");
 
   // 1. Sync current session ID from backend first
   try {
     state.currentSessionId = await invoke<string>("get_current_session_id");
-    console.log("[Init] Current session ID synced:", state.currentSessionId);
+    logger.info("[Init] Current session ID synced:", state.currentSessionId);
   } catch (e) {
-    console.error("[Init] Failed to sync session ID:", e);
+    logger.error("[Init] Failed to sync session ID:", e);
   }
 
   // 2. Load chat history (uses the synced ID internally too, but safe)
   try {
     await loadChatHistory();
   } catch (e) {
-    console.error("[Init] Failed to load chat history:", e);
+    logger.error("[Init] Failed to load chat history:", e);
   }
 
   // 3. Load and render sessions (will highlight active one correctly)
   try {
     await loadSessions();
   } catch (e) {
-    console.error("[Init] Failed to load sessions:", e);
+    logger.error("[Init] Failed to load sessions:", e);
   }
 
   // 4. Populate settings (models, keys, etc.)
   try {
     await populateSettings();
   } catch (e) {
-    console.error("[Init] Failed to populate settings:", e);
+    logger.error("[Init] Failed to populate settings:", e);
   }
 
   updateNewChatButtonState();
   if (inputField) inputField.focus();
-  console.log("[Init] Dedicated window initialization complete.");
+  logger.info("[Init] Dedicated window initialization complete.");
 }
 
 init();

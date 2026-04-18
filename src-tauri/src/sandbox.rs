@@ -1,6 +1,5 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use tokio::process::Command;
 use wasmtime::*;
 use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 use wasmtime_wasi::preview1::{self, WasiP1Ctx};
@@ -23,10 +22,10 @@ const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-/// Execute Python code, preferring system Python, falling back to WASI sandbox.
+/// Execute Python code inside the WASI sandbox.
 ///
 /// - `code`: Python source to execute
-/// - `resource_dir`: path to app resources (contains python.wasm for fallback)
+/// - `resource_dir`: path to app resources (contains python.wasm)
 /// - `timeout_secs`: max wall-clock seconds (default 30)
 pub async fn execute_python(
     code: &str,
@@ -39,88 +38,8 @@ pub async fn execute_python(
         timeout_secs
     };
 
-    // Try system Python first (fast, no WASM overhead)
-    if let Some(python_path) = find_system_python().await {
-        return execute_python_subprocess(code, &python_path, timeout).await;
-    }
-
-    // Fall back to WASI sandbox
+    // Use WASI sandbox exclusively for security
     execute_python_wasi(code, resource_dir, timeout).await
-}
-
-// ── System Python (subprocess) ───────────────────────────────────────────────
-
-/// Search for a usable Python 3 interpreter on the system.
-async fn find_system_python() -> Option<PathBuf> {
-    for candidate in &["python3", "python"] {
-        if let Ok(output) = Command::new(candidate).arg("--version").output().await {
-            if output.status.success() {
-                let version = String::from_utf8_lossy(&output.stdout);
-                // Ensure it's Python 3.x
-                if version.contains("Python 3") {
-                    return Some(PathBuf::from(candidate));
-                }
-                // Some Python builds print version to stderr
-                let version_err = String::from_utf8_lossy(&output.stderr);
-                if version_err.contains("Python 3") {
-                    return Some(PathBuf::from(candidate));
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Execute Python code via a system subprocess with timeout and temp-dir isolation.
-async fn execute_python_subprocess(
-    code: &str,
-    python_path: &PathBuf,
-    timeout_secs: u64,
-) -> Result<ExecutionResult, String> {
-    let scratch = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
-    let script_path = scratch.path().join("main.py");
-    std::fs::write(&script_path, code).map_err(|e| format!("Failed to write script: {}", e))?;
-
-    let child = Command::new(python_path)
-        .arg(&script_path)
-        .current_dir(scratch.path())
-        .env_clear()
-        // Minimal env for Python to function
-        .env("PATH", "/usr/bin:/usr/local/bin:/bin")
-        .env("HOME", scratch.path())
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .env("PYTHONUNBUFFERED", "1")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| format!("Failed to spawn Python: {}", e))?;
-
-    // Wait with timeout
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs),
-        child.wait_with_output(),
-    )
-    .await;
-
-    match result {
-        Ok(Ok(output)) => Ok(ExecutionResult {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            timed_out: false,
-            fuel_exhausted: false,
-        }),
-        Ok(Err(e)) => Err(format!("Python process error: {}", e)),
-        Err(_) => {
-            // Timeout — kill_on_drop handles cleanup
-            Ok(ExecutionResult {
-                stdout: String::new(),
-                stderr: String::new(),
-                timed_out: true,
-                fuel_exhausted: false,
-            })
-        }
-    }
 }
 
 // ── WASI Sandbox ─────────────────────────────────────────────────────────────
@@ -132,7 +51,7 @@ static PYTHON_MODULE: OnceLock<(Engine, Module)> = OnceLock::new();
 /// Load or return the cached (Engine, Module) pair.
 /// Uses get() + set() instead of get_or_try_init (unstable).
 /// Minor race on first call is harmless — only one value wins set().
-fn get_or_compile_module(resource_dir: &PathBuf) -> Result<&'static (Engine, Module), String> {
+fn get_or_compile_module(resource_dir: &Path) -> Result<&'static (Engine, Module), String> {
     if let Some(cached) = PYTHON_MODULE.get() {
         return Ok(cached);
     }
@@ -208,7 +127,7 @@ async fn execute_python_wasi(
 
 fn execute_python_wasi_sync(
     code: &str,
-    resource_dir: &PathBuf,
+    resource_dir: &Path,
     timeout_secs: u64,
 ) -> Result<ExecutionResult, String> {
     let (engine, module) = get_or_compile_module(resource_dir)?;
@@ -298,12 +217,8 @@ fn execute_python_wasi_sync(
                 // Normal Python exit (e.g., sys.exit(0)) — not an error
             } else {
                 // Other trap (e.g., memory OOB)
-                let stdout =
-                    String::from_utf8_lossy(&stdout_pipe.try_into_inner().unwrap_or_default())
-                        .to_string();
-                let mut stderr =
-                    String::from_utf8_lossy(&stderr_pipe.try_into_inner().unwrap_or_default())
-                        .to_string();
+                let stdout = String::from_utf8_lossy(&stdout_pipe.contents()).to_string();
+                let mut stderr = String::from_utf8_lossy(&stderr_pipe.contents()).to_string();
                 stderr.push_str(&format!("\nWasm trap: {}", err_str));
 
                 let _ = timeout_handle;
@@ -317,11 +232,10 @@ fn execute_python_wasi_sync(
         }
     }
 
-    // Extract captured output
-    let stdout =
-        String::from_utf8_lossy(&stdout_pipe.try_into_inner().unwrap_or_default()).to_string();
-    let stderr =
-        String::from_utf8_lossy(&stderr_pipe.try_into_inner().unwrap_or_default()).to_string();
+    // Extract captured output — use contents() instead of try_into_inner()
+    // because the store still holds Arc references to the pipes.
+    let stdout = String::from_utf8_lossy(&stdout_pipe.contents()).to_string();
+    let stderr = String::from_utf8_lossy(&stderr_pipe.contents()).to_string();
 
     // Clean up timeout thread (it'll finish on its own, harmless)
     let _ = timeout_handle;

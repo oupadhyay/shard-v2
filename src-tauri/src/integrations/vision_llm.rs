@@ -9,7 +9,7 @@ use crate::config::AppConfig;
 /// Groq Vision model (Llama 4 Scout with vision capabilities)
 const GROQ_VISION_MODEL: &str = "meta-llama/llama-4-scout-17b-16e-instruct";
 
-/// OpenRouter free vision models in priority order (fallback if Gemma 3 fails)
+/// OpenRouter free vision models in priority order (fallback if Gemma 4 fails)
 const OPENROUTER_VISION_MODELS: &[&str] = &[
     "allenai/molmo-2-8b:free",
     "qwen/qwen-2.5-vl-7b-instruct:free",
@@ -67,7 +67,7 @@ struct OpenAIMessage {
 /// This is the single entry point for all vision processing - screenshots, chat images,
 /// and screen context analysis all use this function.
 ///
-/// Uses Gemma 3 27B as the primary vision model, with fallbacks to other vision models.
+/// Uses Gemma 4 31B as the primary vision model, with fallbacks to other vision models.
 pub async fn process_image_with_context(
     http_client: &Client,
     image_base64: &str,
@@ -75,8 +75,8 @@ pub async fn process_image_with_context(
     user_question: &str,
     config: &AppConfig,
 ) -> Result<String, String> {
-    // Primary model: Gemma 3 27B - strong multimodal capabilities
-    const CONTEXT_VISION_MODEL: &str = "google/gemma-3-27b-it:free";
+    // Primary model: Gemma 4 31B - strong multimodal capabilities (256K context)
+    const CONTEXT_VISION_MODEL: &str = "google/gemma-4-31b-it:free";
 
     // Build a prompt that includes the user's question for contextual understanding
     let contextual_prompt = format!(
@@ -90,7 +90,7 @@ Please analyze the image carefully and provide a helpful response that directly 
 
     let data_uri = format!("data:{};base64,{}", mime_type, image_base64);
 
-    // Try OpenRouter with Gemma 3 27B
+    // Try OpenRouter with Gemma 4 31B
     if let Some(openrouter_key) = &config.openrouter_api_key {
         log::info!(
             "[VisionLLM] Processing image with context using {}",
@@ -154,7 +154,7 @@ Please analyze the image carefully and provide a helpful response that directly 
             }
         }
 
-        // Fallback to other vision models if Gemma 3 fails
+        // Fallback to other vision models if Gemma 4 fails
         for model in OPENROUTER_VISION_MODELS {
             let request = OpenAIVisionRequest {
                 model: model.to_string(),

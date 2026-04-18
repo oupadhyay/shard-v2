@@ -2,6 +2,7 @@
  * Image processing utilities — async resizing via createImageBitmap + OffscreenCanvas
  * with progressive fallbacks for environments that lack modern APIs.
  */
+import { logger } from "./utils";
 
 /**
  * Resizes an image asynchronously using modern web APIs (createImageBitmap, OffscreenCanvas).
@@ -103,7 +104,7 @@ export async function resizeImage(base64: string, mimeType: string, maxWidth: nu
     const resizedDataUrl = canvas.toDataURL("image/jpeg", 0.8);
     return resizedDataUrl.split(",")[1];
   } catch (error) {
-    console.error("Error in resizeImage:", error);
+    logger.error("Error in resizeImage:", error);
     // Log and rethrow to let callers handle the failure
     throw error;
   }

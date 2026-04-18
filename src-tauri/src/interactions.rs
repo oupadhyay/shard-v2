@@ -250,7 +250,8 @@ pub fn search_interactions<R: Runtime>(
             if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
                 if let Ok(file) = fs::File::open(path) {
                     let reader = BufReader::new(file);
-                    for line in reader.lines().flatten() {
+                    #[allow(clippy::lines_filter_map_ok)]
+                    for line in reader.lines().filter_map(Result::ok) {
                         if let Ok(entry) = serde_json::from_str::<InteractionEntry>(&line) {
                             if let Some(emb) = &entry.embedding {
                                 let score = cosine_similarity(query_embedding, emb);
@@ -316,7 +317,8 @@ pub fn hybrid_search_interactions<R: Runtime>(
             if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
                 if let Ok(file) = fs::File::open(&path) {
                     let reader = BufReader::new(file);
-                    for line in reader.lines().flatten() {
+                    #[allow(clippy::lines_filter_map_ok)]
+                    for line in reader.lines().filter_map(Result::ok) {
                         if let Ok(entry) = serde_json::from_str::<InteractionEntry>(&line) {
                             if let Some(emb) = &entry.embedding {
                                 let score = cosine_similarity(query_embedding, emb);
@@ -395,7 +397,8 @@ fn find_entry_by_doc_id<R: Runtime>(
             if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
                 if let Ok(file) = fs::File::open(&path) {
                     let reader = BufReader::new(file);
-                    for line in reader.lines().flatten() {
+                    #[allow(clippy::lines_filter_map_ok)]
+                    for line in reader.lines().filter_map(Result::ok) {
                         if let Ok(entry) = serde_json::from_str::<InteractionEntry>(&line) {
                             if entry.ts.to_rfc3339() == doc_id {
                                 return Ok(entry);

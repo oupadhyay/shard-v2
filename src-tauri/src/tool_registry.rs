@@ -67,6 +67,12 @@ const GLOBAL_TOOLS: &[&str] = &[
     "wake_me_up_in",
 ];
 
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToolRegistry {
     /// Build the complete registry with all known tools.
     pub fn new() -> Self {
@@ -522,14 +528,14 @@ impl ToolRegistry {
     pub fn is_draft_gated(&self, name: &str) -> bool {
         self.tools
             .get(name)
-            .map_or(false, |e| e.draft_gated)
+            .is_some_and(|e| e.draft_gated)
     }
 
     /// Hermes-style: can this batch of tool calls run in parallel?
     pub fn should_parallelize(&self, tool_names: &[&str]) -> bool {
         tool_names
             .iter()
-            .all(|n| self.tools.get(*n).map_or(false, |e| e.parallel_safe))
+            .all(|n| self.tools.get(*n).is_some_and(|e| e.parallel_safe))
     }
 
     /// Get all tool names in a given toolset.

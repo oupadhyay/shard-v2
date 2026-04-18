@@ -343,6 +343,8 @@ pub async fn call_llm_oneshot(
 }
 
 /// Inner one-shot LLM call (no retry logic).
+/// Routes Gemini-native models through the Gemini REST API (generateContent),
+/// all others through the OpenAI-compatible chat/completions path.
 async fn call_llm_oneshot_inner(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,
@@ -352,6 +354,20 @@ async fn call_llm_oneshot_inner(
     max_tokens: u32,
     temperature: f64,
 ) -> Result<String, String> {
+    // Gemini-native models (gemini-*, gemma-*) go through the Gemini REST API
+    if crate::models::is_gemini_model(model) {
+        return call_gemini_oneshot(
+            http_client,
+            config,
+            model,
+            system_prompt,
+            user_message,
+            max_tokens,
+            temperature,
+        )
+        .await;
+    }
+
     let (provider_config, api_key) = config.get_model_provider_config(model, "background jobs")?;
 
     let payload = serde_json::json!({
@@ -408,6 +424,70 @@ async fn call_llm_oneshot_inner(
         "No content in {} response",
         provider_config.provider_name
     ))
+}
+
+/// Gemini-native one-shot call via the Interactions API.
+/// Uses the same `/v1beta/interactions` endpoint as the chat path for consistency,
+/// with `stream: false` for a synchronous response.
+async fn call_gemini_oneshot(
+    http_client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    model: &str,
+    system_prompt: &str,
+    user_message: &str,
+    _max_tokens: u32,
+    _temperature: f64,
+) -> Result<String, String> {
+    let api_key = config
+        .gemini_api_key
+        .as_deref()
+        .ok_or("No Gemini API key configured for background jobs")?;
+
+    let url = "https://generativelanguage.googleapis.com/v1beta/interactions";
+
+    let payload = serde_json::json!({
+        "model": model,
+        "system_instruction": system_prompt,
+        "input": [{
+            "role": "user",
+            "content": [{ "type": "text", "text": user_message }]
+        }],
+        "stream": false,
+        "store": false
+    });
+
+    let res = http_client
+        .post(url)
+        .header("X-Goog-Api-Key", api_key)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini background API network error: {}", e))?;
+
+    if !res.status().is_success() {
+        let error_text = res.text().await.unwrap_or_default();
+        return Err(format!("Gemini background API error: {}", error_text));
+    }
+
+    let body: serde_json::Value = res
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Gemini Interactions response: {}", e))?;
+
+    // Parse Interactions API response: { outputs: [{ type: "text", text: "..." }, ...] }
+    if let Some(outputs) = body.get("outputs").and_then(|o| o.as_array()) {
+        for output in outputs {
+            let output_type = output.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if output_type == "text" {
+                if let Some(text) = output.get("text").and_then(|t| t.as_str()) {
+                    return Ok(text.to_string());
+                }
+            }
+        }
+    }
+
+    Err("No text content in Gemini Interactions response".to_string())
 }
 
 /// Response from a tool-aware LLM call.
@@ -1222,11 +1302,11 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
                     Err(_) => {
                         if let Ok(updates) = parse_topic_updates(&response_clone) {
                             for update in updates {
-                                if let Ok(_) = crate::memories::update_topic_summary(
+                                if crate::memories::update_topic_summary(
                                     &handle,
                                     &update.topic,
                                     &update.summary,
-                                ) {
+                                ).is_ok() {
                                     topics.push(update.topic);
                                 }
                             }
@@ -2148,7 +2228,8 @@ fn gather_recent_interactions(
 
         if let Ok(file) = fs::File::open(&path) {
             let reader = BufReader::new(file);
-            for line in reader.lines().flatten() {
+            #[allow(clippy::lines_filter_map_ok)]
+            for line in reader.lines().filter_map(Result::ok) {
                 if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
                     stats.total_interactions += 1;
 
@@ -2293,7 +2374,8 @@ fn remove_entries_by_timestamp(
             let mut kept_lines = Vec::new();
             let mut removed_in_file = 0;
 
-            for line in reader.lines().flatten() {
+            #[allow(clippy::lines_filter_map_ok)]
+            for line in reader.lines().filter_map(Result::ok) {
                 if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
                     let ts = entry.get("ts").and_then(|v| v.as_str()).unwrap_or("");
 

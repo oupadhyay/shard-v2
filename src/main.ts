@@ -5,7 +5,7 @@ import DOMPurify from "dompurify";
 import "katex/dist/katex.min.css";
 
 // Internal modules
-import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, ModelsResponse } from "./types";
+import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, ModelsResponse, ImageAttachment } from "./types";
 import { type SessionSummary, renderSessionItem } from "./ui/sessions";
 import { ChatState } from "./state";
 import { EVENTS } from "./events";
@@ -14,7 +14,6 @@ import {
   clearKatexErrors,
   getKatexErrors,
   detectUnrenderedLatex,
-  preprocessMarkdown,
   createThinkingElement,
   updateThinkingElement,
   createToolCallElement,
@@ -26,13 +25,14 @@ import {
   isWebSearchTool,
   createWebSearchQueryElement,
   updateWebSearchCount,
+  createStreamingAssistantMessage,
+  renderStreamingContent,
+  shouldSkipStreamingChunk,
   RESEND_ICON,
   STOP_ICON,
   TRASH_ICON,
   UNDO_ICON,
   RETRY_ICON,
-  COPY_ICON,
-  CHECK_ICON,
   SETTINGS_MODAL_HTML,
   SESSIONS_MODAL_HTML,
   initSettingsTabs,
@@ -40,6 +40,7 @@ import {
   resizeImage,
   populateModelDropdown,
   formatSessionDate,
+  logger,
 } from "./ui";
 
 // DOM Elements
@@ -66,7 +67,7 @@ breakoutBtn?.addEventListener("click", async () => {
     if (appEl) {
       appEl.style.opacity = "1";
     }
-    console.error("Failed to open dedicated window:", e);
+    logger.error("Failed to open dedicated window:", e);
   }
 });
 
@@ -79,100 +80,125 @@ document.addEventListener("click", (e) => {
   const anchor = target.closest("a");
   if (anchor && anchor.href && (anchor.href.startsWith("http://") || anchor.href.startsWith("https://"))) {
     e.preventDefault();
-    openUrl(anchor.href).catch(console.error);
+    openUrl(anchor.href).catch(logger.error);
   }
 });
 
+
+/**
+ * Prepares the payload for the chat API, including text and images.
+ */
+function prepareChatPayload(text: string, images: (AttachedImage | ImageAttachment)[]): ChatMessagePayload {
+  const payload: ChatMessagePayload = { message: text };
+  if (images.length > 0) {
+    payload.imagesBase64 = images.map((img) => img.base64);
+    payload.imagesMimeTypes = images.map((img) => img.mimeType);
+  }
+  return payload;
+}
+
+/**
+ * Sends the chat message payload to the backend.
+ */
+async function sendChatMessage(payload: ChatMessagePayload) {
+  logger.info("Sending payload to backend:", {
+    message: payload.message,
+    hasImage: !!payload.imagesBase64,
+    imageLen: payload.imagesBase64?.length,
+    mime: payload.imagesMimeTypes,
+  });
+  await invoke("chat", payload);
+}
+
+/**
+ * Checks the quality of the assistant's response (e.g., KaTeX errors)
+ * and triggers an automatic retry if necessary.
+ */
+async function checkResponseQuality() {
+  if (state.isCancelled) return;
+
+  const parseErrors = getKatexErrors();
+
+  // Find the last assistant message by iterating from the end
+  const allMessages = chatArea.querySelectorAll('.message.assistant:not(.tool-output):not(.thinking-output)');
+  const lastAssistant = allMessages.length > 0 ? allMessages[allMessages.length - 1] : null;
+  const responseText = lastAssistant?.getAttribute('data-raw') || '';
+
+  logger.debug("[KaTeX Check] Raw response text:", responseText.slice(0, 200));
+  const unrenderedErrors = detectUnrenderedLatex(responseText);
+
+  const allErrors = [...parseErrors, ...unrenderedErrors];
+
+  if (allErrors.length > 0) {
+    logger.info("[KaTeX] Detected rendering issues, requesting retry:", allErrors);
+    try {
+      await invoke("retry_with_katex_hint", { katexErrors: allErrors });
+    } catch (e) {
+      logger.error("[KaTeX] Retry request failed:", e);
+    }
+  }
+}
 
 // Helper: Handle Input
 async function handleInput(skipUi = false) {
   const text = inputField.value.trim();
   if ((!text && !skipUi) || state.isProcessing) return;
 
-  // Reset per-turn state
+  // 1. Reset per-turn state
   state.resetForNewTurn();
+  state.isCancelled = false;
 
-  // If skipping UI, we use the text passed in or the input value (which should be set by caller)
-  // But actually, if skipUi is true, we expect the caller to have set inputField.value.
-  // Let's stick to the plan: caller sets inputField.value.
+  // 2. Capture images for API call BEFORE clearing
+  const currentImages = [...state.attachedImages];
 
   if (!skipUi) {
     state.lastUserMessage = text;
-    state.isCancelled = false;
+    state.lastAttachedImages = currentImages; // Save for resend
 
-    // Capture current images state before clearing it
-    const currentImages = [...state.attachedImages];
-    state.lastAttachedImages = [...state.attachedImages]; // Save for resend
-
-    inputField.value = "";
-    inputField.style.height = "auto"; // Reset height
-    // Pass all images for display
+    // Update UI
     addMessage(chatArea, "user", text, currentImages);
+    inputField.value = "";
+    inputField.style.height = "auto";
 
-    // Clear image preview immediately to prevent duplication
+    // Clear attachment previews
     state.attachedImages = [];
     const container = document.getElementById("image-preview-container");
     if (container) container.innerHTML = "";
   } else {
-    // Resending: reset cancelled state
-    state.isCancelled = false;
-    // We don't clear inputField here because we assume it was set for the logic but we don't want to clear it if it wasn't used?
-    // Actually, handleInput clears it.
+    // Resending: attachedImages were restored by caller, text is already in inputField
     inputField.value = "";
-    inputField.style.height = "auto"; // Reset height
+    inputField.style.height = "auto";
   }
 
+  // Use the captured images
+  const finalImages = skipUi ? currentImages : state.lastAttachedImages;
+
+  // 3. Prepare UI for response
   state.isProcessing = true;
-
-  // Capture images for API call BEFORE any clearing.
-  // Normal sends: use lastAttachedImages (snapshot taken above before clearing).
-  // Resends (skipUi): attachedImages was restored by the caller.
-  const imagesToSend = skipUi ? [...state.attachedImages] : [...state.lastAttachedImages];
-
-  // Reset web search container for new response
   resetWebSearchContainer();
-
-  // Clear KaTeX errors for new response (for auto-retry tracking)
   clearKatexErrors();
 
-  // Reset stop button to stop mode
   stopBtn.style.display = "inline-flex";
   stopBtn.classList.add("loading");
-  stopBtn.innerHTML = STOP_ICON; // Ensure it shows stop icon
+  stopBtn.innerHTML = STOP_ICON;
   stopBtn.dataset.mode = "stop";
 
   try {
-    // Always send image binary data to backend — provider routing happens server-side
-    const messagePayload: ChatMessagePayload = { message: skipUi ? state.lastUserMessage : text };
-
-    if (imagesToSend.length > 0) {
-      messagePayload.imagesBase64 = imagesToSend.map((img) => img.base64);
-      messagePayload.imagesMimeTypes = imagesToSend.map((img) => img.mimeType);
-    }
-
-    console.log("Sending payload to backend:", {
-      message: messagePayload.message,
-      hasImage: !!messagePayload.imagesBase64,
-      imageLen: messagePayload.imagesBase64?.length,
-      mime: messagePayload.imagesMimeTypes,
-    });
-    await invoke("chat", messagePayload);
-    // Note: The actual response handling might need to be event-based if streaming
-    // For now, assuming the command returns when done or we listen for events.
-    // If `chat` returns void, we need to listen for "agent-response" events.
+    // 4. Execute Chat
+    const payload = prepareChatPayload(skipUi ? state.lastUserMessage : text, finalImages);
+    await sendChatMessage(payload);
   } catch (error) {
-    // API errors are handled by agent-error event listener
-    // This catch handles network/Tauri invoke errors only
-    console.error("Chat error:", error);
+    logger.error("Chat error:", error);
   } finally {
+    // 5. Post-process
     state.isProcessing = false;
-    stopBtn.classList.remove("loading"); // Remove loading state
+    stopBtn.classList.remove("loading");
 
     if (!state.isCancelled) {
-      stopBtn.style.display = "none"; // Hide Stop button only if NOT cancelled
+      stopBtn.style.display = "none";
     }
 
-    // Ensure any open thinking blocks are marked complete
+    // Mark thinking complete
     const openThinking = chatArea.querySelector('.thinking-output:not([data-complete="true"])');
     if (openThinking) {
       openThinking.setAttribute("data-complete", "true");
@@ -180,29 +206,8 @@ async function handleInput(skipUi = false) {
       if (summary) summary.textContent = "Thought";
     }
 
-    // Check for KaTeX errors (parse errors + unrendered LaTeX) and trigger retry if needed
-    if (!state.isCancelled) {
-      const parseErrors = getKatexErrors();
-
-      // Find the last assistant message by iterating from the end
-      const allMessages = chatArea.querySelectorAll('.message.assistant:not(.tool-output):not(.thinking-output)');
-      const lastAssistant = allMessages.length > 0 ? allMessages[allMessages.length - 1] : null;
-      const responseText = lastAssistant?.getAttribute('data-raw') || '';
-
-      console.log("[KaTeX Check] Raw response text:", responseText.slice(0, 200));
-      const unrenderedErrors = detectUnrenderedLatex(responseText);
-
-      const allErrors = [...parseErrors, ...unrenderedErrors];
-
-      if (allErrors.length > 0) {
-        console.log("[KaTeX] Detected rendering issues, requesting retry:", allErrors);
-        try {
-          await invoke("retry_with_katex_hint", { katexErrors: allErrors });
-        } catch (e) {
-          console.error("[KaTeX] Retry request failed:", e);
-        }
-      }
-    }
+    // Quality check (KaTeX errors)
+    await checkResponseQuality();
   }
 
   // Update button states after message
@@ -241,9 +246,9 @@ stopBtn.addEventListener("click", async () => {
     // Sync backend history: remove the last turn so we don't duplicate
     try {
       await invoke("rewind_history");
-      console.log("History rewound for resend");
+      logger.debug("History rewound for resend");
     } catch (e) {
-      console.error("Failed to rewind history:", e);
+      logger.error("Failed to rewind history:", e);
     }
 
     handleInput(true);
@@ -253,7 +258,7 @@ stopBtn.addEventListener("click", async () => {
   // Default "stop" behavior
   try {
     await invoke("cancel_current_stream");
-    console.log("Cancellation requested");
+    logger.debug("Cancellation requested");
     state.isCancelled = true;
     state.isProcessing = false;
 
@@ -263,7 +268,7 @@ stopBtn.addEventListener("click", async () => {
     stopBtn.dataset.mode = "resend";
     // Do NOT hide the button
   } catch (e) {
-    console.error("Failed to cancel stream:", e);
+    logger.error("Failed to cancel stream:", e);
   }
 });
 
@@ -292,7 +297,7 @@ inputField.addEventListener("keydown", (e) => {
 
 // Handle paste event for clipboard images
 inputField.addEventListener("paste", async (e) => {
-  console.log("[Paste] Event triggered");
+  logger.debug("[Paste] Event triggered");
   const clipboardData = e.clipboardData;
   if (!clipboardData) return;
 
@@ -301,7 +306,7 @@ inputField.addEventListener("paste", async (e) => {
   const imageItem = items.find((item) => item.type.startsWith("image/"));
 
   if (imageItem) {
-    console.log("[Paste] Image item found in clipboard");
+    logger.debug("[Paste] Image item found in clipboard");
     e.preventDefault(); // Prevent default paste behavior for images
 
     const file = imageItem.getAsFile();
@@ -328,17 +333,17 @@ inputField.addEventListener("paste", async (e) => {
           imageData.base64 = base64;
 
           // 2. Resize
-          console.log("[Paste] Resizing image for OCR...");
+          logger.debug("[Paste] Resizing image for OCR...");
           const resizedBase64 = await resizeImage(base64, mimeType, 1024);
 
           // 3. Invoke OCR
-          console.log("[Paste] Invoking ocr_image");
+          logger.debug("[Paste] Invoking ocr_image");
           const text = await invoke<string>("ocr_image", { imageBase64: resizedBase64 });
 
-          console.log("[OCR] Success");
+          logger.info("[OCR] Success");
           return text;
         } catch (e) {
-          console.error("OCR Process failed:", e);
+          logger.error("OCR Process failed:", e);
           return "[OCR failed]";
         }
       };
@@ -352,7 +357,7 @@ inputField.addEventListener("paste", async (e) => {
         ocrPromise: ocrTask() // Promise is created NOW
       };
 
-      console.log("[Paste] Calling showImagePreview with ObjectURL");
+      logger.debug("[Paste] Calling showImagePreview with ObjectURL");
       showImagePreview(imageData);
 
       // Add side-effect to update ocrText when done
@@ -368,14 +373,14 @@ inputField.addEventListener("paste", async (e) => {
 });
 
 function showImagePreview(imageData: AttachedImage) {
-  console.log("[showImagePreview] Called with mimeType:", imageData.mimeType);
+  logger.debug("[showImagePreview] Called with mimeType:", imageData.mimeType);
   // Add to images array
   state.attachedImages.push(imageData);
   const index = state.attachedImages.length - 1;
 
   let container = document.getElementById("image-preview-container");
   if (!container) {
-    console.log("[showImagePreview] Creating new container");
+    logger.debug("[showImagePreview] Creating new container");
     container = document.createElement("div");
     container.id = "image-preview-container";
     container.className = "image-preview-container";
@@ -386,7 +391,7 @@ function showImagePreview(imageData: AttachedImage) {
       bottomBar.insertBefore(container, inputContainer);
     }
   } else {
-    console.log("[showImagePreview] Container found");
+    logger.debug("[showImagePreview] Container found");
   }
 
   // Create preview element for this image
@@ -419,9 +424,9 @@ function showImagePreview(imageData: AttachedImage) {
     });
   }
 
-  console.log("[showImagePreview] Appending preview to container");
+  logger.debug("[showImagePreview] Appending preview to container");
   container.appendChild(preview);
-  console.log("[showImagePreview] Append complete");
+  logger.debug("[showImagePreview] Append complete");
 }
 
 ocrBtn.addEventListener("click", async () => {
@@ -442,17 +447,17 @@ ocrBtn.addEventListener("click", async () => {
       showImagePreview(newImage);
 
       ocrPromise.then(text => {
-        console.log("[OCR] Screenshot text:", text.substring(0, 50) + "...");
+        logger.info("[OCR] Screenshot text:", text.substring(0, 50) + "...");
         newImage.ocrText = text;
       }).catch(err => {
-        console.error("OCR failed:", err);
+        logger.error("OCR failed:", err);
         newImage.ocrText = "[OCR failed]";
       });
 
       inputField.focus();
     }
   } catch (error) {
-    console.error("OCR error:", error);
+    logger.error("OCR error:", error);
     const errorDiv = document.createElement("div");
     errorDiv.className = "message error-message";
     errorDiv.innerHTML = DOMPurify.sanitize(`
@@ -488,17 +493,17 @@ listen(EVENTS.TRIGGER_OCR, async () => {
       showImagePreview(newImage);
 
       ocrPromise.then(text => {
-        console.log("[OCR] Screenshot text:", text.substring(0, 50) + "...");
+        logger.info("[OCR] Screenshot text:", text.substring(0, 50) + "...");
         newImage.ocrText = text;
       }).catch(err => {
-        console.error("OCR failed:", err);
+        logger.error("OCR failed:", err);
         newImage.ocrText = "[OCR failed]";
       });
 
       inputField.focus();
     }
   } catch (error) {
-    console.error("OCR error:", error);
+    logger.error("OCR error:", error);
     inputField.focus();
   }
 });
@@ -509,7 +514,7 @@ async function updateButtonStates() {
     const messageCount = await invoke<number>("get_message_count");
     const hasBackup = await invoke<boolean>("has_backup");
 
-    console.log("Button states:", { messageCount, hasBackup });
+    logger.debug("Button states:", { messageCount, hasBackup });
 
     // Disable button if no messages and no backup
     if (messageCount === 0 && !hasBackup) {
@@ -530,13 +535,13 @@ async function updateButtonStates() {
       trashBtn.innerHTML = TRASH_ICON;
     }
   } catch (error) {
-    console.error("Error updating button states:", error);
+    logger.error("Error updating button states:", error);
   }
 }
 
 trashBtn.addEventListener("click", async () => {
   const mode = trashBtn.dataset.mode;
-  console.log("Trash clicked, mode:", mode);
+  logger.debug("Trash clicked, mode:", mode);
 
   if (mode === "undo") {
     // Restore chat
@@ -547,7 +552,7 @@ trashBtn.addEventListener("click", async () => {
       await loadChatHistory();
       await updateButtonStates();
     } catch (error) {
-      console.error("Restore error:", error);
+      logger.error("Restore error:", error);
       const errorDiv = document.createElement("div");
       errorDiv.className = "message error-message";
       errorDiv.innerHTML = DOMPurify.sanitize(`
@@ -564,14 +569,14 @@ trashBtn.addEventListener("click", async () => {
   } else {
     // Delete chat (no confirmation needed as we have undo)
     try {
-      console.log("Calling save_and_clear_chat...");
+      logger.debug("Calling save_and_clear_chat...");
       await invoke("save_and_clear_chat");
-      console.log("Chat cleared, updating UI...");
+      logger.debug("Chat cleared, updating UI...");
       chatArea.innerHTML = "";
       await updateButtonStates();
-      console.log("Button states updated");
+      logger.debug("Button states updated");
     } catch (error) {
-      console.error("Delete error:", error);
+      logger.error("Delete error:", error);
       const errorDiv = document.createElement("div");
       errorDiv.className = "message error-message";
       errorDiv.innerHTML = DOMPurify.sanitize(`
@@ -679,14 +684,17 @@ async function loadChatHistory() {
 
         // If not matched as web search, try regular tool-output
         if (!matched) {
-          const toolMessages = Array.from(fragment.querySelectorAll(".tool-output"));
+          const toolMessages = fragment.querySelectorAll(".tool-output");
           let matchingTool: Element | undefined;
 
           // Try to match by ID first if available
           if (msg.tool_call_id) {
-            matchingTool = toolMessages
-              .reverse()
-              .find((el) => el.getAttribute("data-tool-id") === msg.tool_call_id);
+            for (let i = toolMessages.length - 1; i >= 0; i--) {
+              if (toolMessages[i].getAttribute("data-tool-id") === msg.tool_call_id) {
+                matchingTool = toolMessages[i];
+                break;
+              }
+            }
           }
 
           // Fallback to the last one if no ID match
@@ -709,7 +717,7 @@ async function loadChatHistory() {
     // Load pending proactive actions at the end of chat history
     await loadProactiveMessages();
   } catch (e) {
-    console.error("Failed to load chat history:", e);
+    logger.error("Failed to load chat history:", e);
     if (fragment.hasChildNodes()) {
       chatArea.appendChild(fragment);
     }
@@ -728,7 +736,7 @@ async function loadProactiveMessages() {
       }
     }
   } catch (error) {
-    console.error("Failed to load proactive messages:", error);
+    logger.error("Failed to load proactive messages:", error);
   }
 }
 
@@ -738,7 +746,7 @@ loadChatHistory();
 listen<string>(EVENTS.AGENT_RETRY, (event) => {
   try {
     const payload = JSON.parse(event.payload);
-    console.log("[Agent Retry] Received retry event:", payload);
+    logger.info("[Agent Retry] Received retry event:", payload);
 
     // Clear the failed response from UI before retry
     // Remove elements in reverse order until we hit the user message
@@ -775,7 +783,7 @@ listen<string>(EVENTS.AGENT_RETRY, (event) => {
     chatArea.appendChild(retryingDiv);
     chatArea.scrollTop = chatArea.scrollHeight;
   } catch (e) {
-    console.error("[Agent Retry] Failed to parse retry event:", e);
+    logger.error("[Agent Retry] Failed to parse retry event:", e);
   }
 });
 
@@ -783,11 +791,11 @@ listen<string>(EVENTS.AGENT_RETRY, (event) => {
 listen<string>(EVENTS.AGENT_RETRY_EXHAUSTED, (event) => {
   try {
     const payload = JSON.parse(event.payload);
-    console.log("[Agent Retry] Retries exhausted:", payload);
+    logger.info("[Agent Retry] Retries exhausted:", payload);
     const loadingIndicator = chatArea.querySelector("#loading-indicator");
     if (loadingIndicator) loadingIndicator.remove();
   } catch (e) {
-    console.error("[Agent Retry] Failed to parse exhausted event:", e);
+    logger.error("[Agent Retry] Failed to parse exhausted event:", e);
   }
 });
 
@@ -800,7 +808,7 @@ listen<string>(EVENTS.AGENT_CRON_STARTED, (event) => {
 
 // Listen for incoming proactive messages/drafts
 listen<import("./types").ProactiveMessage>(EVENTS.PROACTIVE_MESSAGE, async (event) => {
-  console.log("[Proactive] Received new proactive action:", event.payload);
+  logger.info("[Proactive] Received new proactive action:", event.payload);
   
   const activeSessionId = await invoke<string>("get_current_session_id").catch(() => "");
   
@@ -818,65 +826,25 @@ listen<import("./types").ProactiveMessage>(EVENTS.PROACTIVE_MESSAGE, async (even
 // Listen for agent streaming response chunks
 listen<string>(EVENTS.AGENT_RESPONSE_CHUNK, (event) => {
   const chunk = event.payload;
-
-  // Ignore empty chunks
   if (!chunk) return;
 
   let lastMsg = chatArea.lastElementChild;
 
-  // If we would create a new message, check if chunk is just whitespace
-  // This prevents creating empty bubbles from leading newlines/spaces
-  const isNewMessage =
-    !lastMsg ||
-    !lastMsg.classList.contains("assistant") ||
-    lastMsg.classList.contains("tool-output") ||
-    lastMsg.classList.contains("thinking-output");
-
-  if (isNewMessage && chunk.trim().length === 0) {
-    return;
-  }
+  // Skip whitespace-only chunks that would create empty bubbles
+  if (shouldSkipStreamingChunk(lastMsg, chunk)) return;
 
   // Remove loading indicator if present
   const loadingIndicator = chatArea.querySelector("#loading-indicator");
-  if (loadingIndicator) {
-    loadingIndicator.remove();
-  }
+  if (loadingIndicator) loadingIndicator.remove();
 
-  // Create or update assistant message (skip if last is thinking or tool)
+  // Create new assistant message if needed (skip if last is thinking or tool)
   if (
     !lastMsg ||
     !lastMsg.classList.contains("assistant") ||
     lastMsg.classList.contains("tool-output") ||
     lastMsg.classList.contains("thinking-output")
   ) {
-    const msgDiv = document.createElement("div");
-    msgDiv.className = "message assistant markdown-body";
-
-    // Create content wrapper for streaming updates
-    const contentDiv = document.createElement("div");
-    contentDiv.className = "message-content";
-    msgDiv.appendChild(contentDiv);
-
-    // Add copy button
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "copy-btn";
-    copyBtn.title = "Copy as Markdown";
-    copyBtn.innerHTML = COPY_ICON;
-    copyBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const raw = msgDiv.getAttribute("data-raw") || "";
-      navigator.clipboard.writeText(raw).then(() => {
-        const originalHTML = copyBtn.innerHTML;
-        copyBtn.innerHTML = CHECK_ICON;
-        copyBtn.classList.add("copied");
-        setTimeout(() => {
-          copyBtn.innerHTML = originalHTML;
-          copyBtn.classList.remove("copied");
-        }, 1500);
-      }).catch((err) => console.error("Failed to copy:", err));
-    });
-    msgDiv.appendChild(copyBtn);
-
+    const msgDiv = createStreamingAssistantMessage();
     chatArea.appendChild(msgDiv);
     lastMsg = msgDiv;
   }
@@ -886,7 +854,6 @@ listen<string>(EVENTS.AGENT_RESPONSE_CHUNK, (event) => {
   lastMsg.setAttribute("data-raw", rawText);
 
   // Only mark thinking as complete if we have substantial content (> 10 chars)
-  // This prevents marking it complete on the very first chunk (which might be interleaved with thinking)
   if (rawText.length > 10) {
     const openThinking = chatArea.querySelector('.thinking-output:not([data-complete="true"])');
     if (openThinking) {
@@ -894,45 +861,13 @@ listen<string>(EVENTS.AGENT_RESPONSE_CHUNK, (event) => {
     }
   }
 
-  let html = "";
-
-  if (rawText.includes("<think>")) {
-    // Handle <think> tags in content (for models that embed thinking in content)
-    const openThink = rawText.indexOf("<think>");
-    const closeThink = rawText.indexOf("</think>");
-
-    if (closeThink !== -1) {
-      // Closed thought
-      const thought = rawText.substring(openThink + 7, closeThink);
-      const rest = rawText.substring(closeThink + 8);
-      html = `
-            <details class="thought-block">
-              <summary>Thought</summary>
-              <div class="thought-content">${DOMPurify.sanitize(thought)}</div>
-            </details>
-            ${DOMPurify.sanitize(md.render(preprocessMarkdown(rest)))}
-          `;
-    } else {
-      // Open thought (still streaming)
-      const thought = rawText.substring(openThink + 7);
-      html = `
-            <details class="thought-block" open>
-              <summary>Thinking...</summary>
-              <div class="thought-content">${DOMPurify.sanitize(thought)}</div>
-            </details>
-          `;
-    }
-  } else {
-    // No thought tags, render normally with preprocessing for KaTeX
-    html = DOMPurify.sanitize(md.render(preprocessMarkdown(rawText)));
-  }
+  const html = renderStreamingContent(rawText);
 
   // Update only the content div, not the full innerHTML (preserves copy button)
   const contentDiv = lastMsg.querySelector(".message-content");
   if (contentDiv) {
     contentDiv.innerHTML = html;
   } else {
-  // Fallback for messages without content wrapper (shouldn't happen)
     lastMsg.innerHTML = html;
   }
   chatArea.scrollTop = chatArea.scrollHeight;
@@ -951,7 +886,7 @@ listen<string>(EVENTS.AGENT_REASONING_CHUNK, (event) => {
   // ============================================================================
 
   const content = event.payload;
-  console.log("Received reasoning chunk:", content);
+  logger.debug("Received reasoning chunk:", content);
 
   // Use the session thinking block, or create one if needed
   if (!state.currentThinkingBlock || !chatArea.contains(state.currentThinkingBlock)) {
@@ -1047,14 +982,16 @@ listen<string>(EVENTS.AGENT_TOOL_RESULT, (event) => {
 
     // 2. Fallback to finding the last search query without a result
     if (!matchingQuery) {
-      const webSearchQueries = Array.from(chatArea.querySelectorAll(".web-search-query"));
-      matchingQuery = webSearchQueries
-        .reverse()
-        .find((el) => {
-          const resultSection = el.querySelector('.tool-result') as HTMLElement;
-          // Find the one that doesn't have a result yet
-          return resultSection && resultSection.style.display === 'none';
-        }) as HTMLElement || null;
+      const webSearchQueries = chatArea.querySelectorAll(".web-search-query");
+      for (let i = webSearchQueries.length - 1; i >= 0; i--) {
+        const el = webSearchQueries[i] as HTMLElement;
+        const resultSection = el.querySelector('.tool-result') as HTMLElement | null;
+        // Find the one that doesn't have a result yet
+        if (resultSection && resultSection.style.display === 'none') {
+          matchingQuery = el;
+          break;
+        }
+      }
     }
 
     if (matchingQuery) {
@@ -1063,10 +1000,14 @@ listen<string>(EVENTS.AGENT_TOOL_RESULT, (event) => {
     }
   } else {
     // Find the most recent tool-output with matching name
-    const toolMessages = Array.from(chatArea.querySelectorAll(".tool-output"));
-    const matchingTool = toolMessages
-      .reverse()
-      .find((el) => el.getAttribute("data-tool-name") === name);
+    const toolMessages = chatArea.querySelectorAll(".tool-output");
+    let matchingTool: Element | undefined;
+    for (let i = toolMessages.length - 1; i >= 0; i--) {
+      if (toolMessages[i].getAttribute("data-tool-name") === name) {
+        matchingTool = toolMessages[i];
+        break;
+      }
+    }
 
     if (matchingTool) {
       updateToolResult(
@@ -1084,7 +1025,7 @@ listen(EVENTS.AGENT_PROCESSING_START, () => {
 // Listen for API errors and display with retry button
 listen<string>(EVENTS.AGENT_ERROR, (event) => {
   const errorText = event.payload;
-  console.error("API Error:", errorText);
+  logger.error("API Error:", errorText);
 
   // Remove loading indicator if present
   const loadingIndicator = chatArea.querySelector("#loading-indicator");
@@ -1117,9 +1058,9 @@ listen<string>(EVENTS.AGENT_ERROR, (event) => {
     // Rewind backend history to remove the failed user message
     try {
       await invoke("rewind_history");
-      console.log("History rewound for retry");
+      logger.debug("History rewound for retry");
     } catch (e) {
-      console.error("Failed to rewind history:", e);
+      logger.error("Failed to rewind history:", e);
     }
 
     // Restore last images and resend
@@ -1141,7 +1082,7 @@ listen<string>(EVENTS.AGENT_ERROR, (event) => {
 listen<string>(EVENTS.AGENT_FALLBACK, (event) => {
   // Only show the fallback message once per conversation turn
   if (state.fallbackShownThisTurn) {
-    console.log("[Fallback] Skipping duplicate notification");
+    logger.debug("[Fallback] Skipping duplicate notification");
     return;
   }
   state.fallbackShownThisTurn = true;
@@ -1151,7 +1092,7 @@ listen<string>(EVENTS.AGENT_FALLBACK, (event) => {
     const title = data.title || "Provider Fallback";
     const details = data.details || "";
 
-    console.log("[Fallback]", title, details);
+    logger.info("[Fallback]", title, details);
 
     // Create a non-blocking notification accordion in chat
     const fallbackDiv = document.createElement("div");
@@ -1170,7 +1111,7 @@ listen<string>(EVENTS.AGENT_FALLBACK, (event) => {
     chatArea.appendChild(fallbackDiv);
     chatArea.scrollTop = chatArea.scrollHeight;
   } catch (e) {
-    console.error("Failed to parse fallback event:", e);
+    logger.error("Failed to parse fallback event:", e);
   }
 });
 // Focus Tracking for Consistent Blur UI
@@ -1328,7 +1269,7 @@ function hideSuggestions() {
 }
 
 listen<ScreenContext>(EVENTS.SCREEN_CONTEXT_READY, (event) => {
-  console.log("[ScreenContext] Received suggestions:", event.payload);
+  logger.info("[ScreenContext] Received suggestions:", event.payload);
 
   // Store image for when a suggestion is clicked
   state.currentScreenContextImage = {
@@ -1472,7 +1413,7 @@ settingsBtn.addEventListener("click", async () => {
 
     settingsModal.classList.remove("hidden");
   } catch (e) {
-    console.error("Failed to load config", e);
+    logger.error("Failed to load config", e);
   }
 });
 
@@ -1567,7 +1508,7 @@ sessionsBtn.addEventListener("click", async () => {
             sessionsListContainer.innerHTML = '<div class="sessions-empty">No recent sessions found.</div>';
           }
         } catch (err) {
-          console.error("Failed to delete session:", err);
+          logger.error("Failed to delete session:", err);
         }
       });
       item.appendChild(deleteBtn);
@@ -1620,13 +1561,13 @@ newChatBtn.addEventListener("click", async () => {
 // Development-only benchmark helper
 if ((import.meta as any).env.DEV) {
   (window as any).runImageBench = async () => {
-    console.log("Loading benchmark module...");
+    logger.info("Loading benchmark module...");
     try {
       const { runBenchmark } = await import("./tests/image_bench");
       await runBenchmark(resizeImage);
     } catch (err) {
-      console.error("Failed to run benchmark:", err);
+      logger.error("Failed to run benchmark:", err);
     }
   };
-  console.log("Development mode: runImageBench() available in console");
+  logger.info("Development mode: runImageBench() available in console");
 }

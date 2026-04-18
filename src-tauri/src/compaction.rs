@@ -63,6 +63,11 @@ pub struct FlushResult {
 
 /// Get the context window size for a given model (in tokens)
 pub fn get_context_size(model: &str) -> usize {
+    // Gemma models (256K context)
+    if model.starts_with("gemma") {
+        return 256_000;
+    }
+
     // Gemini models (no slash, no provider suffix)
     if model.starts_with("gemini") {
         return GEMINI_CONTEXT_SIZE;
@@ -116,7 +121,7 @@ pub fn estimate_message_tokens(msg: &ChatMessage) -> usize {
     total_chars += msg.role.len() + 10;
 
     // Convert to tokens
-    (total_chars + CHARS_PER_TOKEN - 1) / CHARS_PER_TOKEN
+    total_chars.div_ceil(CHARS_PER_TOKEN)
 }
 
 /// Estimate total tokens in conversation history
@@ -347,7 +352,7 @@ pub async fn compact_history<R: Runtime>(
         crate::background::call_background_llm(http_client, config, model, &prompt).await?;
 
     // Estimate tokens after
-    let tokens_after = (summary.len() + CHARS_PER_TOKEN - 1) / CHARS_PER_TOKEN;
+    let tokens_after = summary.len().div_ceil(CHARS_PER_TOKEN);
     let tokens_saved = tokens_before.saturating_sub(tokens_after);
 
     // Insert summary as first message (system-like context)
@@ -428,6 +433,11 @@ mod tests {
     }
 
     #[test]
+    fn test_get_context_size_gemma() {
+        assert_eq!(get_context_size("gemma-4-31b-it"), 256_000);
+    }
+
+    #[test]
     fn test_get_context_size_gemini() {
         assert_eq!(get_context_size("gemini-2.5-flash"), 1_000_000);
         assert_eq!(get_context_size("gemini-3.1-flash-lite-preview"), 1_000_000);
@@ -437,7 +447,7 @@ mod tests {
     #[test]
     fn test_get_context_size_openrouter() {
         assert_eq!(get_context_size("openai/gpt-oss-120b:free"), 128_000);
-        assert_eq!(get_context_size("google/gemma-3-27b-it:free"), 128_000);
+        assert_eq!(get_context_size("google/gemma-4-31b-it:free"), 128_000);
     }
 
     #[test]

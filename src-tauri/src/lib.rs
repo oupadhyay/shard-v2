@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -13,6 +13,7 @@ mod background;
 mod cache;
 pub mod compaction;
 mod config;
+pub mod context;
 pub mod db;
 mod gemini_files;
 mod heartbeat;
@@ -20,17 +21,16 @@ mod integrations;
 mod interactions;
 pub mod memories;
 mod models;
+pub mod observations;
+pub mod personas;
 mod prompts;
 pub mod retrieval;
+mod sandbox;
 mod secrets;
 pub mod sessions;
-pub mod personas;
-mod sandbox;
 pub mod tool_registry;
-pub mod observations;
 pub mod vector_store;
 mod webhook;
-pub mod context;
 
 #[cfg(test)]
 mod tests;
@@ -84,7 +84,7 @@ struct OcrResult {
 #[tauri::command]
 async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String> {
     // Wrap all blocking I/O in spawn_blocking to avoid starving the async executor
-    let result = tokio::task::spawn_blocking(move || perform_ocr_capture_blocking())
+    let result = tokio::task::spawn_blocking(perform_ocr_capture_blocking)
         .await
         .map_err(|e| {
             if e.is_cancelled() {
@@ -371,7 +371,10 @@ async fn open_dedicated_window(app_handle: AppHandle) -> Result<(), String> {
             // Best effort so we don't return an error and confuse the UI if it fails.
             if let Some(win) = main_win {
                 if let Err(e) = win.hide() {
-                    log::warn!("Failed to hide main window after creating dedicated window: {}", e);
+                    log::warn!(
+                        "Failed to hide main window after creating dedicated window: {}",
+                        e
+                    );
                 }
             }
         }
@@ -531,34 +534,23 @@ async fn get_proactive_messages(
 }
 
 #[tauri::command]
-async fn review_proactive_message(
-    app_handle: AppHandle,
-    message_id: String,
-) -> Result<(), String> {
+async fn review_proactive_message(app_handle: AppHandle, message_id: String) -> Result<(), String> {
     heartbeat::review_proactive_message(&app_handle, &message_id, None)
 }
 
 #[tauri::command]
-async fn approve_draft(
-    app_handle: AppHandle,
-    message_id: String,
-) -> Result<String, String> {
+async fn approve_draft(app_handle: AppHandle, message_id: String) -> Result<String, String> {
     // Execute the draft-gated tool and mark as approved
     heartbeat::execute_approved_draft(&app_handle, &message_id).await
 }
 
 #[tauri::command]
-async fn reject_draft(
-    app_handle: AppHandle,
-    message_id: String,
-) -> Result<(), String> {
+async fn reject_draft(app_handle: AppHandle, message_id: String) -> Result<(), String> {
     heartbeat::review_proactive_message(&app_handle, &message_id, Some(false))
 }
 
 #[tauri::command]
-async fn get_proactive_count(
-    app_handle: AppHandle,
-) -> Result<usize, String> {
+async fn get_proactive_count(app_handle: AppHandle) -> Result<usize, String> {
     heartbeat::get_unreviewed_count(&app_handle, None)
 }
 
@@ -624,8 +616,7 @@ async fn rebuild_all_indexes(app_handle: AppHandle) -> Result<RebuildAllResult, 
     let bm25_docs = retrieval::rebuild_bm25_index(&app_handle)?;
 
     // 4. Rebuild chunk index (re-embeds everything with current model)
-    let chunks =
-        memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await?;
+    let chunks = memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await?;
 
     log::info!(
         "[RebuildAll] Complete: {} topics, {} insights, {} BM25 docs, {} chunks, {} cache entries cleared",
@@ -664,6 +655,22 @@ async fn capture_screen_context(
     app_handle.emit("screen-context-ready", &context).ok();
 
     Ok(context)
+}
+
+/// Helper function to trigger chunk index rebuild if needed during startup
+async fn auto_rebuild_chunk_index<R: Runtime>(app_handle: AppHandle<R>, config: config::AppConfig) {
+    let api_key = match config.gemini_api_key {
+        Some(key) => key,
+        None => return,
+    };
+
+    let http_client = reqwest::Client::new();
+    log::info!("[Startup] Chunk index missing, triggering auto-rebuild...");
+
+    match memories::rebuild_chunk_index(&app_handle, &http_client, &api_key).await {
+        Ok(count) => log::info!("[Startup] Auto-rebuilt chunk index with {} chunks", count),
+        Err(e) => log::warn!("[Startup] Failed to auto-rebuild chunk index: {}", e),
+    }
 }
 
 // --- Main Run Function ---
@@ -718,36 +725,21 @@ pub fn run() {
             let app_handle_for_chunks = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 // Check if chunk index exists in VectorStore
-                if let Ok(store) = memories::get_vector_store(&app_handle_for_chunks) {
-                    if let Ok(count) = store.chunk_count() {
-                        if count > 0 {
-                            log::info!("[Startup] Vector store found with {} chunks", count);
-                            return;
-                        }
-                    }
+                let chunk_count = memories::get_vector_store(&app_handle_for_chunks)
+                    .and_then(|store| store.chunk_count().map_err(|e| e.to_string()))
+                    .unwrap_or(0);
+
+                if chunk_count > 0 {
+                    log::info!(
+                        "[Startup] Existing chunk index found with {} chunks; skipping auto-rebuild",
+                        chunk_count
+                    );
+                    return;
                 }
 
-                // Chunk index missing or empty - check if topics/insights exist
+                // Chunk index missing or empty - attempt auto-rebuild if config is available
                 if let Ok(config) = config::load_config(&app_handle_for_chunks) {
-                    if let Some(api_key) = config.gemini_api_key {
-                        let http_client = reqwest::Client::new();
-                        log::info!("[Startup] Chunk index missing, triggering auto-rebuild...");
-                        match memories::rebuild_chunk_index(
-                            &app_handle_for_chunks,
-                            &http_client,
-                            &api_key,
-                        )
-                        .await
-                        {
-                            Ok(count) => log::info!(
-                                "[Startup] Auto-rebuilt chunk index with {} chunks",
-                                count
-                            ),
-                            Err(e) => {
-                                log::warn!("[Startup] Failed to auto-rebuild chunk index: {}", e)
-                            }
-                        }
-                    }
+                    auto_rebuild_chunk_index(app_handle_for_chunks, config).await;
                 }
             });
 
