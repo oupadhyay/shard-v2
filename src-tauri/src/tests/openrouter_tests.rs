@@ -236,6 +236,12 @@ mod tests {
     }
 
     #[test]
+    fn test_has_images_empty_slice() {
+        let empty_messages: &[ChatMessage] = &[];
+        assert!(!has_images(empty_messages));
+    }
+
+    #[test]
     fn test_has_images() {
         let messages_no_images = vec![ChatMessage {
             role: "user".to_string(),
