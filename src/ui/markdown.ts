@@ -16,8 +16,11 @@ import "highlight.js/styles/github-dark.css";
 
 let katexErrors: string[] = [];
 
-/** Test helper to populate KaTeX errors */
+/** Test helper to populate KaTeX errors — only usable in test mode */
 export function __setKatexErrorsForTesting(errors: string[]): void {
+  if (import.meta.env.MODE !== 'test') {
+    throw new Error('__setKatexErrorsForTesting is only available in test mode');
+  }
   katexErrors = [...errors];
 }
 
