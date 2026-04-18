@@ -237,8 +237,8 @@ mod tests {
 
     #[test]
     fn test_has_images_empty_slice() {
-        let empty_messages: Vec<ChatMessage> = vec![];
-        assert!(!has_images(&empty_messages));
+        let empty_messages: &[ChatMessage] = &[];
+        assert!(!has_images(empty_messages));
     }
 
     #[test]
