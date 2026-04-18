@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use wasmtime::*;
 use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
@@ -51,7 +51,7 @@ static PYTHON_MODULE: OnceLock<(Engine, Module)> = OnceLock::new();
 /// Load or return the cached (Engine, Module) pair.
 /// Uses get() + set() instead of get_or_try_init (unstable).
 /// Minor race on first call is harmless — only one value wins set().
-fn get_or_compile_module(resource_dir: &PathBuf) -> Result<&'static (Engine, Module), String> {
+fn get_or_compile_module(resource_dir: &Path) -> Result<&'static (Engine, Module), String> {
     if let Some(cached) = PYTHON_MODULE.get() {
         return Ok(cached);
     }
@@ -127,7 +127,7 @@ async fn execute_python_wasi(
 
 fn execute_python_wasi_sync(
     code: &str,
-    resource_dir: &PathBuf,
+    resource_dir: &Path,
     timeout_secs: u64,
 ) -> Result<ExecutionResult, String> {
     let (engine, module) = get_or_compile_module(resource_dir)?;
@@ -217,12 +217,8 @@ fn execute_python_wasi_sync(
                 // Normal Python exit (e.g., sys.exit(0)) — not an error
             } else {
                 // Other trap (e.g., memory OOB)
-                let stdout =
-                    String::from_utf8_lossy(&stdout_pipe.try_into_inner().unwrap_or_default())
-                        .to_string();
-                let mut stderr =
-                    String::from_utf8_lossy(&stderr_pipe.try_into_inner().unwrap_or_default())
-                        .to_string();
+                let stdout = String::from_utf8_lossy(&stdout_pipe.contents()).to_string();
+                let mut stderr = String::from_utf8_lossy(&stderr_pipe.contents()).to_string();
                 stderr.push_str(&format!("\nWasm trap: {}", err_str));
 
                 let _ = timeout_handle;
@@ -236,11 +232,10 @@ fn execute_python_wasi_sync(
         }
     }
 
-    // Extract captured output
-    let stdout =
-        String::from_utf8_lossy(&stdout_pipe.try_into_inner().unwrap_or_default()).to_string();
-    let stderr =
-        String::from_utf8_lossy(&stderr_pipe.try_into_inner().unwrap_or_default()).to_string();
+    // Extract captured output — use contents() instead of try_into_inner()
+    // because the store still holds Arc references to the pipes.
+    let stdout = String::from_utf8_lossy(&stdout_pipe.contents()).to_string();
+    let stderr = String::from_utf8_lossy(&stderr_pipe.contents()).to_string();
 
     // Clean up timeout thread (it'll finish on its own, harmless)
     let _ = timeout_handle;

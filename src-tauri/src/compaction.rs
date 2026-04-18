@@ -121,7 +121,7 @@ pub fn estimate_message_tokens(msg: &ChatMessage) -> usize {
     total_chars += msg.role.len() + 10;
 
     // Convert to tokens
-    (total_chars + CHARS_PER_TOKEN - 1) / CHARS_PER_TOKEN
+    total_chars.div_ceil(CHARS_PER_TOKEN)
 }
 
 /// Estimate total tokens in conversation history
@@ -352,7 +352,7 @@ pub async fn compact_history<R: Runtime>(
         crate::background::call_background_llm(http_client, config, model, &prompt).await?;
 
     // Estimate tokens after
-    let tokens_after = (summary.len() + CHARS_PER_TOKEN - 1) / CHARS_PER_TOKEN;
+    let tokens_after = summary.len().div_ceil(CHARS_PER_TOKEN);
     let tokens_saved = tokens_before.saturating_sub(tokens_after);
 
     // Insert summary as first message (system-like context)

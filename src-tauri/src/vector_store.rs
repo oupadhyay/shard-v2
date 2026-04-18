@@ -72,7 +72,7 @@ impl VectorStore {
         static VEC_INIT_STATUS: OnceLock<i32> = OnceLock::new();
 
         let init_rc = *VEC_INIT_STATUS.get_or_init(|| unsafe {
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<*const (), unsafe extern "C" fn(*mut rusqlite::ffi::sqlite3, *mut *const i8, *const rusqlite::ffi::sqlite3_api_routines) -> i32>(
                 sqlite_vec::sqlite3_vec_init as *const (),
             )))
         });
@@ -610,7 +610,7 @@ pub fn compute_content_hash(text: &str) -> String {
 /// Convert f32 vector to bytes for SQLite storage
 fn f32_vec_to_bytes(v: &[f32]) -> Vec<u8> {
     // Store embeddings in a fixed little-endian representation for portability.
-    let mut bytes = Vec::with_capacity(v.len() * std::mem::size_of::<f32>());
+    let mut bytes = Vec::with_capacity(std::mem::size_of_val(v));
     for &value in v {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
@@ -619,7 +619,7 @@ fn f32_vec_to_bytes(v: &[f32]) -> Vec<u8> {
 
 /// Convert bytes from SQLite to f32 vector
 fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, VectorStoreError> {
-    if bytes.len() % std::mem::size_of::<f32>() != 0 {
+    if !bytes.len().is_multiple_of(std::mem::size_of::<f32>()) {
         return Err(VectorStoreError::Migration(format!(
             "Invalid embedding blob size: {} bytes (not a multiple of 4)",
             bytes.len()

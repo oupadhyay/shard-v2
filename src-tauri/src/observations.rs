@@ -37,7 +37,7 @@ impl ObservationLevel {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_level(s: &str) -> Option<Self> {
         match s {
             "explicit" => Some(Self::Explicit),
             "deductive" => Some(Self::Deductive),
@@ -538,7 +538,7 @@ fn row_to_observation(row: &rusqlite::Row) -> Observation {
         observer: row.get(1).unwrap_or_default(),
         observed: row.get(2).unwrap_or_default(),
         content: row.get(3).unwrap_or_default(),
-        level: ObservationLevel::from_str(
+        level: ObservationLevel::parse_level(
             &row.get::<_, String>(4).unwrap_or_default(),
         )
         .unwrap_or(ObservationLevel::Explicit),

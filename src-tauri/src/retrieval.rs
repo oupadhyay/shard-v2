@@ -163,7 +163,7 @@ impl BM25Index {
         for (term, freq) in term_freqs {
             self.inverted_index
                 .entry(term)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push((internal_id, freq));
         }
 
