@@ -321,11 +321,11 @@ mod tests {
             ..Default::default()
         };
         let (pc, key) = config
-            .get_model_provider_config("google/gemma-3-27b-it:free", "test")
+            .get_model_provider_config("google/gemma-4-31b-it:free", "test")
             .unwrap();
         assert_eq!(pc.provider_name, "OpenRouter");
         assert_eq!(pc.base_url, "https://openrouter.ai/api/v1/");
-        assert_eq!(pc.model_id, "google/gemma-3-27b-it:free");
+        assert_eq!(pc.model_id, "google/gemma-4-31b-it:free");
         assert_eq!(key, "or-key");
         assert_eq!(pc.reasoning_effort, None);
     }
@@ -386,9 +386,9 @@ mod tests {
             ..Default::default()
         };
         let (pc, _) = config
-            .get_model_provider_config("google/gemma-3-27b-it:free (OpenRouter)", "test")
+            .get_model_provider_config("google/gemma-4-31b-it:free (OpenRouter)", "test")
             .unwrap();
-        assert_eq!(pc.model_id, "google/gemma-3-27b-it:free");
+        assert_eq!(pc.model_id, "google/gemma-4-31b-it:free");
     }
 
     #[test]

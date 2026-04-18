@@ -447,7 +447,7 @@ mod tests {
     #[test]
     fn test_get_context_size_openrouter() {
         assert_eq!(get_context_size("openai/gpt-oss-120b:free"), 128_000);
-        assert_eq!(get_context_size("google/gemma-3-27b-it:free"), 128_000);
+        assert_eq!(get_context_size("google/gemma-4-31b-it:free"), 128_000);
     }
 
     #[test]
