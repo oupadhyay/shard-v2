@@ -22,12 +22,11 @@ import "katex/dist/katex.min.css";
 
 import type { AttachedImage, ChatMessage, AppConfig, OcrResult, ModelsResponse, ProactiveMessage } from "./types";
 import { ChatState } from "./state";
+import { ChatController } from "./chat";
 import { EVENTS } from "./events";
 import {
   md,
   clearKatexErrors,
-  getKatexErrors,
-  detectUnrenderedLatex,
   createThinkingElement,
   updateThinkingElement,
   createToolCallElement,
@@ -148,79 +147,19 @@ document.addEventListener("click", (e) => {
 
 // ── Input Handling ────────────────────────────────────────────────────────────
 
-async function handleInput(skipUi = false) {
-  const text = inputField.value.trim();
-  if ((!text && !skipUi) || state.isProcessing) return;
+// Chat turn controller — shared logic between ambient and dedicated windows
+const chatController = new ChatController(
+  { chatArea, inputField, stopBtn, imagePreviewContainerId: "dedicated-image-preview-container" },
+  state,
+  {
+    onUserMessageRendered: () => updateNewChatButtonState(),
+    onTurnComplete: () => loadSessions(),
+  },
+  { stop: STOP_ICON, resend: RESEND_ICON },
+);
 
-  state.resetForNewTurn();
-  state.isCancelled = false;
-
-  const currentImages = [...state.attachedImages];
-
-  if (!skipUi) {
-    state.lastUserMessage = text;
-    state.lastAttachedImages = [...currentImages];
-    inputField.value = "";
-    inputField.style.height = "auto";
-    addMessage(chatArea, "user", text, currentImages);
-    updateNewChatButtonState();
-    state.attachedImages = [];
-    const container = document.getElementById("dedicated-image-preview-container");
-    if (container) container.innerHTML = "";
-  } else {
-    inputField.value = "";
-    inputField.style.height = "auto";
-  }
-
-  const finalImages = skipUi ? currentImages : state.lastAttachedImages;
-
-  state.isProcessing = true;
-  resetWebSearchContainer();
-  clearKatexErrors();
-  stopBtn.style.display = "inline-flex";
-  stopBtn.classList.add("loading");
-  stopBtn.innerHTML = STOP_ICON;
-  stopBtn.dataset.mode = "stop";
-
-  try {
-    const payload: Record<string, unknown> = { message: skipUi ? state.lastUserMessage : text };
-
-    if (finalImages.length > 0) {
-      payload.imagesBase64 = finalImages.map((img) => img.base64);
-      payload.imagesMimeTypes = finalImages.map((img) => img.mimeType);
-    }
-
-    await invoke("chat", payload);
-  } catch (error) {
-    logger.error("Chat error:", error);
-  } finally {
-    state.isProcessing = false;
-    stopBtn.classList.remove("loading");
-    if (!state.isCancelled) stopBtn.style.display = "none";
-
-    // Close any remaining open thinking block
-    if (state.currentThinkingBlock && chatArea.contains(state.currentThinkingBlock)) {
-      updateThinkingElement(state.currentThinkingBlock, state.currentThinkingBlock.getAttribute("data-thinking") || "", true);
-      state.currentThinkingBlock = null;
-    }
-
-    if (!state.isCancelled) {
-      const parseErrors = getKatexErrors();
-      const allMessages = chatArea.querySelectorAll('.message.assistant:not(.tool-output):not(.thinking-output)');
-      const lastAssistant = allMessages.length > 0 ? allMessages[allMessages.length - 1] : null;
-      const responseText = lastAssistant?.getAttribute("data-raw") || "";
-      const unrenderedErrors = detectUnrenderedLatex(responseText);
-      const allErrors = [...parseErrors, ...unrenderedErrors];
-      if (allErrors.length > 0) {
-        try { await invoke("retry_with_katex_hint", { katexErrors: allErrors }); }
-        catch (e) { logger.error("[KaTeX] Retry failed:", e); }
-      }
-    }
-
-    // Reset streaming state and refresh session sidebar
-    loadSessions();
-  }
-}
+// Convenience alias so existing call sites (keydown, stopBtn, retry) read naturally
+const handleInput = (skipUi = false) => chatController.handleInput(skipUi);
 
 inputField?.addEventListener("input", () => {
   inputField.style.height = "auto";
