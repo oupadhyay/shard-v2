@@ -5,15 +5,14 @@ import DOMPurify from "dompurify";
 import "katex/dist/katex.min.css";
 
 // Internal modules
-import type { AttachedImage, ChatMessage, OcrResult, ChatMessagePayload, ModelsResponse, ImageAttachment } from "./types";
+import type { AttachedImage, ChatMessage, OcrResult, ModelsResponse } from "./types";
 import { type SessionSummary, renderSessionItem } from "./ui/sessions";
 import { ChatState } from "./state";
+import { ChatController } from "./chat";
 import { EVENTS } from "./events";
 import {
   md,
   clearKatexErrors,
-  getKatexErrors,
-  detectUnrenderedLatex,
   createThinkingElement,
   updateThinkingElement,
   createToolCallElement,
@@ -74,6 +73,17 @@ breakoutBtn?.addEventListener("click", async () => {
 // State (centralized in ChatState – see src/state.ts)
 const state = new ChatState();
 
+// Chat turn controller — shared logic between ambient and dedicated windows
+const chatController = new ChatController(
+  { chatArea, inputField, stopBtn, imagePreviewContainerId: "image-preview-container" },
+  state,
+  { onUpdateButtonStates: () => setTimeout(() => updateButtonStates(), 100) },
+  { stop: STOP_ICON, resend: RESEND_ICON },
+);
+
+// Convenience alias so existing call sites read naturally
+const handleInput = (skipUi = false) => chatController.handleInput(skipUi);
+
 // Open external links in default browser
 document.addEventListener("click", (e) => {
   const target = e.target as HTMLElement;
@@ -83,136 +93,6 @@ document.addEventListener("click", (e) => {
     openUrl(anchor.href).catch(logger.error);
   }
 });
-
-
-/**
- * Prepares the payload for the chat API, including text and images.
- */
-function prepareChatPayload(text: string, images: (AttachedImage | ImageAttachment)[]): ChatMessagePayload {
-  const payload: ChatMessagePayload = { message: text };
-  if (images.length > 0) {
-    payload.imagesBase64 = images.map((img) => img.base64);
-    payload.imagesMimeTypes = images.map((img) => img.mimeType);
-  }
-  return payload;
-}
-
-/**
- * Sends the chat message payload to the backend.
- */
-async function sendChatMessage(payload: ChatMessagePayload) {
-  logger.info("Sending payload to backend:", {
-    message: payload.message,
-    hasImage: !!payload.imagesBase64,
-    imageLen: payload.imagesBase64?.length,
-    mime: payload.imagesMimeTypes,
-  });
-  await invoke("chat", payload);
-}
-
-/**
- * Checks the quality of the assistant's response (e.g., KaTeX errors)
- * and triggers an automatic retry if necessary.
- */
-async function checkResponseQuality() {
-  if (state.isCancelled) return;
-
-  const parseErrors = getKatexErrors();
-
-  // Find the last assistant message by iterating from the end
-  const allMessages = chatArea.querySelectorAll('.message.assistant:not(.tool-output):not(.thinking-output)');
-  const lastAssistant = allMessages.length > 0 ? allMessages[allMessages.length - 1] : null;
-  const responseText = lastAssistant?.getAttribute('data-raw') || '';
-
-  logger.debug("[KaTeX Check] Raw response text:", responseText.slice(0, 200));
-  const unrenderedErrors = detectUnrenderedLatex(responseText);
-
-  const allErrors = [...parseErrors, ...unrenderedErrors];
-
-  if (allErrors.length > 0) {
-    logger.info("[KaTeX] Detected rendering issues, requesting retry:", allErrors);
-    try {
-      await invoke("retry_with_katex_hint", { katexErrors: allErrors });
-    } catch (e) {
-      logger.error("[KaTeX] Retry request failed:", e);
-    }
-  }
-}
-
-// Helper: Handle Input
-async function handleInput(skipUi = false) {
-  const text = inputField.value.trim();
-  if ((!text && !skipUi) || state.isProcessing) return;
-
-  // 1. Reset per-turn state
-  state.resetForNewTurn();
-  state.isCancelled = false;
-
-  // 2. Capture images for API call BEFORE clearing
-  const currentImages = [...state.attachedImages];
-
-  if (!skipUi) {
-    state.lastUserMessage = text;
-    state.lastAttachedImages = currentImages; // Save for resend
-
-    // Update UI
-    addMessage(chatArea, "user", text, currentImages);
-    inputField.value = "";
-    inputField.style.height = "auto";
-
-    // Clear attachment previews
-    state.attachedImages = [];
-    const container = document.getElementById("image-preview-container");
-    if (container) container.innerHTML = "";
-  } else {
-    // Resending: attachedImages were restored by caller, text is already in inputField
-    inputField.value = "";
-    inputField.style.height = "auto";
-  }
-
-  // Use the captured images
-  const finalImages = skipUi ? currentImages : state.lastAttachedImages;
-
-  // 3. Prepare UI for response
-  state.isProcessing = true;
-  resetWebSearchContainer();
-  clearKatexErrors();
-
-  stopBtn.style.display = "inline-flex";
-  stopBtn.classList.add("loading");
-  stopBtn.innerHTML = STOP_ICON;
-  stopBtn.dataset.mode = "stop";
-
-  try {
-    // 4. Execute Chat
-    const payload = prepareChatPayload(skipUi ? state.lastUserMessage : text, finalImages);
-    await sendChatMessage(payload);
-  } catch (error) {
-    logger.error("Chat error:", error);
-  } finally {
-    // 5. Post-process
-    state.isProcessing = false;
-    stopBtn.classList.remove("loading");
-
-    if (!state.isCancelled) {
-      stopBtn.style.display = "none";
-    }
-
-    // Mark thinking complete
-    const openThinking = chatArea.querySelector('.thinking-output:not([data-complete="true"])');
-    if (openThinking) {
-      openThinking.setAttribute("data-complete", "true");
-      const summary = openThinking.querySelector("summary");
-      if (summary) summary.textContent = "Thought";
-    }
-
-    // Quality check (KaTeX errors)
-    await checkResponseQuality();
-  }
-
-  // Update button states after message
-  setTimeout(() => updateButtonStates(), 100);
-}
 
 stopBtn.addEventListener("click", async () => {
   if (stopBtn.dataset.mode === "resend") {

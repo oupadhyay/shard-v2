@@ -64,6 +64,9 @@ describe('Dedicated window event listener parity', () => {
 });
 
 describe('Dedicated window shared function usage', () => {
+  // Functions that should be directly imported and called in dedicated.ts.
+  // Note: getKatexErrors, detectUnrenderedLatex, and resetForNewTurn are now
+  // internal to ChatController (used by both windows via shared class).
   const sharedFunctions = [
     'createStreamingAssistantMessage',
     'renderStreamingContent',
@@ -80,8 +83,6 @@ describe('Dedicated window shared function usage', () => {
     'createWebSearchQueryElement',
     'updateWebSearchCount',
     'clearKatexErrors',
-    'getKatexErrors',
-    'detectUnrenderedLatex',
     'populateHeartbeatsPanel',
   ];
 
@@ -133,9 +134,11 @@ describe('Dedicated window feature parity', () => {
     expect(dedicatedSrc).toContain("fallbackShownThisTurn");
   });
 
-  it('resets streaming state after chat turn', () => {
-    // Both windows call resetForNewTurn() which clears fallbackShownThisTurn
-    expect(dedicatedSrc).toContain("resetForNewTurn");
+  it('uses shared ChatController for chat turn lifecycle', () => {
+    // Both windows import ChatController — this guarantees parity for
+    // resetForNewTurn, KaTeX checks, payload construction, and state management.
+    expect(dedicatedSrc).toContain('ChatController');
+    expect(mainSrc).toContain('ChatController');
   });
 });
 
