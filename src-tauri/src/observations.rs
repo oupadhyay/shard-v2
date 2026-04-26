@@ -190,12 +190,8 @@ pub fn get_observations_by_level(
             Ok(row_to_observation(row))
         })
         .map_err(|e| e.to_string())?;
-
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row.map_err(|e| e.to_string())?);
-    }
-    Ok(result)
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// Get the N most-derived observations (highest `times_derived`).
@@ -221,12 +217,8 @@ pub fn get_top_derived_observations(
             Ok(row_to_observation(row))
         })
         .map_err(|e| e.to_string())?;
-
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row.map_err(|e| e.to_string())?);
-    }
-    Ok(result)
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// Get the N most recent observations.
@@ -251,12 +243,8 @@ pub fn get_recent_observations(
             Ok(row_to_observation(row))
         })
         .map_err(|e| e.to_string())?;
-
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row.map_err(|e| e.to_string())?);
-    }
-    Ok(result)
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 // ============================================================================
@@ -273,40 +261,37 @@ pub fn search_observations_by_embedding(
 ) -> Result<Vec<Observation>, String> {
     let embedding_bytes = f32_vec_to_bytes(query_embedding);
 
-    // sqlite-vec KNN search — returns observation_id + distance
+    // sqlite-vec KNN search over embeddings, with a JOIN to fully hydrate observations
+    // in a single pass (distance is used only for filtering/ordering, not returned)
     let mut stmt = store
         .conn
         .prepare(
-            "SELECT observation_id, distance \
-             FROM observation_embeddings \
-             WHERE embedding MATCH ?1 AND k = ?2 \
-             ORDER BY distance",
+            "SELECT obs.id, obs.observer, obs.observed, obs.content, obs.level, \
+                    obs.source_ids, obs.times_derived, obs.session_name, \
+                    obs.content_hash, obs.created_at, obs.deleted_at \
+             FROM observation_embeddings v \
+             JOIN observations obs ON v.observation_id = obs.id \
+             WHERE v.embedding MATCH ?1 AND k = ?2 AND v.distance <= ?3 \
+                   AND obs.observed = ?4 AND obs.deleted_at IS NULL \
+             ORDER BY v.distance \
+             LIMIT ?5",
         )
         .map_err(|e| e.to_string())?;
 
-    let candidates: Vec<(String, f32)> = stmt
-        .query_map(params![embedding_bytes, limit as i64 * 2], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, f32>(1)?))
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .filter(|(_, dist)| *dist <= max_distance)
-        .collect();
-
-    // Hydrate + filter by observed entity and soft-delete
-    let mut results = Vec::new();
-    for (obs_id, _) in candidates {
-        if results.len() >= limit {
-            break;
-        }
-        if let Some(obs) = get_observation_by_id(store, &obs_id)? {
-            if obs.observed == observed && obs.deleted_at.is_none() {
-                results.push(obs);
-            }
-        }
-    }
-
-    Ok(results)
+    let rows = stmt
+        .query_map(
+            params![
+                embedding_bytes,
+                limit as i64 * 2,
+                max_distance,
+                observed,
+                limit as i64
+            ],
+            |row| Ok(row_to_observation(row)),
+        )
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// FTS5 keyword search over observations.
@@ -322,38 +307,29 @@ pub fn search_observations_by_keyword(
         return Ok(Vec::new());
     }
 
+    // Joined with observations table to avoid N+1 hydrate calls
     let mut stmt = store
         .conn
         .prepare(
-            "SELECT observation_id \
+            "SELECT obs.id, obs.observer, obs.observed, obs.content, obs.level, \
+                    obs.source_ids, obs.times_derived, obs.session_name, \
+                    obs.content_hash, obs.created_at, obs.deleted_at \
              FROM observations_fts \
+             JOIN observations obs ON observations_fts.observation_id = obs.id \
              WHERE observations_fts MATCH ?1 \
+                   AND obs.observed = ?2 AND obs.deleted_at IS NULL \
              ORDER BY bm25(observations_fts) \
-             LIMIT ?2",
+             LIMIT ?3",
         )
         .map_err(|e| e.to_string())?;
 
-    let candidates: Vec<String> = stmt
-        .query_map(params![sanitized, limit as i64 * 2], |row| {
-            row.get::<_, String>(0)
+    let rows = stmt
+        .query_map(params![sanitized, observed, limit as i64], |row| {
+            Ok(row_to_observation(row))
         })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    let mut results = Vec::new();
-    for obs_id in candidates {
-        if results.len() >= limit {
-            break;
-        }
-        if let Some(obs) = get_observation_by_id(store, &obs_id)? {
-            if obs.observed == observed && obs.deleted_at.is_none() {
-                results.push(obs);
-            }
-        }
-    }
-
-    Ok(results)
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 // ============================================================================
@@ -508,25 +484,6 @@ pub fn format_peer_card(card: &PeerCard) -> String {
 // ============================================================================
 // Helpers
 // ============================================================================
-
-fn get_observation_by_id(
-    store: &VectorStore,
-    id: &str,
-) -> Result<Option<Observation>, String> {
-    let result = store
-        .conn
-        .query_row(
-            "SELECT id, observer, observed, content, level, source_ids, times_derived, \
-             session_name, content_hash, created_at, deleted_at \
-             FROM observations WHERE id = ?",
-            params![id],
-            |row| Ok(row_to_observation(row)),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-
-    Ok(result)
-}
 
 fn row_to_observation(row: &rusqlite::Row) -> Observation {
     let source_ids_json: String = row.get(5).unwrap_or_else(|_| "[]".to_string());
