@@ -1731,25 +1731,36 @@ Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
             let facts = parse_deriver_response(&response);
 
             if !facts.is_empty() {
-                // Pre-compute embeddings asynchronously before entering spawn_blocking
-                let mut precomputed_embeddings: Vec<Option<Vec<f32>>> = Vec::with_capacity(facts.len());
-                for fact in &facts {
-                    let hash = crate::vector_store::compute_content_hash(&fact.fact);
-                    // Try generating embedding via API if we have a Gemini key
-                    if let Some(ref key) = gemini_key {
-                        match crate::interactions::generate_embedding(&http_client, &fact.fact, key).await {
-                            Ok(emb) => {
-                                precomputed_embeddings.push(Some(emb));
-                                continue;
+                // Pre-compute embeddings asynchronously in parallel before entering spawn_blocking.
+                // Collect fact texts up front so the stream owns the data (avoids tauri macro
+                // lifetime conflicts caused by borrowing &facts inside async closures).
+                use futures::StreamExt;
+                let fact_texts: Vec<String> =
+                    facts.iter().map(|f| f.fact.clone()).collect();
+                let precomputed_embeddings: Vec<Option<Vec<f32>>> =
+                    futures::stream::iter(fact_texts.into_iter())
+                        .map(|fact_text| {
+                            let client = http_client.clone();
+                            let key_opt = gemini_key.clone();
+                            async move {
+                                if let Some(key) = key_opt {
+                                    match crate::interactions::generate_embedding(
+                                        &client, &fact_text, &key,
+                                    )
+                                    .await
+                                    {
+                                        Ok(emb) => return Some(emb),
+                                        Err(e) => {
+                                            log::warn!("[Deriver] Embedding generation failed for fact, will try cache: {}", e);
+                                        }
+                                    }
+                                }
+                                None
                             }
-                            Err(e) => {
-                                log::warn!("[Deriver] Embedding generation failed for fact, will try cache: {}", e);
-                            }
-                        }
-                    }
-                    precomputed_embeddings.push(None);
-                    let _ = hash;
-                }
+                        })
+                        .buffered(4) // 4 concurrent embedding calls
+                        .collect()
+                        .await;
 
                 let handle = app_handle.clone();
 
