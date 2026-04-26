@@ -1731,24 +1731,86 @@ Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
             let facts = parse_deriver_response(&response);
 
             if !facts.is_empty() {
-                // Pre-compute embeddings asynchronously before entering spawn_blocking
-                let mut precomputed_embeddings: Vec<Option<Vec<f32>>> = Vec::with_capacity(facts.len());
-                for fact in &facts {
-                    let hash = crate::vector_store::compute_content_hash(&fact.fact);
-                    // Try generating embedding via API if we have a Gemini key
-                    if let Some(ref key) = gemini_key {
-                        match crate::interactions::generate_embedding(&http_client, &fact.fact, key).await {
-                            Ok(emb) => {
-                                precomputed_embeddings.push(Some(emb));
-                                continue;
-                            }
-                            Err(e) => {
-                                log::warn!("[Deriver] Embedding generation failed for fact, will try cache: {}", e);
-                            }
-                        }
+                // Pre-filter facts whose content_hash already exists in the store.
+                // Doing this BEFORE the embedding API calls avoids wasting Gemini quota
+                // (and rate-limit budget) on duplicates that would later be skipped anyway.
+                let dedup_handle = app_handle.clone();
+                let fact_strings: Vec<String> =
+                    facts.iter().map(|f| f.fact.clone()).collect();
+                let novel_indices: Vec<usize> = tokio::task::spawn_blocking(move || {
+                    match crate::memories::get_vector_store(&dedup_handle) {
+                        Ok(store) => fact_strings
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(idx, fact_text)| {
+                                let hash = crate::vector_store::compute_content_hash(fact_text);
+                                let exists: bool = store
+                                    .conn
+                                    .query_row(
+                                        "SELECT COUNT(*) FROM observations WHERE content_hash = ? AND deleted_at IS NULL",
+                                        [&hash],
+                                        |row| row.get::<_, i64>(0),
+                                    )
+                                    .unwrap_or(0) > 0;
+                                if exists { None } else { Some(idx) }
+                            })
+                            .collect(),
+                        // If the store can't be opened we'll fall through and try every fact;
+                        // the inner spawn_blocking below will surface the error.
+                        Err(_) => (0..fact_strings.len()).collect(),
                     }
-                    precomputed_embeddings.push(None);
-                    let _ = hash;
+                })
+                .await
+                .map_err(|e| format!("Deriver dedup panicked: {}", e))?;
+
+                // Build a sparse embeddings vector aligned with `facts` so the inner
+                // spawn_blocking loop can still pair embeddings to facts by index.
+                let mut precomputed_embeddings: Vec<Option<Vec<f32>>> = vec![None; facts.len()];
+
+                if !novel_indices.is_empty() {
+                    // Pre-compute embeddings asynchronously in parallel for novel facts only.
+                    // Wrap the API key in Arc<str> so each task gets a cheap pointer-clone
+                    // instead of duplicating the secret string per fact.
+                    use futures::StreamExt;
+                    use std::sync::Arc;
+                    let key_arc: Option<Arc<str>> =
+                        gemini_key.as_deref().map(Arc::from);
+                    let novel_facts: Vec<(usize, String)> = novel_indices
+                        .iter()
+                        .map(|&i| (i, facts[i].fact.clone()))
+                        .collect();
+
+                    let results: Vec<(usize, Option<Vec<f32>>)> =
+                        futures::stream::iter(novel_facts.into_iter())
+                            .map(|(idx, fact_text)| {
+                                let client = http_client.clone();
+                                let key_opt = key_arc.clone();
+                                async move {
+                                    let emb = if let Some(key) = key_opt {
+                                        match crate::interactions::generate_embedding(
+                                            &client, &fact_text, &key,
+                                        )
+                                        .await
+                                        {
+                                            Ok(emb) => Some(emb),
+                                            Err(e) => {
+                                                log::warn!("[Deriver] Embedding generation failed for fact, will try cache: {}", e);
+                                                None
+                                            }
+                                        }
+                                    } else {
+                                        None
+                                    };
+                                    (idx, emb)
+                                }
+                            })
+                            .buffered(4) // 4 concurrent embedding calls
+                            .collect()
+                            .await;
+
+                    for (idx, emb) in results {
+                        precomputed_embeddings[idx] = emb;
+                    }
                 }
 
                 let handle = app_handle.clone();
