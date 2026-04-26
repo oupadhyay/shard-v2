@@ -99,14 +99,18 @@ fn bench_embedding_concurrency(c: &mut Criterion) {
     group.finish();
 }
 
-// 4. Async vs Sync I/O — measure overhead of tokio::fs vs std::fs for small reads.
+// 4. Async vs Sync I/O — compare tokio::fs vs std::fs for 2MB reads.
 fn bench_io_comparison(c: &mut Criterion) {
+    use std::io::Write;
     let size = 2 * 1024 * 1024; // 2MB
     let data = vec![0u8; size];
     // Use tempfile to ensure a unique path and automatic cleanup on drop.
-    let temp_file = tempfile::NamedTempFile::new().expect("create tempfile");
+    // Write through the open NamedTempFile handle so this works on Windows
+    // (where opening the same path twice can fail due to file-sharing rules).
+    let mut temp_file = tempfile::NamedTempFile::new().expect("create tempfile");
+    temp_file.write_all(&data).expect("write temp data");
+    temp_file.flush().expect("flush temp data");
     let temp_path = temp_file.path().to_path_buf();
-    std::fs::write(&temp_path, &data).unwrap();
 
     let mut group = c.benchmark_group("io_comparison");
 

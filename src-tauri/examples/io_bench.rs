@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::time::Instant;
 
 #[tokio::main]
@@ -5,9 +6,12 @@ async fn main() {
     let size = 2 * 1024 * 1024; // 2MB
     let data = vec![0u8; size];
     // Use tempfile so each run gets a unique path and the file is auto-removed on drop.
-    let temp_file = tempfile::NamedTempFile::new().expect("create tempfile");
+    // Write through the open NamedTempFile handle so this works on Windows
+    // (where opening the same path twice can fail due to file-sharing rules).
+    let mut temp_file = tempfile::NamedTempFile::new().expect("create tempfile");
+    temp_file.write_all(&data).expect("write temp data");
+    temp_file.flush().expect("flush temp data");
     let temp_path = temp_file.path().to_path_buf();
-    std::fs::write(&temp_path, &data).unwrap();
 
     println!("Benchmarking 2MB file read...");
 
