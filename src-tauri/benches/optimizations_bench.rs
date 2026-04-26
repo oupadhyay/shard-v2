@@ -99,10 +99,46 @@ fn bench_embedding_concurrency(c: &mut Criterion) {
     group.finish();
 }
 
+// 4. Async vs Sync I/O — compare tokio::fs vs std::fs for 2MB reads.
+fn bench_io_comparison(c: &mut Criterion) {
+    use std::io::Write;
+    let size = 2 * 1024 * 1024; // 2MB
+    let data = vec![0u8; size];
+    // Use tempfile to ensure a unique path and automatic cleanup on drop.
+    // Write through the open NamedTempFile handle so this works on Windows
+    // (where opening the same path twice can fail due to file-sharing rules).
+    let mut temp_file = tempfile::NamedTempFile::new().expect("create tempfile");
+    temp_file.write_all(&data).expect("write temp data");
+    temp_file.flush().expect("flush temp data");
+    let temp_path = temp_file.path().to_path_buf();
+
+    let mut group = c.benchmark_group("io_comparison");
+
+    group.bench_function("std_fs_read", |b| {
+        b.iter(|| {
+            let result = std::fs::read(&temp_path).unwrap();
+            black_box(result);
+        })
+    });
+
+    group.bench_function("tokio_fs_read", |b| {
+        b.to_async(tokio::runtime::Runtime::new().unwrap())
+            .iter(|| async {
+                let result = tokio::fs::read(&temp_path).await.unwrap();
+                black_box(result);
+            })
+    });
+
+    group.finish();
+    // temp_file is dropped here, removing the underlying file.
+    drop(temp_file);
+}
+
 criterion_group!(
     benches,
     bench_image_sharing,
     bench_memory_caching,
-    bench_embedding_concurrency
+    bench_embedding_concurrency,
+    bench_io_comparison
 );
 criterion_main!(benches);

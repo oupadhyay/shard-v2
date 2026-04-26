@@ -83,50 +83,68 @@ struct OcrResult {
 
 #[tauri::command]
 async fn perform_ocr_capture(_app_handle: AppHandle) -> Result<OcrResult, String> {
-    // Wrap all blocking I/O in spawn_blocking to avoid starving the async executor
-    let result = tokio::task::spawn_blocking(perform_ocr_capture_blocking)
-        .await
-        .map_err(|e| {
-            if e.is_cancelled() {
-                "OCR task was cancelled".to_string()
-            } else {
-                format!("OCR task panicked: {}", e)
-            }
-        })??;
+    #[cfg(target_os = "macos")]
+    {
+        perform_ocr_capture_macos().await
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Wrap all blocking I/O in spawn_blocking to avoid starving the async executor
+        let result = tokio::task::spawn_blocking(perform_ocr_capture_blocking)
+            .await
+            .map_err(|e| {
+                if e.is_cancelled() {
+                    "OCR task was cancelled".to_string()
+                } else {
+                    format!("OCR task panicked: {}", e)
+                }
+            })??;
 
-    Ok(result)
+        Ok(result)
+    }
 }
 
-/// macOS: Use native `/usr/sbin/screencapture -i` for interactive region selection
+/// macOS: Use native `/usr/sbin/screencapture -i` for interactive region selection.
+/// Async-first so the interactive screencapture process (which waits on user input)
+/// doesn't tie up a thread in the spawn_blocking pool.
 #[cfg(target_os = "macos")]
-fn perform_ocr_capture_blocking() -> Result<OcrResult, String> {
+async fn perform_ocr_capture_macos() -> Result<OcrResult, String> {
     let temp_dir = std::env::temp_dir();
     // Use a unique temp file name to avoid predictable path attacks
     let temp_path = temp_dir.join(format!("shard_ocr_{}.png", uuid::Uuid::new_v4()));
 
-    // Execute screencapture with absolute path, passing Path/OsStr directly
-    let output = std::process::Command::new("/usr/sbin/screencapture")
+    // Execute screencapture with absolute path, passing Path/OsStr directly.
+    // Use .status() (not .output()) to avoid allocating stdout/stderr pipes for
+    // a process whose only useful output is its exit code.
+    let status = tokio::process::Command::new("/usr/sbin/screencapture")
         .arg("-i")
         .arg(&temp_path)
-        .output()
+        .status()
+        .await
         .map_err(|e| format!("Failed to execute screencapture: {}", e))?;
 
-    if !output.status.success() {
+    if !status.success() {
         // Clean up any partial file and return a generic cancellation/failure error
-        let _ = std::fs::remove_file(&temp_path);
+        let _ = tokio::fs::remove_file(&temp_path).await;
         return Err("Capture cancelled or failed".to_string());
     }
 
-    // Read image and validate it's non-empty (guards against corrupted/incomplete captures)
-    let image_data =
-        std::fs::read(&temp_path).map_err(|e| format!("Failed to read capture file: {}", e))?;
+    // Read image and validate it's non-empty (guards against corrupted/incomplete captures).
+    // Ensure cleanup on read failure to avoid orphaned temp files.
+    let image_data = match tokio::fs::read(&temp_path).await {
+        Ok(data) => data,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(format!("Failed to read capture file: {}", e));
+        }
+    };
     if image_data.is_empty() {
-        let _ = std::fs::remove_file(&temp_path);
+        let _ = tokio::fs::remove_file(&temp_path).await;
         return Err("Capture produced an empty file".to_string());
     }
 
     // Clean up temp file
-    if let Err(e) = std::fs::remove_file(&temp_path) {
+    if let Err(e) = tokio::fs::remove_file(&temp_path).await {
         log::warn!(
             "Failed to remove temp OCR file {}: {}",
             temp_path.display(),
