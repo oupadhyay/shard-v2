@@ -15,7 +15,16 @@ fn open_bench_store() -> (VectorStore, tempfile::TempDir) {
 }
 
 fn make_test_embedding(seed: f32) -> Vec<f32> {
-    vec![seed; 768]
+    // Generate a simple deterministic pseudo-random-like embedding based on the seed.
+    // This avoids all embeddings being colinear while keeping benchmarks reproducible.
+    let mut embedding = Vec::with_capacity(768);
+    let mut x = seed;
+    for _ in 0..768 {
+        // Chaotic update to introduce variation; constants chosen arbitrarily but fixed.
+        x = (x * 1.324_717_957_f32 + 0.123_456_79_f32).sin();
+        embedding.push(x);
+    }
+    embedding
 }
 
 fn populate_store(store: &VectorStore, count: usize) -> Vec<String> {

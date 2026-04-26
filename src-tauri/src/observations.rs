@@ -261,8 +261,8 @@ pub fn search_observations_by_embedding(
 ) -> Result<Vec<Observation>, String> {
     let embedding_bytes = f32_vec_to_bytes(query_embedding);
 
-    // sqlite-vec KNN search — returns observation_id + distance
-    // Joined with observations table to avoid N+1 hydrate calls
+    // sqlite-vec KNN search over embeddings, with a JOIN to fully hydrate observations
+    // in a single pass (distance is used only for filtering/ordering, not returned)
     let mut stmt = store
         .conn
         .prepare(
