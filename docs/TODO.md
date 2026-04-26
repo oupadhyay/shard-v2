@@ -2,7 +2,7 @@
 
 ## P0: Code Review Issues (Feb 2026)
 
-- [x] **Monolithic handleInput** ([main.ts:69-224](../src/main.ts)) - Split into `ChatController` class in `src/chat.ts`
+- [x] **Monolithic handleInput** ([src/chat.ts](../src/chat.ts)) - Split into `ChatController` class in `src/chat.ts`
 
 ## P1: Auto-Testing (Evaluator-as-a-Judge)
 

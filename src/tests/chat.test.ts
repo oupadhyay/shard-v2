@@ -2,7 +2,7 @@
  * Tests for the ChatController class (src/chat.ts).
  *
  * Verifies the full input → chat → post-process lifecycle, including guard
- * logic, state transitions, stop-button management, and KaTeX quality checks.
+ * logic, state transitions, and stop-button management.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
@@ -279,9 +279,8 @@ describe('ChatController', () => {
       dom.inputField.value = 'Hi';
       await controller.handleInput();
 
-      // isCancelled is reset at the start... but may be set again during
-      // the turn. Since our mock doesn't cancel, it should stay false.
       // (It's reset in resetTurnState before any async work)
+      expect(state.isCancelled).toBe(false);
     });
   });
 
