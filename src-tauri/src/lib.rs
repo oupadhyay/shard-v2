@@ -830,8 +830,7 @@ pub fn run() {
                     use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                     panel.set_collection_behaviour(
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-                            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary,
+                            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,
                     );
                 }
             }
