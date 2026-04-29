@@ -4,6 +4,14 @@
 
 - [x] **Monolithic handleInput** ([src/chat.ts](../src/chat.ts)) - Split into `ChatController` class in `src/chat.ts`
 
+## P0: Local Models via Ollama
+
+- [ ] Add Ollama provider for local model inference
+  - New `agent/ollama.rs` adapter alongside `agent/gemini.rs` / `agent/openrouter.rs`
+  - Add `Provider::Ollama` to `models.rs` registry, with chat + vision entries
+  - Target models on a 36 GB M3 Pro @ 128K context: **Gemma 4 26B-A4B** (`UD-Q4_K_XL`, MoE, ~18 GB) and **Qwen3.6-35B-A3B** (`UD-Q4_K_XL`, MoE, ~23 GB)
+  - **Blocked**: Both Gemma 4 and Qwen3.6 unsloth GGUFs require split mmproj files; llama.cpp does not yet support the Gemma 4 architecture, and Ollama returns `500 Internal Server Error` on these models. Tracked in [ollama/ollama#15235](https://github.com/ollama/ollama/issues/15235). Revisit after the next Ollama vendor sync of llama.cpp.
+
 ## P1: Auto-Testing (Evaluator-as-a-Judge)
 
 - [ ] Automate actual testing with the model using an **Evaluator-as-a-Judge** pattern:
@@ -67,7 +75,7 @@
 
 ## P2: Multi-Provider Support
 
-- [ ] Add support for other providers (e.g., Ollama, Anthropic).
+- [ ] Add support for Anthropic provider (Ollama tracked under P0 above).
 
 ## P2: Distribution & CI/CD
 
