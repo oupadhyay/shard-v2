@@ -4,9 +4,9 @@ Shard is a high-performance, privacy-focused AI assistant built with **Tauri 2**
 
 ## ✨ Key Features
 
-- **Multi-Provider Chat** — Gemini 2.5/3 Flash, GPT-OSS 120B (OpenRouter / Groq / Cerebras), LLaMA 3.3, Stepfun 3.5 Flash. Automatic fallback across providers.
+- **Multi-Provider Chat** — Gemma 4 31B, Gemini 3 Flash, 3.1 Flash Lite, GPT-OSS 120B (OpenRouter / Groq). Automatic fallback across providers.
 - **Autonomous Tools** — Weather, Wikipedia, Stocks, ArXiv (HTML parsing), Web Search (Brave), URL reader. Results are cached with per-tool TTLs.
-- **Multimodal Intelligence** — Screenshot-to-chat via `Ctrl+Space`. Gemini models use the native Files API; non-vision models route through a Vision LLM pipeline (Molmo, Nemotron, Qwen 2.5 VL).
+- **Multimodal Intelligence** — Screenshot-to-chat via `Ctrl+Space`. Gemini models use the native Files API; non-vision models route through a Vision LLM pipeline (Gemma 4 26B MoE, Nemotron Nano 12B VL).
 - **Deep Research Mode** — Multi-step synthesis from ArXiv, Wikipedia, and web sources for complex queries.
 - **Personas Engine** — Load / unload specialized personas and instruction sets on-demand via `load_persona` / `unload_persona` tools. Personas are `.md` files with optional YAML frontmatter for `required_tools`.
 - **Persistent Sessions** — SQLite-backed session management with LLM-generated titles, summaries, and full message history. Switch between conversations via the Sessions modal.
@@ -66,9 +66,9 @@ Shard is configured entirely through the in-app Settings modal:
 
 | Setting              | Description                                                       |
 |----------------------|-------------------------------------------------------------------|
-| **API Keys**         | Gemini, OpenRouter, Brave, Groq, Cerebras (stored in OS keychain) |
+| **API Keys**         | Gemini, OpenRouter, Brave, Groq (stored in OS keychain)           |
 | **Chat Model**       | Select from available chat models per provider                    |
-| **Background Model** | LLM used for automated memory jobs (Groq/Cerebras/OpenRouter)     |
+| **Background Model** | LLM used for automated memory jobs (Gemini / Groq / OpenRouter)   |
 | **Vision Model**     | LLM used for image understanding on non-vision chat models        |
 | **System Prompt**    | Custom personality / instruction override                         |
 | **Enable Tools**     | Toggle autonomous tool calling                                    |

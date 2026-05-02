@@ -40,11 +40,6 @@ fn test_get_context_size_groq() {
 }
 
 #[test]
-fn test_get_context_size_cerebras() {
-    assert_eq!(get_context_size("gpt-oss-120b (Cerebras)"), 128_000);
-}
-
-#[test]
 fn test_estimate_message_tokens() {
     // 400 chars of content + ~10 for role = ~410 chars / 4 = ~103 tokens
     let msg = make_message("user", 400);

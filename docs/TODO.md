@@ -3,10 +3,11 @@
 ## P0: Code Review Issues (Feb 2026)
 
 - [x] **Monolithic handleInput** ([src/chat.ts](../src/chat.ts)) - Split into `ChatController` class in `src/chat.ts`
+- [x] Rationalize model registry per [model strategy proposal](./model_strategy_proposal.md): remove Cerebras, add Gemma 4 26B-A4B MoE for vision/background, cut from 22 → 10 entries
 
 ## P0: Local Models via Ollama
 
-- [ ] Add Ollama provider for local model inference
+- [ ] Add Ollama provider for local model inference (Unsloth)
   - New `agent/ollama.rs` adapter alongside `agent/gemini.rs` / `agent/openrouter.rs`
   - Add `Provider::Ollama` to `models.rs` registry, with chat + vision entries
   - Target models on a 36 GB M3 Pro @ 128K context: **Gemma 4 26B-A4B** (`UD-Q4_K_XL`, MoE, ~18 GB) and **Qwen3.6-35B-A3B** (`UD-Q4_K_XL`, MoE, ~23 GB)
@@ -56,7 +57,6 @@ The evaluator-as-judge harness is in place (`cargo run --example eval --features
   - Extract core logic: `agent/core.rs`
   - Consider separating retry logic, tool execution, and streaming handling
 - [ ] Migrate from `screenshots` crate to `xcap` for screen capture (P2)
-- [ ] Rationalize model registry per [model strategy proposal](./model_strategy_proposal.md): remove Cerebras, add Gemma 4 26B-A4B MoE for vision/background, cut from 22 → 10 entries
 
 ## P2: Platform Gateway
 

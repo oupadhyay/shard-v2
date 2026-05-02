@@ -46,7 +46,6 @@ export interface OcrResult {
 export interface AppConfig {
   gemini_api_key?: string;
   openrouter_api_key?: string;
-  cerebras_api_key?: string;
   groq_api_key?: string;
   brave_api_key?: string;
   selected_model?: string;
@@ -71,7 +70,7 @@ export interface ChatMessagePayload {
 export interface ModelInfo {
   id: string;
   display_name: string;
-  provider: "gemini" | "openrouter" | "groq" | "cerebras";
+  provider: "gemini" | "openrouter" | "groq";
   category: "chat" | "vision" | "background";
   supports_tools: boolean;
   supports_vision: boolean;

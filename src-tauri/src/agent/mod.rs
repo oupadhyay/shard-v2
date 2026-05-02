@@ -1001,7 +1001,7 @@ impl<R: tauri::Runtime> Agent<R> {
                 )
                 .await?
             } else {
-                // Both OpenRouter and Cerebras use OpenAI-compatible API
+                // OpenRouter and Groq use OpenAI-compatible API
                 self.process_openrouter_turn(
                     app_handle,
                     config,
@@ -2222,7 +2222,6 @@ impl<R: tauri::Runtime> Agent<R> {
         // Detect provider from model name and configure accordingly
         let (provider_config, api_key) =
             config.get_model_provider_config(&selected_model, "main chat")?;
-        let is_cerebras = provider_config.provider_name == "Cerebras";
         let is_groq = provider_config.provider_name == "Groq";
 
         let model = provider_config.model_id.clone();
@@ -2366,7 +2365,7 @@ impl<R: tauri::Runtime> Agent<R> {
                     },
                     reasoning_effort,
                     reasoning: None,
-                    include_reasoning: if is_cerebras || is_groq {
+                    include_reasoning: if is_groq {
                         None
                     } else {
                         Some(true)
@@ -2426,7 +2425,7 @@ impl<R: tauri::Runtime> Agent<R> {
                 .map_err(|e| format!("{} network error (retry): {}", provider_name, e))?;
         }
 
-        // Check for token quota errors on Cerebras/Groq and fallback to OpenRouter
+        // Check for token quota errors on Groq and fallback to OpenRouter
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
             let is_quota_error = error_text.contains("token_quota_exceeded")
@@ -2434,8 +2433,8 @@ impl<R: tauri::Runtime> Agent<R> {
                 || error_text.contains("rate_limit")
                 || error_text.contains("tokens per minute");
 
-            // Only fallback for Cerebras/Groq quota errors, not OpenRouter
-            if is_quota_error && (is_cerebras || is_groq) {
+            // Only fallback for Groq quota errors, not OpenRouter
+            if is_quota_error && is_groq {
                 // Check if OpenRouter is available for fallback
                 if let Some(openrouter_key) = &config.openrouter_api_key {
                     // Emit fallback notification with original error

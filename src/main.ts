@@ -1188,7 +1188,6 @@ initSettingsTabs(settingsModal);
 
 const geminiKeyInput = document.getElementById("gemini-key") as HTMLInputElement;
 const openRouterKeyInput = document.getElementById("openrouter-key") as HTMLInputElement;
-const cerebrasKeyInput = document.getElementById("cerebras-key") as HTMLInputElement;
 const groqKeyInput = document.getElementById("groq-key") as HTMLInputElement;
 const braveKeyInput = document.getElementById("brave-key") as HTMLInputElement;
 const modelInput = document.getElementById("model-id") as HTMLSelectElement;
@@ -1268,13 +1267,12 @@ settingsBtn.addEventListener("click", async () => {
     populateModelDropdown(
       backgroundModelInput,
       modelsResponse.background_models,
-      config.background_model || "gpt-oss-120b (Groq)"
+      config.background_model || "gemma-4-26b-a4b-it"
     );
 
     // Set other config values
     geminiKeyInput.value = config.gemini_api_key || "";
     openRouterKeyInput.value = config.openrouter_api_key || "";
-    cerebrasKeyInput.value = config.cerebras_api_key || "";
     groqKeyInput.value = config.groq_api_key || "";
     braveKeyInput.value = config.brave_api_key || "";
     enableToolsCheckbox.checked = config.enable_tools || false;
@@ -1306,7 +1304,6 @@ saveSettingsBtn.addEventListener("click", async () => {
   const config = {
     gemini_api_key: geminiKeyInput.value || null,
     openrouter_api_key: openRouterKeyInput.value || null,
-    cerebras_api_key: cerebrasKeyInput.value || null,
     groq_api_key: groqKeyInput.value || null,
     brave_api_key: braveKeyInput.value || null,
     selected_model: modelInput.value || null,

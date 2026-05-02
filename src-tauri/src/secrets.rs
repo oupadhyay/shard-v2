@@ -28,8 +28,6 @@ pub enum ApiKeyType {
     Gemini,
     /// OpenRouter API key
     OpenRouter,
-    /// Cerebras API key
-    Cerebras,
     /// Brave Search API key
     Brave,
     /// Groq API key
@@ -43,7 +41,6 @@ impl ApiKeyType {
             ApiKeyType::OpenAI => "api_key",
             ApiKeyType::Gemini => "gemini_api_key",
             ApiKeyType::OpenRouter => "openrouter_api_key",
-            ApiKeyType::Cerebras => "cerebras_api_key",
             ApiKeyType::Brave => "brave_api_key",
             ApiKeyType::Groq => "groq_api_key",
         }

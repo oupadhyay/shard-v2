@@ -376,7 +376,6 @@ const enableScreenContextCheckbox = settingsModal.querySelector("#enable-screen-
 const heartbeatCooldownInput = settingsModal.querySelector("#heartbeat-cooldown") as HTMLInputElement;
 const geminiKeyInput = settingsModal.querySelector("#gemini-key") as HTMLInputElement;
 const openRouterKeyInput = settingsModal.querySelector("#openrouter-key") as HTMLInputElement;
-const cerebrasKeyInput = settingsModal.querySelector("#cerebras-key") as HTMLInputElement;
 const groqKeyInput = settingsModal.querySelector("#groq-key") as HTMLInputElement;
 const braveKeyInput = settingsModal.querySelector("#brave-key") as HTMLInputElement;
 
@@ -426,11 +425,10 @@ async function populateSettings() {
     ]);
 
     populateModelDropdown(modelInput, modelsResponse.chat_models, config.selected_model || "gemini-2.5-flash");
-    populateModelDropdown(backgroundModelInput, modelsResponse.background_models, config.background_model || "gpt-oss-120b (Groq)");
+    populateModelDropdown(backgroundModelInput, modelsResponse.background_models, config.background_model || "gemma-4-26b-a4b-it");
 
     if (geminiKeyInput) geminiKeyInput.value = config.gemini_api_key || "";
     if (openRouterKeyInput) openRouterKeyInput.value = config.openrouter_api_key || "";
-    if (cerebrasKeyInput) cerebrasKeyInput.value = config.cerebras_api_key || "";
     if (groqKeyInput) groqKeyInput.value = config.groq_api_key || "";
     if (braveKeyInput) braveKeyInput.value = config.brave_api_key || "";
 
@@ -458,7 +456,6 @@ async function saveSettings() {
   const config = {
     gemini_api_key: geminiKeyInput.value || null,
     openrouter_api_key: openRouterKeyInput.value || null,
-    cerebras_api_key: cerebrasKeyInput.value || null,
     groq_api_key: groqKeyInput.value || null,
     brave_api_key: braveKeyInput.value || null,
     selected_model: modelInput.value || null,

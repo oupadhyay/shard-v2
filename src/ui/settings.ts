@@ -28,10 +28,6 @@ export const SETTINGS_MODAL_HTML = `
           <input type="password" id="openrouter-key" placeholder="Enter OpenRouter API Key" />
         </div>
         <div class="setting-group">
-          <label>Cerebras API Key</label>
-          <input type="password" id="cerebras-key" placeholder="Enter Cerebras API Key" />
-        </div>
-        <div class="setting-group">
           <label>Groq API Key <span class="required-hint">*</span></label>
           <input type="password" id="groq-key" placeholder="Enter Groq API Key" />
         </div>
@@ -150,7 +146,6 @@ export function populateModelDropdown(
     gemini: "Gemini AI",
     openrouter: "OpenRouter",
     groq: "Groq",
-    cerebras: "Cerebras",
   };
 
   const groups: Record<string, ModelInfo[]> = {};
@@ -162,8 +157,8 @@ export function populateModelDropdown(
     groups[providerKey].push(model);
   }
 
-  // Create optgroups in order: gemini, openrouter, groq, cerebras
-  const providerOrder = ["gemini", "openrouter", "groq", "cerebras"];
+  // Create optgroups in order: gemini, openrouter, groq
+  const providerOrder = ["gemini", "openrouter", "groq"];
   for (const provider of providerOrder) {
     const modelsInGroup = groups[provider];
     if (!modelsInGroup || modelsInGroup.length === 0) continue;

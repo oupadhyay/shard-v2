@@ -221,7 +221,7 @@ pub struct CleanupDecision {
 const RATE_LIMIT_MAX_RETRIES: u32 = 3;
 
 /// Parse a rate limit error message and extract the wait time in seconds.
-/// Handles Groq/OpenRouter/Cerebras error formats:
+/// Handles Groq/OpenRouter error formats:
 /// - "Please try again in 18.48s"
 /// - "Please try again in 1m30s"
 /// - "Rate limit" without specific wait → returns a default backoff
@@ -297,7 +297,7 @@ pub async fn call_background_llm(
 
 /// General-purpose one-shot LLM call with a custom system prompt.
 ///
-/// Uses the background model provider (OpenRouter/Groq/Cerebras).
+/// Uses the background model provider (OpenRouter/Groq).
 /// Automatically retries on rate limit errors with the wait time from the error message.
 /// Returns the text content of the first response choice.
 pub async fn call_llm_oneshot(
@@ -512,7 +512,7 @@ pub struct LlmToolCall {
 /// Call an LLM with tool definitions.
 /// Automatically selects the correct API format:
 /// - Gemini models: native `generateContent` with `functionDeclarations`
-/// - OpenAI-compatible (Groq/Cerebras/OpenRouter): standard `chat/completions` with `tools`
+/// - OpenAI-compatible (Groq/OpenRouter): standard `chat/completions` with `tools`
 ///
 /// Automatically retries on rate limit errors with the wait time from the error message.
 pub async fn call_llm_with_tools(
@@ -753,7 +753,7 @@ async fn call_gemini_with_tools(
     })
 }
 
-/// OpenAI-compatible chat/completions path (Groq/Cerebras/OpenRouter).
+/// OpenAI-compatible chat/completions path (Groq/OpenRouter).
 async fn call_openai_with_tools(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,

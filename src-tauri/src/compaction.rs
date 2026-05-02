@@ -22,7 +22,6 @@ use tauri::{AppHandle, Runtime};
 const GEMINI_CONTEXT_SIZE: usize = 1_000_000; // 1M for all Gemini models
 const OPENROUTER_CONTEXT_SIZE: usize = 128_000; // 128K for OpenRouter models
 const GROQ_CONTEXT_SIZE: usize = 128_000; // 128K for Groq
-const CEREBRAS_CONTEXT_SIZE: usize = 128_000; // 128K for Cerebras
 
 /// Default compaction settings
 pub const DEFAULT_THRESHOLD: f32 = 0.5; // 50% of context window
@@ -76,9 +75,6 @@ pub fn get_context_size(model: &str) -> usize {
     // Provider-suffixed models
     if model.contains("(Groq)") {
         return GROQ_CONTEXT_SIZE;
-    }
-    if model.contains("(Cerebras)") {
-        return CEREBRAS_CONTEXT_SIZE;
     }
 
     // OpenRouter models (contain slash like "openai/gpt-oss-120b:free")
@@ -453,11 +449,6 @@ mod tests {
     #[test]
     fn test_get_context_size_groq() {
         assert_eq!(get_context_size("gpt-oss-120b (Groq)"), 128_000);
-    }
-
-    #[test]
-    fn test_get_context_size_cerebras() {
-        assert_eq!(get_context_size("gpt-oss-120b (Cerebras)"), 128_000);
     }
 
     #[test]

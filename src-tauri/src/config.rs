@@ -15,8 +15,7 @@ pub struct AppConfig {
     pub gemini_api_key: Option<String>,
     #[serde(default)]
     pub openrouter_api_key: Option<String>,
-    #[serde(default)]
-    pub cerebras_api_key: Option<String>,
+
     #[serde(default)]
     pub brave_api_key: Option<String>,
     #[serde(default)]
@@ -72,23 +71,7 @@ impl AppConfig {
         model: &str,
         context: &str,
     ) -> Result<(ModelProviderConfig, String), String> {
-        let (provider_name, base_url, model_id, reasoning_effort) = if model.contains("(Cerebras)")
-        {
-            let base_model = model.replace(" (Cerebras)", "").trim().to_string();
-            let model_id = if base_model.contains("120b") {
-                "gpt-oss-120b".to_string()
-            } else if base_model.contains("70b") {
-                "llama-3.3-70b".to_string()
-            } else {
-                base_model
-            };
-            (
-                "Cerebras",
-                "https://api.cerebras.ai/v1/",
-                model_id,
-                Some("high".to_string()),
-            )
-        } else if model.contains("(Groq)") {
+        let (provider_name, base_url, model_id, reasoning_effort) = if model.contains("(Groq)") {
             let base_model = model.replace(" (Groq)", "").trim().to_string();
             let model_id = if base_model.contains("120b") {
                 "openai/gpt-oss-120b".to_string()
@@ -124,7 +107,6 @@ impl AppConfig {
         };
 
         let key = match provider_name {
-            "Cerebras" => &self.cerebras_api_key,
             "Groq" => &self.groq_api_key,
             _ => &self.openrouter_api_key,
         };
@@ -153,7 +135,6 @@ impl Default for AppConfig {
             api_key: None,
             gemini_api_key: None,
             openrouter_api_key: None,
-            cerebras_api_key: None,
             brave_api_key: None,
             selected_model: None,
             api_base_url: None,
@@ -163,7 +144,7 @@ impl Default for AppConfig {
             incognito_mode: None,
             research_mode: Some(false),
             groq_api_key: None,
-            background_model: Some("gpt-oss-120b (Groq)".to_string()),
+            background_model: Some("gemma-4-26b-a4b-it".to_string()),
             // Auto-retry defaults
             max_auto_retries: Some(2),
             retry_on_empty: Some(true),
@@ -209,7 +190,6 @@ pub fn load_config<R: Runtime>(app_handle: &AppHandle<R>) -> Result<AppConfig, S
     loaded.api_key = all_keys.get(ApiKeyType::OpenAI.key_name()).cloned();
     loaded.gemini_api_key = all_keys.get(ApiKeyType::Gemini.key_name()).cloned();
     loaded.openrouter_api_key = all_keys.get(ApiKeyType::OpenRouter.key_name()).cloned();
-    loaded.cerebras_api_key = all_keys.get(ApiKeyType::Cerebras.key_name()).cloned();
     loaded.brave_api_key = all_keys.get(ApiKeyType::Brave.key_name()).cloned();
     loaded.groq_api_key = all_keys.get(ApiKeyType::Groq.key_name()).cloned();
 
@@ -246,7 +226,6 @@ fn save_config_internal(config_path: &PathBuf, config: &AppConfig) -> Result<(),
     config_for_toml.api_key = None;
     config_for_toml.gemini_api_key = None;
     config_for_toml.openrouter_api_key = None;
-    config_for_toml.cerebras_api_key = None;
     config_for_toml.brave_api_key = None;
     config_for_toml.groq_api_key = None;
 
@@ -268,7 +247,6 @@ pub fn save_config<R: Runtime>(
     updates.insert(ApiKeyType::OpenAI, config.api_key.clone());
     updates.insert(ApiKeyType::Gemini, config.gemini_api_key.clone());
     updates.insert(ApiKeyType::OpenRouter, config.openrouter_api_key.clone());
-    updates.insert(ApiKeyType::Cerebras, config.cerebras_api_key.clone());
     updates.insert(ApiKeyType::Brave, config.brave_api_key.clone());
     updates.insert(ApiKeyType::Groq, config.groq_api_key.clone());
 
@@ -282,22 +260,6 @@ pub fn save_config<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_cerebras_provider_config() {
-        let config = AppConfig {
-            cerebras_api_key: Some("test-key".to_string()),
-            ..Default::default()
-        };
-        let (pc, key) = config
-            .get_model_provider_config("gpt-oss-120b (Cerebras)", "test")
-            .unwrap();
-        assert_eq!(pc.provider_name, "Cerebras");
-        assert_eq!(pc.base_url, "https://api.cerebras.ai/v1/");
-        assert_eq!(pc.model_id, "gpt-oss-120b");
-        assert_eq!(key, "test-key");
-        assert_eq!(pc.reasoning_effort, Some("high".to_string()));
-    }
 
     #[test]
     fn test_groq_provider_config() {
@@ -321,50 +283,13 @@ mod tests {
             ..Default::default()
         };
         let (pc, key) = config
-            .get_model_provider_config("google/gemma-4-31b-it:free", "test")
+            .get_model_provider_config("google/gemma-4-26b-a4b-it:free", "test")
             .unwrap();
         assert_eq!(pc.provider_name, "OpenRouter");
         assert_eq!(pc.base_url, "https://openrouter.ai/api/v1/");
-        assert_eq!(pc.model_id, "google/gemma-4-31b-it:free");
+        assert_eq!(pc.model_id, "google/gemma-4-26b-a4b-it:free");
         assert_eq!(key, "or-key");
         assert_eq!(pc.reasoning_effort, None);
-    }
-
-    #[test]
-    fn test_cerebras_70b_model() {
-        let config = AppConfig {
-            cerebras_api_key: Some("key".to_string()),
-            ..Default::default()
-        };
-        let (pc, _) = config
-            .get_model_provider_config("llama-3.3-70b (Cerebras)", "test")
-            .unwrap();
-        assert_eq!(pc.model_id, "llama-3.3-70b");
-        assert_eq!(pc.provider_name, "Cerebras");
-    }
-
-    #[test]
-    fn test_cerebras_generic_model() {
-        let config = AppConfig {
-            cerebras_api_key: Some("key".to_string()),
-            ..Default::default()
-        };
-        let (pc, _) = config
-            .get_model_provider_config("some-new-model (Cerebras)", "test")
-            .unwrap();
-        assert_eq!(pc.model_id, "some-new-model");
-    }
-
-    #[test]
-    fn test_groq_20b_model() {
-        let config = AppConfig {
-            groq_api_key: Some("key".to_string()),
-            ..Default::default()
-        };
-        let (pc, _) = config
-            .get_model_provider_config("gpt-oss-20b (Groq)", "test")
-            .unwrap();
-        assert_eq!(pc.model_id, "openai/gpt-oss-20b");
     }
 
     #[test]
@@ -386,30 +311,20 @@ mod tests {
             ..Default::default()
         };
         let (pc, _) = config
-            .get_model_provider_config("google/gemma-4-31b-it:free (OpenRouter)", "test")
+            .get_model_provider_config("google/gemma-4-26b-a4b-it:free (OpenRouter)", "test")
             .unwrap();
-        assert_eq!(pc.model_id, "google/gemma-4-31b-it:free");
+        assert_eq!(pc.model_id, "google/gemma-4-26b-a4b-it:free");
     }
 
     #[test]
     fn test_full_url() {
         let pc = ModelProviderConfig {
-            base_url: "https://api.cerebras.ai/v1/".to_string(),
-            model_id: "gpt-oss-120b".to_string(),
-            provider_name: "Cerebras".to_string(),
+            base_url: "https://api.groq.com/openai/v1/".to_string(),
+            model_id: "openai/gpt-oss-120b".to_string(),
+            provider_name: "Groq".to_string(),
             reasoning_effort: None,
         };
-        assert_eq!(pc.full_url(), "https://api.cerebras.ai/v1/chat/completions");
-    }
-
-    #[test]
-    fn test_missing_api_key_error() {
-        let config = AppConfig::default();
-        let err = config
-            .get_model_provider_config("gpt-oss-120b (Cerebras)", "main chat")
-            .unwrap_err();
-        assert!(err.contains("Cerebras"));
-        assert!(err.contains("main chat"));
+        assert_eq!(pc.full_url(), "https://api.groq.com/openai/v1/chat/completions");
     }
 
     #[test]
@@ -431,4 +346,13 @@ mod tests {
         assert!(err.contains("OpenRouter"));
     }
 
+    #[test]
+    fn test_default_background_model() {
+        let config = AppConfig::default();
+        assert_eq!(
+            config.background_model.as_deref(),
+            Some("gemma-4-26b-a4b-it"),
+            "Default background model should be Gemma 4 26B MoE"
+        );
+    }
 }

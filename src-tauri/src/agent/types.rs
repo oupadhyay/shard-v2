@@ -113,7 +113,7 @@ pub struct FunctionDefinition {
     pub name: String,
     pub description: String,
     pub parameters: Value,
-    /// Required by Cerebras for proper tool calling
+    /// Required by Groq for proper tool calling
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strict: Option<bool>,
 }
