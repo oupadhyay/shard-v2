@@ -1,0 +1,22 @@
+id: 02_memory_save_and_recall
+name: Memory — save preference, recall in same session
+description: >
+  Asserts the save_memory tool is invoked when the user states a stable
+  preference, AND that the agent surfaces that preference in a later turn
+  without being re-told. Evaluates both the tool-routing decision and the
+  RAG/MEMORIES.json injection into the system prompt for subsequent turns.
+turns:
+  - user: "Please remember this for the future: I always want responses under 100 words unless I ask for more detail. This is a hard rule."
+  - user: "Got it. Now, summarize the plot of Hamlet."
+  - user: "What was the personal preference I told you to remember at the start of this conversation?"
+expectations:
+  must_call_tools:
+    - save_memory
+  must_contain:
+    - "100 words"
+  no_errors: true
+rubric:
+  - "Was save_memory called with content that captures the <100 word rule (not just paraphrased weakly)?"
+  - "Is the Hamlet summary in turn 2 actually under 100 words? (objective check on length is hard for the harness; judge it)"
+  - "Does turn 3 correctly recall the preference verbatim or near-verbatim?"
+  - "Did the agent over-call save_memory for trivial things (e.g., the word 'Hamlet')?"

@@ -608,7 +608,7 @@ async function loadProactiveMessages() {
   try {
     const activeSessionId = await invoke<string>("get_current_session_id").catch(() => "");
     const messages = await invoke<import("./types").ProactiveMessage[]>("get_proactive_messages");
-    
+
     // Only render pending messages that belong to the current active session
     for (const msg of messages) {
       if (msg.heartbeat_session === activeSessionId) {
@@ -689,9 +689,9 @@ listen<string>(EVENTS.AGENT_CRON_STARTED, (event) => {
 // Listen for incoming proactive messages/drafts
 listen<import("./types").ProactiveMessage>(EVENTS.PROACTIVE_MESSAGE, async (event) => {
   logger.info("[Proactive] Received new proactive action:", event.payload);
-  
+
   const activeSessionId = await invoke<string>("get_current_session_id").catch(() => "");
-  
+
   // Only show the message inline if we are currently viewing the session it belongs to
   if (event.payload.heartbeat_session === activeSessionId) {
     addProactiveMessage(chatArea, event.payload);

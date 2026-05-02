@@ -12,7 +12,7 @@ pub mod agent;
 mod background;
 mod cache;
 pub mod compaction;
-mod config;
+pub mod config;
 pub mod context;
 pub mod db;
 mod gemini_files;

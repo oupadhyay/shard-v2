@@ -12,13 +12,29 @@
   - Target models on a 36 GB M3 Pro @ 128K context: **Gemma 4 26B-A4B** (`UD-Q4_K_XL`, MoE, ~18 GB) and **Qwen3.6-35B-A3B** (`UD-Q4_K_XL`, MoE, ~23 GB)
   - **Blocked**: Both Gemma 4 and Qwen3.6 unsloth GGUFs require split mmproj files; llama.cpp does not yet support the Gemma 4 architecture, and Ollama returns `500 Internal Server Error` on these models. Tracked in [ollama/ollama#15235](https://github.com/ollama/ollama/issues/15235). Revisit after the next Ollama vendor sync of llama.cpp.
 
-## P1: Auto-Testing (Evaluator-as-a-Judge)
+## P1: Evaluate Nemotron 3 Super 120B
 
-- [ ] Automate actual testing with the model using an **Evaluator-as-a-Judge** pattern:
-  1. **Automated UI**: Use **Playwright** or **Cypress** with the Tauri WebDriver to drive the frontend.
-  2. **Synthetic User**: Script a separate LLM (e.g., GPT-4o or a local Llama instance) to generate prompts, send them to Shard, and wait for the UI to update.
-  3. **Verification**: Have the Evaluator LLM check the final DOM state or your `interactions.jsonl` against a set of "ground truth" requirements.
-  4. **Mocking**: Use a test flag to swap real tool calls (like `web_search`) with static JSON mocks to keep tests deterministic and save your quota.
+- [ ] Evaluate `nvidia/nemotron-3-super-120b-a12b:free` as a potential replacement for GPT-OSS 120B (OpenRouter fallback)
+  - Hybrid Mamba-Transformer MoE architecture, 262K context window
+  - Reportedly excellent multi-step agent coherence and long-horizon planning
+  - **Validate:** Tool calling reliability with Shard's 17-tool schema (especially multi-turn tool chains)
+  - **Validate:** Structured output quality for background jobs (JSON parsing, memory extraction)
+  - If validated, replace `openai/gpt-oss-120b:free` as the default `fallback_model`
+
+## P2: Eval Harness Extensions
+
+The evaluator-as-judge harness is in place (`cargo run --example eval --features eval`) with three starter scenarios. Follow-ups:
+
+- [ ] Expose `disable_intent_classifier` config flag so eval scenarios can pin `is_research_mode` to the configured value (currently the agent auto-promotes via LLM classification, making `research_mode: false` unreliable for prompt branch testing)
+- [ ] Add `seed_personas:` field to scenario YAML so persona-fidelity scenarios can copy `.md` files into the sandbox `personas/` dir before agent instantiation
+- [ ] KaTeX retry scenario: prompt the agent to write a mathematical derivation and assert `agent-retry` did NOT fire (regression check for KaTeX retry trigger sensitivity)
+- [ ] Empty-response retry scenario: contrived prompt that elicits reasoning-only output; assert retry triggered and recovered
+- [ ] Compaction-quality scenario: 30+ turn conversation where a key fact is stated in turn 1; assert recall after compaction kicks in
+- [ ] RAG relevance scenario: plant a fact via `save_memory`, ask back 20 turns later (post-compaction), verify it surfaces
+- [ ] Tool-failure recovery scenario: run with bogus `BRAVE_API_KEY`; verify graceful degradation
+- [ ] Persistence between turns within a scenario survives compaction trigger
+- [ ] Optional: adopt `tool_choice: "none"` per-turn so scenarios can deterministically test pure reasoning paths
+- [ ] CI integration: run the harness nightly with cached fixtures, post diff to PRs only on objective regressions
 
 ## P2: Light Mode Theme Support
 
@@ -40,7 +56,7 @@
   - Extract core logic: `agent/core.rs`
   - Consider separating retry logic, tool execution, and streaming handling
 - [ ] Migrate from `screenshots` crate to `xcap` for screen capture (P2)
-- [ ] Update models supported (especially with OpenRouter free model router)
+- [ ] Rationalize model registry per [model strategy proposal](./model_strategy_proposal.md): remove Cerebras, add Gemma 4 26B-A4B MoE for vision/background, cut from 22 → 10 entries
 
 ## P2: Platform Gateway
 

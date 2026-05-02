@@ -657,13 +657,16 @@ pub fn load_memories_from_disk<R: Runtime>(
     serde_json::from_str(&content).map_err(|e| format!("Failed to parse memories JSON: {}", e))
 }
 
-/// Load memories, using cache if available
+/// Load memories, using cache if available.
+/// Falls back to disk-only mode when `AppState` is not managed (e.g., eval harness).
 pub fn load_memories<R: Runtime>(app_handle: &AppHandle<R>) -> Result<MemoryStore, String> {
-    // Try to get from cache first
-    let state = app_handle.state::<crate::AppState>();
-    if let Ok(guard) = state.memory_store.read() {
-        if let Some(store) = &*guard {
-            return Ok(store.clone());
+    // Try to get from cache first (None when AppState isn't registered, e.g. mock runtime)
+    let state = app_handle.try_state::<crate::AppState>();
+    if let Some(state) = &state {
+        if let Ok(guard) = state.memory_store.read() {
+            if let Some(store) = &*guard {
+                return Ok(store.clone());
+            }
         }
     }
 
@@ -671,22 +674,26 @@ pub fn load_memories<R: Runtime>(app_handle: &AppHandle<R>) -> Result<MemoryStor
     let store = load_memories_from_disk(app_handle)?;
 
     // Update cache
-    if let Ok(mut guard) = state.memory_store.write() {
-        *guard = Some(store.clone());
+    if let Some(state) = &state {
+        if let Ok(mut guard) = state.memory_store.write() {
+            *guard = Some(store.clone());
+        }
     }
 
     Ok(store)
 }
 
-/// Save memories to disk and update cache
+/// Save memories to disk and update cache.
+/// Cache update is skipped when `AppState` is not managed (e.g., eval harness).
 pub fn save_memories<R: Runtime>(
     app_handle: &AppHandle<R>,
     store: &MemoryStore,
 ) -> Result<(), String> {
-    // Update cache first
-    let state = app_handle.state::<crate::AppState>();
-    if let Ok(mut guard) = state.memory_store.write() {
-        *guard = Some(store.clone());
+    // Update cache first (no-op when AppState isn't registered)
+    if let Some(state) = app_handle.try_state::<crate::AppState>() {
+        if let Ok(mut guard) = state.memory_store.write() {
+            *guard = Some(store.clone());
+        }
     }
 
     let memories_dir = get_memories_dir(app_handle)?;

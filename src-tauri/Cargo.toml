@@ -70,6 +70,16 @@ keyring = { version = "3" }
 criterion = { version = "0.5", features = ["async_tokio"] }
 dotenvy = "0.15"
 rand = "0.8"
+serde_yaml = "0.9"
+
+[features]
+# Enables the evaluator-as-judge harness (`cargo run --example eval --features eval`).
+# Pulls in `tauri/test` which gives us `tauri::test::mock_app()` for headless agent runs.
+eval = ["tauri/test"]
+
+[[example]]
+name = "eval"
+required-features = ["eval"]
 
 [[bench]]
 name = "retrieval_bench"

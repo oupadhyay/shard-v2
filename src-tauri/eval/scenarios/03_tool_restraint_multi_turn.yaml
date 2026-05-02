@@ -1,0 +1,27 @@
+id: 03_tool_restraint_multi_turn
+name: Tool restraint + multi-turn coreference
+description: >
+  Trivial-knowledge questions should NOT spawn tool calls (waste of latency &
+  quota). The follow-up turn uses pronouns, so the agent must resolve "it"
+  against the prior turn rather than asking for clarification — a coherence
+  check that only a multi-turn harness can catch.
+turns:
+  - user: "What is the capital of France?"
+  - user: "Roughly how many people live there?"
+  - user: "Name one famous landmark in it that isn't the Eiffel Tower."
+expectations:
+  must_not_call_tools:
+    - web_search
+    - search_wikipedia
+    - open_url
+  must_contain:
+    - "Paris"
+  must_not_contain:
+    - "I'm not sure what you mean"
+    - "Could you clarify"
+  no_errors: true
+rubric:
+  - "Did the agent resolve 'there' (turn 2) and 'it' (turn 3) to Paris without re-asking?"
+  - "Is the population figure given in turn 2 reasonable (within ~30% of ~2.1M city / ~11M metro)?"
+  - "Is the landmark in turn 3 actually a real Paris landmark, and explicitly not the Eiffel Tower?"
+  - "Did the agent stay concise — no preamble, no apologies, no tool spam?"

@@ -1,0 +1,19 @@
+id: 01_tool_routing_web_search
+name: Tool routing — current events should hit web_search
+description: >
+  When asked about a recent / time-sensitive event, the agent should reach for
+  web_search rather than answering from training data. This evaluates the
+  default system prompt's "use tools for current information" guidance.
+turns:
+  - user: "What were the top tech industry headlines this week? Give me 3 specific stories with sources."
+expectations:
+  must_call_tools:
+    - web_search
+  must_not_call_tools:
+    - search_wikipedia   # wikipedia is wrong tool for this-week news
+  no_errors: true
+rubric:
+  - "Did the agent cite at least 3 distinct stories?"
+  - "Are the stories actually recent (this week, not generic / evergreen)?"
+  - "Does the agent attribute sources or distinguish facts from speculation?"
+  - "Is the response concise and well-structured rather than a wall of text?"

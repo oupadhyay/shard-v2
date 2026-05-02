@@ -21,7 +21,7 @@ use crate::integrations::{
 };
 use reqwest::Client;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 
 /// Context passed into each LLM turn (RAG, peer info, mode flags).
@@ -94,19 +94,23 @@ pub(crate) fn normalize_gemini_schema(schema: &mut Value) {
     }
 }
 
-/// The main AI Agent managing chat history and API interactions
-pub struct Agent {
+/// The main AI Agent managing chat history and API interactions.
+///
+/// Generic over the Tauri runtime with a `Wry` default so existing call sites
+/// (`Arc<Agent>`) compile unchanged. The eval harness substitutes
+/// `MockRuntime` to drive the agent headlessly.
+pub struct Agent<R: tauri::Runtime = tauri::Wry> {
     history: Mutex<Vec<ChatMessage>>,
     http_client: Client,
     uploaded_files: Mutex<Vec<String>>,
     backup_history: Mutex<Option<(Vec<ChatMessage>, String)>>,
     pub session_id: Mutex<String>,
     pub last_archived_hash: Mutex<u64>,
-    pub app_handle: tauri::AppHandle,
+    pub app_handle: tauri::AppHandle<R>,
 }
 
-impl Agent {
-    pub fn new(app_handle: tauri::AppHandle) -> Self {
+impl<R: tauri::Runtime> Agent<R> {
+    pub fn new(app_handle: tauri::AppHandle<R>) -> Self {
         let app_data_dir = app_handle
             .path()
             .app_data_dir()
@@ -365,7 +369,7 @@ impl Agent {
         history.clone()
     }
 
-    pub async fn load_session_from_db<R: Runtime>(
+    pub async fn load_session_from_db(
         &self,
         app_handle: &AppHandle<R>,
         session_id: &str,
@@ -450,7 +454,7 @@ impl Agent {
 
     /// Retry the last response with a hint about KaTeX errors
     /// Called by frontend when KaTeX parsing fails
-    pub async fn retry_with_katex_hint<R: Runtime>(
+    pub async fn retry_with_katex_hint(
         &self,
         app_handle: &AppHandle<R>,
         katex_errors: Vec<String>,
@@ -508,7 +512,7 @@ impl Agent {
     }
 
     /// Internal method to run a retry turn after hint injection
-    async fn run_retry_turn<R: Runtime>(
+    async fn run_retry_turn(
         &self,
         app_handle: &AppHandle<R>,
         config: &crate::config::AppConfig,
@@ -577,7 +581,7 @@ impl Agent {
         }
     }
 
-    async fn insert_single_message_to_db<R: Runtime>(
+    async fn insert_single_message_to_db(
         &self,
         app_handle: &AppHandle<R>,
         msg: &ChatMessage,
@@ -599,7 +603,7 @@ impl Agent {
         }
     }
 
-    pub async fn process_message<R: Runtime>(
+    pub async fn process_message(
         &self,
         app_handle: &AppHandle<R>,
         message: String,
@@ -1154,7 +1158,7 @@ impl Agent {
         Ok(())
     }
 
-    async fn execute_tool<R: Runtime>(
+    async fn execute_tool(
         &self,
         app_handle: &AppHandle<R>,
         function_name: &str,
@@ -1183,7 +1187,7 @@ impl Agent {
     }
 
     /// The actual tool execution logic (separated for caching wrapper)
-    async fn execute_tool_uncached<R: Runtime>(
+    async fn execute_tool_uncached(
         &self,
         app_handle: &AppHandle<R>,
         function_name: &str,
@@ -1871,7 +1875,7 @@ impl Agent {
         chunks
     }
 
-    async fn process_gemini_turn<R: Runtime>(
+    async fn process_gemini_turn(
         &self,
         app_handle: &AppHandle<R>,
         config: &crate::config::AppConfig,
@@ -2197,7 +2201,7 @@ impl Agent {
         }
     }
 
-    async fn process_openrouter_turn<R: Runtime>(
+    async fn process_openrouter_turn(
         &self,
         app_handle: &AppHandle<R>,
         config: &crate::config::AppConfig,

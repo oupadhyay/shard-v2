@@ -45,7 +45,9 @@ const CACHE_TTL_MS: u64 = 20000;
 const SHARD_DEBUG_SCREENSHOTS_ENV: &str = "SHARD_DEBUG_SCREENSHOTS";
 
 /// Load the OCR engine using bundled PaddleOCR models
-async fn get_ocr_engine(app_handle: &tauri::AppHandle) -> Result<OcrEngine, String> {
+async fn get_ocr_engine<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+) -> Result<OcrEngine, String> {
     let resource_dir = app_handle
         .path()
         .resource_dir()
@@ -211,8 +213,8 @@ pub fn get_cached_context() -> Option<ScreenContext> {
 }
 
 /// Capture screen and analyze with Vision LLM
-pub async fn capture_and_analyze(
-    agent: &crate::agent::Agent,
+pub async fn capture_and_analyze<R: tauri::Runtime>(
+    agent: &crate::agent::Agent<R>,
     config: &AppConfig,
 ) -> Result<ScreenContext, String> {
     // Check cache first
