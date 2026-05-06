@@ -12,15 +12,7 @@
   - Add `Provider::Ollama` to `models.rs` registry, with chat + vision entries
   - Target models on a 36 GB M3 Pro @ 128K context: **Gemma 4 26B-A4B** (`UD-Q4_K_XL`, MoE, ~18 GB) and **Qwen3.6-35B-A3B** (`UD-Q4_K_XL`, MoE, ~23 GB)
   - **Blocked**: Both Gemma 4 and Qwen3.6 unsloth GGUFs require split mmproj files; llama.cpp does not yet support the Gemma 4 architecture, and Ollama returns `500 Internal Server Error` on these models. Tracked in [ollama/ollama#15235](https://github.com/ollama/ollama/issues/15235). Revisit after the next Ollama vendor sync of llama.cpp.
-
-## P1: Evaluate Nemotron 3 Super 120B
-
-- [ ] Evaluate `nvidia/nemotron-3-super-120b-a12b:free` as a potential replacement for GPT-OSS 120B (OpenRouter fallback)
-  - Hybrid Mamba-Transformer MoE architecture, 262K context window
-  - Reportedly excellent multi-step agent coherence and long-horizon planning
-  - **Validate:** Tool calling reliability with Shard's 17-tool schema (especially multi-turn tool chains)
-  - **Validate:** Structured output quality for background jobs (JSON parsing, memory extraction)
-  - If validated, replace `openai/gpt-oss-120b:free` as the default `fallback_model`
+  - **MTP (speculative decoding)**: Gemma 4 ships paired `-assistant` drafter models (lightweight 4-layer MTP heads) for ~2× inference speedup via speculative decoding. The drafter proposes N tokens autoregressively; the target verifies all N in one forward pass — identical output quality, significantly fewer forward passes. Currently only supported in HuggingFace Transformers; llama.cpp / Ollama do not yet support the MTP architecture. Worth waiting for MTP support before investing in local Gemma 4 inference. See [MTP docs](https://ai.google.dev/gemma/docs/mtp/mtp).
 
 ## P2: Eval Harness Extensions
 
