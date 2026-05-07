@@ -1760,7 +1760,11 @@ impl<R: tauri::Runtime> Agent<R> {
         }
     }
 
-    async fn classify_intent(&self, query: &str, api_key: &str) -> Result<bool, String> {
+    pub(crate) async fn classify_intent(
+        &self,
+        query: &str,
+        api_key: &str,
+    ) -> Result<bool, String> {
         let url = crate::endpoints::gemini_classify();
 
         let payload = serde_json::json!({
@@ -1898,7 +1902,7 @@ impl<R: tauri::Runtime> Agent<R> {
         split_transcript_chunks(text, max_chars)
     }
 
-    async fn process_gemini_turn(
+    pub(crate) async fn process_gemini_turn(
         &self,
         app_handle: &AppHandle<R>,
         config: &crate::config::AppConfig,
@@ -2224,7 +2228,7 @@ impl<R: tauri::Runtime> Agent<R> {
         }
     }
 
-    async fn process_openrouter_turn(
+    pub(crate) async fn process_openrouter_turn(
         &self,
         app_handle: &AppHandle<R>,
         config: &crate::config::AppConfig,
