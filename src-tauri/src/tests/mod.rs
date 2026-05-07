@@ -1,4 +1,5 @@
 pub mod agent_helpers;
+mod agent_pure_tests;
 pub mod agent_tests;
 mod background_tests;
 mod cache_tests;

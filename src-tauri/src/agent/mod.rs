@@ -94,6 +94,92 @@ pub(crate) fn normalize_gemini_schema(schema: &mut Value) {
     }
 }
 
+/// Compute a stable, content-addressed hash of the chat history.
+///
+/// Used to detect whether the history has changed since the last archive,
+/// so we can skip redundant LLM-driven session summarization. Hashes only
+/// the fields that materially affect a transcript: role, content, and the
+/// id/name/arguments of every tool call. Reasoning, images, and `is_cron`
+/// are intentionally excluded because they don't change archive value.
+pub(crate) fn calculate_history_hash(history: &[ChatMessage]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    for msg in history {
+        msg.role.hash(&mut hasher);
+        if let Some(content) = &msg.content {
+            content.hash(&mut hasher);
+        }
+        if let Some(calls) = &msg.tool_calls {
+            for call in calls {
+                call.id.hash(&mut hasher);
+                call.function.name.hash(&mut hasher);
+                call.function.arguments.hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
+
+/// Split a transcript into chunks of approximately `max_chars` Unicode
+/// characters each, splitting on newline boundaries when possible.
+///
+/// Guarantees:
+/// - never panics on multi-byte UTF-8 input
+/// - input fitting in one chunk returns exactly one chunk equal to the input
+/// - concatenating all chunks reproduces the input exactly
+/// - each chunk except possibly the last is `<= max_chars` characters
+pub(crate) fn split_transcript_chunks(text: &str, max_chars: usize) -> Vec<&str> {
+    let total_chars = text.chars().count();
+    if total_chars <= max_chars {
+        return vec![text];
+    }
+
+    // Precompute byte offsets for each character boundary, with a sentinel at end.
+    let char_offsets: Vec<usize> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(text.len()))
+        .collect();
+
+    let mut chunks = Vec::new();
+    let mut start_char = 0;
+
+    while start_char < total_chars {
+        let remaining_chars = total_chars - start_char;
+        if remaining_chars <= max_chars {
+            let byte_start = char_offsets[start_char];
+            chunks.push(&text[byte_start..]);
+            break;
+        }
+
+        let end_char = start_char + max_chars;
+        let byte_start = char_offsets[start_char];
+        let byte_end = char_offsets[end_char];
+
+        // Try to split on the last newline before the character boundary.
+        let chunk_slice = &text[byte_start..byte_end];
+        let split_byte = if let Some(nl_pos) = chunk_slice.rfind('\n') {
+            byte_start + nl_pos + '\n'.len_utf8()
+        } else {
+            byte_end
+        };
+
+        chunks.push(&text[byte_start..split_byte]);
+
+        // Find the char index corresponding to split_byte.
+        let next_start_char = char_offsets[start_char..]
+            .iter()
+            .position(|&offset| offset >= split_byte)
+            .map(|pos| start_char + pos)
+            .unwrap_or(total_chars);
+        start_char = next_start_char;
+    }
+
+    chunks
+}
+
 /// The main AI Agent managing chat history and API interactions.
 ///
 /// Generic over the Tauri runtime with a `Wry` default so existing call sites
@@ -430,27 +516,10 @@ impl<R: tauri::Runtime> Agent<R> {
         backup.is_some()
     }
 
-    /// Helper to compute a simple hash of the chat history to detect changes
+    /// Helper to compute a simple hash of the chat history to detect changes.
+    /// Thin wrapper around the free function for tests.
     fn calculate_history_hash(&self, history: &[ChatMessage]) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        for msg in history {
-            msg.role.hash(&mut hasher);
-            if let Some(content) = &msg.content {
-                content.hash(&mut hasher);
-            }
-            // Hash tool calls to catch edits there too
-            if let Some(calls) = &msg.tool_calls {
-                for call in calls {
-                    call.id.hash(&mut hasher);
-                    call.function.name.hash(&mut hasher);
-                    call.function.arguments.hash(&mut hasher);
-                }
-            }
-        }
-        hasher.finish()
+        calculate_history_hash(history)
     }
 
     /// Retry the last response with a hint about KaTeX errors
@@ -1824,56 +1893,9 @@ impl<R: tauri::Runtime> Agent<R> {
         ).await
     }
 
-    /// Split a transcript into chunks of approximately `max_chars` Unicode characters each.
-    /// Splits on newline boundaries to avoid cutting mid-line.
+    /// Thin wrapper around the free `split_transcript_chunks` for tests.
     fn split_transcript_chunks<'a>(&self, text: &'a str, max_chars: usize) -> Vec<&'a str> {
-        let total_chars = text.chars().count();
-        if total_chars <= max_chars {
-            return vec![text];
-        }
-
-        // Precompute byte offsets for each character boundary
-        let char_offsets: Vec<usize> = text
-            .char_indices()
-            .map(|(i, _)| i)
-            .chain(std::iter::once(text.len()))
-            .collect();
-
-        let mut chunks = Vec::new();
-        let mut start_char = 0;
-
-        while start_char < total_chars {
-            let remaining_chars = total_chars - start_char;
-            if remaining_chars <= max_chars {
-                let byte_start = char_offsets[start_char];
-                chunks.push(&text[byte_start..]);
-                break;
-            }
-
-            let end_char = start_char + max_chars;
-            let byte_start = char_offsets[start_char];
-            let byte_end = char_offsets[end_char];
-
-            // Try to split on the last newline before the character boundary
-            let chunk_slice = &text[byte_start..byte_end];
-            let split_byte = if let Some(nl_pos) = chunk_slice.rfind('\n') {
-                byte_start + nl_pos + '\n'.len_utf8()
-            } else {
-                byte_end
-            };
-
-            chunks.push(&text[byte_start..split_byte]);
-
-            // Find the char index corresponding to split_byte
-            let next_start_char = char_offsets[start_char..]
-                .iter()
-                .position(|&offset| offset >= split_byte)
-                .map(|pos| start_char + pos)
-                .unwrap_or(total_chars);
-            start_char = next_start_char;
-        }
-
-        chunks
+        split_transcript_chunks(text, max_chars)
     }
 
     async fn process_gemini_turn(
