@@ -1228,7 +1228,7 @@ impl<R: tauri::Runtime> Agent<R> {
         Ok(())
     }
 
-    async fn execute_tool(
+    pub(crate) async fn execute_tool(
         &self,
         app_handle: &AppHandle<R>,
         function_name: &str,
