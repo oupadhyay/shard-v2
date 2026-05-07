@@ -315,7 +315,8 @@ impl<R: tauri::Runtime> Agent<R> {
                 for uri in uris_to_delete.iter() {
                     if let Some(file_name) = uri.rsplit('/').next() {
                         let delete_url = format!(
-                            "https://generativelanguage.googleapis.com/v1beta/files/{}",
+                            "{}/{}",
+                            crate::endpoints::gemini_files_base(),
                             file_name
                         );
                         let _ = self
@@ -1691,7 +1692,7 @@ impl<R: tauri::Runtime> Agent<R> {
     }
 
     async fn classify_intent(&self, query: &str, api_key: &str) -> Result<bool, String> {
-        let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent";
+        let url = crate::endpoints::gemini_classify();
 
         let payload = serde_json::json!({
             "contents": [{
@@ -1894,7 +1895,7 @@ impl<R: tauri::Runtime> Agent<R> {
         let api_key = config.gemini_api_key.as_ref().ok_or("No Gemini API key")?;
         let enable_tools = config.enable_tools.unwrap_or(true);
         // Interactions API: flat endpoint, model specified in request body
-        let url = "https://generativelanguage.googleapis.com/v1beta/interactions".to_string();
+        let url = crate::endpoints::gemini_interactions();
 
         // Load memories for injection into system prompt (skip in incognito mode)
         let incognito_mode = config.incognito_mode.unwrap_or(false);
@@ -2447,7 +2448,7 @@ impl<R: tauri::Runtime> Agent<R> {
                         .ok();
 
                     // Rebuild request for OpenRouter
-                    let openrouter_url = "https://openrouter.ai/api/v1/chat/completions";
+                    let openrouter_url = crate::endpoints::openrouter_chat();
                     // Use configured fallback model or default
                     let fallback_model = config
                         .fallback_model

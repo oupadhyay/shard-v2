@@ -116,7 +116,7 @@ Please analyze the image carefully and provide a helpful response that directly 
         };
 
         let response = http_client
-            .post("https://openrouter.ai/api/v1/chat/completions")
+            .post(crate::endpoints::openrouter_chat())
             .header("Authorization", format!("Bearer {}", openrouter_key))
             .header("Content-Type", "application/json")
             .timeout(std::time::Duration::from_secs(45)) // Longer timeout for contextual response
@@ -177,7 +177,7 @@ Please analyze the image carefully and provide a helpful response that directly 
             log::info!("[VisionLLM] Trying fallback vision model: {}", model);
 
             let response = http_client
-                .post("https://openrouter.ai/api/v1/chat/completions")
+                .post(crate::endpoints::openrouter_chat())
                 .header("Authorization", format!("Bearer {}", openrouter_key))
                 .header("Content-Type", "application/json")
                 .timeout(std::time::Duration::from_secs(45))
@@ -225,7 +225,7 @@ Please analyze the image carefully and provide a helpful response that directly 
         };
 
         let response = http_client
-            .post("https://api.groq.com/openai/v1/chat/completions")
+            .post(crate::endpoints::groq_chat())
             .header("Authorization", format!("Bearer {}", groq_key))
             .header("Content-Type", "application/json")
             .timeout(std::time::Duration::from_secs(45))
