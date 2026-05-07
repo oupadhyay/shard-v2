@@ -186,10 +186,10 @@ pub(crate) fn split_transcript_chunks(text: &str, max_chars: usize) -> Vec<&str>
 /// (`Arc<Agent>`) compile unchanged. The eval harness substitutes
 /// `MockRuntime` to drive the agent headlessly.
 pub struct Agent<R: tauri::Runtime = tauri::Wry> {
-    history: Mutex<Vec<ChatMessage>>,
-    http_client: Client,
-    uploaded_files: Mutex<Vec<String>>,
-    backup_history: Mutex<Option<(Vec<ChatMessage>, String)>>,
+    pub(crate) history: Mutex<Vec<ChatMessage>>,
+    pub(crate) http_client: Client,
+    pub(crate) uploaded_files: Mutex<Vec<String>>,
+    pub(crate) backup_history: Mutex<Option<(Vec<ChatMessage>, String)>>,
     pub session_id: Mutex<String>,
     pub last_archived_hash: Mutex<u64>,
     pub app_handle: tauri::AppHandle<R>,
