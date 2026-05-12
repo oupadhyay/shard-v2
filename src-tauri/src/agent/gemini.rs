@@ -347,7 +347,10 @@ pub fn process_interactions_event(
     let mut events = Vec::new();
 
     match event.event_type.as_str() {
-        "content.delta" => {
+        // Accept both new ("step.delta") and legacy ("content.delta") event names.
+        // The delta payload structure is identical — only the SSE event name changed
+        // with Api-Revision: 2026-05-20. Legacy name can be removed after June 8, 2026.
+        "step.delta" | "content.delta" => {
             if let Some(delta) = &event.delta {
                 match delta {
                     InteractionDelta::Text { text } => {

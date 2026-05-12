@@ -460,6 +460,9 @@ async fn call_gemini_oneshot(
         .post(url)
         .header("X-Goog-Api-Key", api_key)
         .header("Content-Type", "application/json")
+        // Opt into the new steps schema (May 2026 breaking change).
+        // Becomes default May 26; legacy removed June 8.
+        .header("Api-Revision", "2026-05-20")
         .json(&payload)
         .send()
         .await
@@ -475,7 +478,25 @@ async fn call_gemini_oneshot(
         .await
         .map_err(|e| format!("Failed to parse Gemini Interactions response: {}", e))?;
 
-    // Parse Interactions API response: { outputs: [{ type: "text", text: "..." }, ...] }
+    // Parse new steps schema: { steps: [{ type: "model_output", content: [{ type: "text", text: "..." }] }] }
+    if let Some(steps) = body.get("steps").and_then(|s| s.as_array()) {
+        for step in steps {
+            let step_type = step.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if step_type == "model_output" {
+                if let Some(content) = step.get("content").and_then(|c| c.as_array()) {
+                    for item in content {
+                        if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                            if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                return Ok(text.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: legacy outputs array (can be removed after June 8, 2026)
     if let Some(outputs) = body.get("outputs").and_then(|o| o.as_array()) {
         for output in outputs {
             let output_type = output.get("type").and_then(|t| t.as_str()).unwrap_or("");
