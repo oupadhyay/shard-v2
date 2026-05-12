@@ -17,3 +17,4 @@ mod tool_registry_tests;
 mod migration_tests;
 mod observations_tests;
 mod context_tests;
+mod steps_schema_tests;
