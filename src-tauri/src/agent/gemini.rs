@@ -4,6 +4,33 @@ use super::types::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
+/// Api-Revision header value to opt into the new steps schema.
+/// Becomes the default on May 26, 2026; legacy removed June 8, 2026.
+pub const GEMINI_API_REVISION: &str = "2026-05-20";
+
+/// Extract the first model text from a steps-schema Interactions API response.
+/// Concatenates all text items within the first `model_output` step.
+pub fn extract_model_text_from_steps(body: &Value) -> Option<String> {
+    let steps = body.get("steps")?.as_array()?;
+    for step in steps {
+        if step.get("type").and_then(|t| t.as_str()) == Some("model_output") {
+            let content = step.get("content")?.as_array()?;
+            let mut text_parts = String::new();
+            for item in content {
+                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    if let Some(t) = item.get("text").and_then(|t| t.as_str()) {
+                        text_parts.push_str(t);
+                    }
+                }
+            }
+            if !text_parts.is_empty() {
+                return Some(text_parts);
+            }
+        }
+    }
+    None
+}
+
 /// Events emitted during streaming responses
 pub enum AgentEvent {
     ResponseChunk(String),
@@ -392,6 +419,42 @@ pub fn process_interactions_event(
                             arguments: json!(null),
                             signature: Some(signature.clone()),
                         });
+                    }
+                }
+            }
+        }
+        // step.start can carry initial content (leading text chunk for model_output)
+        // and thought signatures. Not processing this drops the first text fragment.
+        "step.start" | "content.start" => {
+            if let Some(step) = &event.step {
+                let step_type = step.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                match step_type {
+                    "model_output" => {
+                        // Extract initial text from content array
+                        if let Some(content) = step.get("content").and_then(|c| c.as_array()) {
+                            for item in content {
+                                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                    if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                        full_text.push_str(text);
+                                        events.push(AgentEvent::ResponseChunk(text.to_string()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "thought" => {
+                        // Thought step.start carries the signature needed for tool calling
+                        if let Some(sig) = step.get("signature").and_then(|s| s.as_str()) {
+                            events.push(AgentEvent::InteractionToolCall {
+                                id: "".to_string(),
+                                name: "".to_string(),
+                                arguments: json!(null),
+                                signature: Some(sig.to_string()),
+                            });
+                        }
+                    }
+                    _ => {
+                        log::debug!("Ignoring step.start type: {}", step_type);
                     }
                 }
             }

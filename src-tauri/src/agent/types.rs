@@ -388,6 +388,10 @@ pub struct InteractionStreamEvent {
     pub content: Option<InteractionContentStart>,
     #[serde(default)]
     pub interaction: Option<InteractionsResponse>,
+    /// Payload for `step.start` events — contains step type, initial content,
+    /// function call name/id, and thought signatures.
+    #[serde(default)]
+    pub step: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Debug)]

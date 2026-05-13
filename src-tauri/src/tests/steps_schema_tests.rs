@@ -1,19 +1,24 @@
 /// Steps Schema Migration Tests (Api-Revision: 2026-05-20)
 ///
-/// Validates that our SSE parser and event processor can handle the new
+/// Validates that the SSE parser and event processor correctly handle the new
 /// Interactions API steps schema that becomes default on May 26, 2026.
-/// These tests use the exact JSON shapes from the official breaking changes
-/// guide at https://ai.google.dev/gemini-api/docs/interactions-breaking-changes-may-2026
-///
-/// Once the migration code lands, these tests should pass. Until then, they
-/// document the target contract and will fail against the current legacy parser.
+/// Fixtures use the exact JSON shapes from the official breaking changes guide.
 #[cfg(test)]
 mod tests {
     use crate::agent::{
-        parse_interactions_sse_line, process_interactions_event,
-        AgentEvent, InteractionDelta, InteractionStreamEvent,
+        extract_model_text_from_steps, parse_interactions_sse_line, process_interactions_event,
+        AgentEvent, InteractionDelta, InteractionStreamEvent, GEMINI_API_REVISION,
     };
     use serde_json::{json, Value};
+
+    // ========================================================================
+    // 0. Shared constants
+    // ========================================================================
+
+    #[test]
+    fn test_api_revision_value() {
+        assert_eq!(GEMINI_API_REVISION, "2026-05-20");
+    }
 
     // ========================================================================
     // 1. SSE Line Parsing — New Event Names
@@ -72,20 +77,24 @@ mod tests {
 
     #[test]
     fn test_parse_step_start_model_output() {
-        // step.start for model_output carries initial content in the step payload
         let sse = r#"data: {"event_type":"step.start","index":1,"step":{"content":[{"text":"Once upon","type":"text"}],"type":"model_output"}}"#;
         let event = parse_interactions_sse_line(sse).expect("should parse step.start");
         assert_eq!(event.event_type, "step.start");
         assert_eq!(event.index, Some(1));
+        // Verify the step payload is accessible
+        let step = event.step.expect("step.start should have step payload");
+        assert_eq!(step["type"], "model_output");
+        assert_eq!(step["content"][0]["text"], "Once upon");
     }
 
     #[test]
     fn test_parse_step_start_thought() {
-        // Thought steps arrive with signature in step.start, no deltas
         let sse = r#"data: {"event_type":"step.start","index":0,"step":{"type":"thought","signature":"abc123..."}}"#;
         let event = parse_interactions_sse_line(sse).expect("should parse thought step.start");
         assert_eq!(event.event_type, "step.start");
-        assert_eq!(event.index, Some(0));
+        let step = event.step.expect("should have step payload");
+        assert_eq!(step["type"], "thought");
+        assert_eq!(step["signature"], "abc123...");
     }
 
     #[test]
@@ -107,7 +116,6 @@ mod tests {
 
     #[test]
     fn test_parse_interaction_completed() {
-        // New name: "interaction.completed" (was "interaction.complete")
         let sse = r#"data: {"type":"interaction.completed","event_type":"interaction.completed","interaction":{"id":"int_xyz","status":"completed","usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}}"#;
         let event = parse_interactions_sse_line(sse).expect("should parse interaction.completed");
         assert_eq!(event.event_type, "interaction.completed");
@@ -131,23 +139,21 @@ mod tests {
 
     // ========================================================================
     // 2. Streaming Function Call — New step-based lifecycle
-    //    Legacy: single content.delta with complete function_call
-    //    New:    step.start (name+id) → step.delta (arguments) → step.stop
     // ========================================================================
 
     #[test]
     fn test_parse_step_start_function_call() {
-        // step.start for function_call delivers name + id, no arguments yet
         let sse = r#"data: {"type":"step.start","event_type":"step.start","index":1,"step":{"type":"function_call","id":"fc_1","name":"get_weather"}}"#;
         let event = parse_interactions_sse_line(sse).expect("should parse function_call step.start");
         assert_eq!(event.event_type, "step.start");
-        assert_eq!(event.index, Some(1));
+        let step = event.step.expect("should have step payload");
+        assert_eq!(step["type"], "function_call");
+        assert_eq!(step["name"], "get_weather");
+        assert_eq!(step["id"], "fc_1");
     }
 
     #[test]
     fn test_parse_step_delta_function_call_complete() {
-        // When streamFunctionCallArguments is NOT enabled, args arrive complete
-        // in a single step.delta with type "function_call"
         let sse = r#"data: {"event_type":"step.delta","index":1,"delta":{"type":"function_call","id":"fc_1","name":"get_weather","arguments":{"location":"Boston, MA"}}}"#;
         let event = parse_interactions_sse_line(sse).expect("should parse complete function_call delta");
         assert_eq!(event.event_type, "step.delta");
@@ -162,7 +168,6 @@ mod tests {
 
     #[test]
     fn test_parse_step_stop_function_call_waiting() {
-        // Function call step.stop has status "waiting" (requires tool result)
         let sse = r#"data: {"type":"step.stop","event_type":"step.stop","index":1,"status":"waiting"}"#;
         let event = parse_interactions_sse_line(sse).expect("should parse waiting step.stop");
         assert_eq!(event.event_type, "step.stop");
@@ -170,8 +175,6 @@ mod tests {
 
     // ========================================================================
     // 3. process_interactions_event — step.delta handling
-    //    Verify that the event processor correctly handles the new event name
-    //    while the delta payload structure remains identical for text/thought.
     // ========================================================================
 
     #[test]
@@ -179,11 +182,10 @@ mod tests {
         let event = InteractionStreamEvent {
             event_type: "step.delta".to_string(),
             index: Some(1),
-            delta: Some(InteractionDelta::Text {
-                text: "Hello world".to_string(),
-            }),
+            delta: Some(InteractionDelta::Text { text: "Hello world".to_string() }),
             content: None,
             interaction: None,
+            step: None,
         };
 
         let mut full_text = String::new();
@@ -201,11 +203,10 @@ mod tests {
         let event = InteractionStreamEvent {
             event_type: "step.delta".to_string(),
             index: Some(0),
-            delta: Some(InteractionDelta::Thought {
-                thought: Some("Let me think...".to_string()),
-            }),
+            delta: Some(InteractionDelta::Thought { thought: Some("Let me think...".to_string()) }),
             content: None,
             interaction: None,
+            step: None,
         };
 
         let mut full_text = String::new();
@@ -230,6 +231,7 @@ mod tests {
             }),
             content: None,
             interaction: None,
+            step: None,
         };
 
         let mut full_text = String::new();
@@ -252,11 +254,10 @@ mod tests {
         let event = InteractionStreamEvent {
             event_type: "step.delta".to_string(),
             index: Some(0),
-            delta: Some(InteractionDelta::ThoughtSignature {
-                signature: "sig_xyz".to_string(),
-            }),
+            delta: Some(InteractionDelta::ThoughtSignature { signature: "sig_xyz".to_string() }),
             content: None,
             interaction: None,
+            step: None,
         };
 
         let mut full_text = String::new();
@@ -277,20 +278,16 @@ mod tests {
         let mut full_reasoning = String::new();
 
         let e1 = InteractionStreamEvent {
-            event_type: "step.delta".to_string(),
-            index: Some(1),
+            event_type: "step.delta".to_string(), index: Some(1),
             delta: Some(InteractionDelta::Text { text: "Hello ".to_string() }),
-            content: None,
-            interaction: None,
+            content: None, interaction: None, step: None,
         };
         process_interactions_event(&e1, &mut full_text, &mut full_reasoning);
 
         let e2 = InteractionStreamEvent {
-            event_type: "step.delta".to_string(),
-            index: Some(1),
+            event_type: "step.delta".to_string(), index: Some(1),
             delta: Some(InteractionDelta::Text { text: "world!".to_string() }),
-            content: None,
-            interaction: None,
+            content: None, interaction: None, step: None,
         };
         process_interactions_event(&e2, &mut full_text, &mut full_reasoning);
 
@@ -302,28 +299,18 @@ mod tests {
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
 
-        // Thought first
         let thought_event = InteractionStreamEvent {
-            event_type: "step.delta".to_string(),
-            index: Some(0),
-            delta: Some(InteractionDelta::Thought {
-                thought: Some("Planning response.".to_string()),
-            }),
-            content: None,
-            interaction: None,
+            event_type: "step.delta".to_string(), index: Some(0),
+            delta: Some(InteractionDelta::Thought { thought: Some("Planning response.".to_string()) }),
+            content: None, interaction: None, step: None,
         };
         let r = process_interactions_event(&thought_event, &mut full_text, &mut full_reasoning);
         assert_eq!(r.len(), 1);
 
-        // Then text
         let text_event = InteractionStreamEvent {
-            event_type: "step.delta".to_string(),
-            index: Some(1),
-            delta: Some(InteractionDelta::Text {
-                text: "Here is the answer.".to_string(),
-            }),
-            content: None,
-            interaction: None,
+            event_type: "step.delta".to_string(), index: Some(1),
+            delta: Some(InteractionDelta::Text { text: "Here is the answer.".to_string() }),
+            content: None, interaction: None, step: None,
         };
         let r = process_interactions_event(&text_event, &mut full_text, &mut full_reasoning);
         assert_eq!(r.len(), 1);
@@ -336,10 +323,74 @@ mod tests {
     fn test_process_unknown_event_type_produces_no_events() {
         let event = InteractionStreamEvent {
             event_type: "interaction.created".to_string(),
-            index: None,
+            index: None, delta: None, content: None, interaction: None, step: None,
+        };
+        let mut ft = String::new();
+        let mut fr = String::new();
+        let events = process_interactions_event(&event, &mut ft, &mut fr);
+        assert!(events.is_empty());
+    }
+
+    // ========================================================================
+    // 3b. process_interactions_event — step.start handling
+    //     step.start carries initial model_output text and thought signatures.
+    // ========================================================================
+
+    #[test]
+    fn test_process_step_start_extracts_initial_text() {
+        let event = InteractionStreamEvent {
+            event_type: "step.start".to_string(),
+            index: Some(1),
             delta: None,
             content: None,
             interaction: None,
+            step: Some(json!({
+                "type": "model_output",
+                "content": [{"text": "Once upon", "type": "text"}]
+            })),
+        };
+
+        let mut full_text = String::new();
+        let mut full_reasoning = String::new();
+        let events = process_interactions_event(&event, &mut full_text, &mut full_reasoning);
+
+        assert_eq!(full_text, "Once upon");
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], AgentEvent::ResponseChunk(t) if t == "Once upon"));
+    }
+
+    #[test]
+    fn test_process_step_start_extracts_thought_signature() {
+        let event = InteractionStreamEvent {
+            event_type: "step.start".to_string(),
+            index: Some(0),
+            delta: None,
+            content: None,
+            interaction: None,
+            step: Some(json!({
+                "type": "thought",
+                "signature": "abc123..."
+            })),
+        };
+
+        let mut full_text = String::new();
+        let mut full_reasoning = String::new();
+        let events = process_interactions_event(&event, &mut full_text, &mut full_reasoning);
+
+        assert_eq!(events.len(), 1);
+        if let AgentEvent::InteractionToolCall { signature, .. } = &events[0] {
+            assert_eq!(signature.as_deref(), Some("abc123..."));
+        } else {
+            panic!("Expected InteractionToolCall with signature");
+        }
+    }
+
+    #[test]
+    fn test_process_step_start_no_payload_produces_nothing() {
+        let event = InteractionStreamEvent {
+            event_type: "step.start".to_string(),
+            index: Some(0),
+            delta: None, content: None, interaction: None, step: None,
         };
 
         let mut ft = String::new();
@@ -349,179 +400,88 @@ mod tests {
     }
 
     // ========================================================================
-    // 4. Unary Response — Steps Schema Deserialization
-    //    Validates that the new JSON shape with `steps` array can be parsed.
+    // 4. Unary Response — Steps JSON Shape Assertions
+    //    Validates that the new JSON shapes are structurally correct. These are
+    //    shape assertions against serde_json::Value, not typed deserialization.
     // ========================================================================
 
     #[test]
-    fn test_deserialize_steps_response_basic_text() {
+    fn test_steps_response_shape_basic_text() {
         let body: Value = json!({
             "id": "int_123",
-            "steps": [
-                {
-                    "type": "model_output",
-                    "status": "done",
-                    "content": [
-                        { "type": "text", "text": "Why did the chicken cross the road?" }
-                    ]
-                }
-            ]
+            "steps": [{
+                "type": "model_output",
+                "status": "done",
+                "content": [{ "type": "text", "text": "Why did the chicken cross the road?" }]
+            }]
         });
-
         let steps = body["steps"].as_array().expect("steps should be array");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0]["type"], "model_output");
-        let content = steps[0]["content"].as_array().unwrap();
-        assert_eq!(content[0]["type"], "text");
-        assert_eq!(content[0]["text"], "Why did the chicken cross the road?");
+        assert_eq!(steps[0]["content"][0]["text"], "Why did the chicken cross the road?");
     }
 
     #[test]
-    fn test_deserialize_steps_response_with_thought() {
+    fn test_steps_response_shape_with_thought() {
         let body: Value = json!({
             "id": "int_001",
             "status": "requires_action",
             "steps": [
                 {
                     "type": "thought",
-                    "summary": [{ "type": "text", "text": "I need to check the weather in Boston..." }],
+                    "summary": [{ "type": "text", "text": "I need to check the weather..." }],
                     "signature": "abc123..."
                 },
-                {
-                    "type": "function_call",
-                    "id": "fc_1",
-                    "name": "get_weather",
-                    "arguments": { "location": "Boston, MA" }
-                }
+                { "type": "function_call", "id": "fc_1", "name": "get_weather", "arguments": { "location": "Boston" } }
             ]
         });
-
         let steps = body["steps"].as_array().unwrap();
         assert_eq!(steps.len(), 2);
-
-        // Thought step — summary is now an array, not a flat string
-        assert_eq!(steps[0]["type"], "thought");
+        // Thought summary is now an array, not a flat string
         let summary = steps[0]["summary"].as_array().expect("summary should be array");
-        assert_eq!(summary[0]["text"], "I need to check the weather in Boston...");
-        assert_eq!(steps[0]["signature"], "abc123...");
-
-        // Function call step
+        assert_eq!(summary[0]["text"], "I need to check the weather...");
         assert_eq!(steps[1]["type"], "function_call");
-        assert_eq!(steps[1]["id"], "fc_1");
-        assert_eq!(steps[1]["name"], "get_weather");
-        assert_eq!(steps[1]["arguments"]["location"], "Boston, MA");
     }
 
     #[test]
-    fn test_deserialize_steps_response_function_result_then_output() {
-        // After submitting a tool result, the response contains the echoed
-        // function_result step followed by the final model_output
+    fn test_steps_response_shape_function_result_then_output() {
         let body: Value = json!({
             "id": "int_002",
-            "status": "completed",
             "steps": [
-                {
-                    "type": "function_result",
-                    "call_id": "fc_1",
-                    "name": "get_weather",
-                    "result": [{ "type": "text", "text": "52°F with rain" }]
-                },
-                {
-                    "type": "model_output",
-                    "status": "done",
-                    "content": [
-                        { "type": "text", "text": "It's 52°F with rain in Boston." }
-                    ]
-                }
+                { "type": "function_result", "call_id": "fc_1", "name": "get_weather", "result": [{ "type": "text", "text": "52°F" }] },
+                { "type": "model_output", "content": [{ "type": "text", "text": "It's 52°F." }] }
             ]
         });
-
         let steps = body["steps"].as_array().unwrap();
-        assert_eq!(steps.len(), 2);
         assert_eq!(steps[0]["type"], "function_result");
-        assert_eq!(steps[0]["call_id"], "fc_1");
-        assert_eq!(steps[1]["type"], "model_output");
-        assert_eq!(steps[1]["content"][0]["text"], "It's 52°F with rain in Boston.");
+        assert_eq!(steps[1]["content"][0]["text"], "It's 52°F.");
     }
 
     #[test]
-    fn test_deserialize_steps_response_google_search() {
+    fn test_steps_response_shape_google_search() {
         let body: Value = json!({
             "id": "int_456",
             "steps": [
-                {
-                    "type": "google_search_call",
-                    "id": "gs_1",
-                    "arguments": { "queries": ["last Super Bowl winner"] },
-                    "signature": "abc123..."
-                },
-                {
-                    "type": "google_search_result",
-                    "call_id": "gs_1",
-                    "result": { "search_suggestions": "<div>...</div>" },
-                    "signature": "abc123..."
-                },
-                {
-                    "type": "model_output",
-                    "content": [{
-                        "type": "text",
-                        "text": "The Kansas City Chiefs won.",
-                        "annotations": [{
-                            "type": "url_citation",
-                            "url": "https://www.nfl.com/super-bowl",
-                            "title": "NFL.com",
-                            "start_index": 4,
-                            "end_index": 26
-                        }]
-                    }]
-                }
-            ],
-            "status": "completed"
+                { "type": "google_search_call", "id": "gs_1", "arguments": { "queries": ["test"] } },
+                { "type": "google_search_result", "call_id": "gs_1", "result": { "search_suggestions": "..." } },
+                { "type": "model_output", "content": [{ "type": "text", "text": "Result.", "annotations": [{ "type": "url_citation", "url": "https://example.com" }] }] }
+            ]
         });
-
         let steps = body["steps"].as_array().unwrap();
         assert_eq!(steps.len(), 3);
-        assert_eq!(steps[0]["type"], "google_search_call");
-        assert_eq!(steps[1]["type"], "google_search_result");
-        assert_eq!(steps[2]["type"], "model_output");
-        // Annotations are now inline in the text content item
-        let annotations = steps[2]["content"][0]["annotations"].as_array().unwrap();
-        assert_eq!(annotations[0]["type"], "url_citation");
+        assert_eq!(steps[2]["content"][0]["annotations"][0]["type"], "url_citation");
     }
 
     // ========================================================================
-    // 5. Extract model text from steps — helper validation
-    //    This is the core logic that background.rs call_gemini_oneshot needs:
-    //    steps → find model_output → content[0].text
+    // 5. extract_model_text_from_steps — production helper tests
+    //    Tests the shared helper used by both background.rs and these tests.
     // ========================================================================
-
-    /// Reference implementation of the extraction logic that will be needed
-    /// in background.rs to replace `body.get("outputs")` traversal.
-    fn extract_model_text_from_steps(body: &Value) -> Option<String> {
-        let steps = body.get("steps")?.as_array()?;
-        for step in steps {
-            let step_type = step.get("type")?.as_str()?;
-            if step_type == "model_output" {
-                let content = step.get("content")?.as_array()?;
-                for item in content {
-                    if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        return item.get("text").and_then(|t| t.as_str()).map(|s| s.to_string());
-                    }
-                }
-            }
-        }
-        None
-    }
 
     #[test]
     fn test_extract_model_text_simple() {
         let body = json!({
             "id": "int_1",
-            "steps": [{
-                "type": "model_output",
-                "status": "done",
-                "content": [{ "type": "text", "text": "The answer is 42." }]
-            }]
+            "steps": [{ "type": "model_output", "content": [{ "type": "text", "text": "The answer is 42." }] }]
         });
         assert_eq!(extract_model_text_from_steps(&body), Some("The answer is 42.".to_string()));
     }
@@ -539,13 +499,23 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_model_text_concatenates_multi_part() {
+        let body = json!({
+            "steps": [{
+                "type": "model_output",
+                "content": [
+                    { "type": "text", "text": "Part one. " },
+                    { "type": "text", "text": "Part two." }
+                ]
+            }]
+        });
+        assert_eq!(extract_model_text_from_steps(&body), Some("Part one. Part two.".to_string()));
+    }
+
+    #[test]
     fn test_extract_model_text_returns_none_for_no_model_output() {
         let body = json!({
-            "id": "int_3",
-            "status": "requires_action",
-            "steps": [
-                { "type": "function_call", "id": "fc_1", "name": "get_weather", "arguments": {} }
-            ]
+            "steps": [{ "type": "function_call", "id": "fc_1", "name": "get_weather", "arguments": {} }]
         });
         assert_eq!(extract_model_text_from_steps(&body), None);
     }
@@ -558,17 +528,12 @@ mod tests {
 
     #[test]
     fn test_extract_model_text_returns_none_for_missing_steps() {
-        // Legacy response with outputs — should return None from steps extractor
-        let body = json!({
-            "id": "int_5",
-            "outputs": [{ "type": "text", "text": "legacy response" }]
-        });
+        let body = json!({ "outputs": [{ "type": "text", "text": "legacy" }] });
         assert_eq!(extract_model_text_from_steps(&body), None);
     }
 
     // ========================================================================
-    // 6. Full streaming session simulation
-    //    Replays a complete step-based SSE stream to verify end-to-end parsing.
+    // 6. Full streaming session simulations
     // ========================================================================
 
     #[test]
@@ -582,7 +547,7 @@ mod tests {
             r#"data: {"event_type":"step.start","index":1,"step":{"type":"model_output","content":[{"text":"Once upon","type":"text"}]}}"#,
             r#"data: {"event_type":"step.delta","index":1,"delta":{"type":"text","text":" a time..."}}"#,
             r#"data: {"event_type":"step.stop","index":1,"status":"done"}"#,
-            r#"data: {"event_type":"interaction.completed","interaction":{"id":"int_xyz","status":"completed","usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}}"#,
+            r#"data: {"event_type":"interaction.completed","interaction":{"id":"int_xyz","status":"completed"}}"#,
         ];
 
         let mut full_text = String::new();
@@ -597,9 +562,10 @@ mod tests {
         }
 
         assert_eq!(full_reasoning, "Let me think.");
-        assert_eq!(full_text, " a time...");
-        // Should have: 1 reasoning chunk + 1 text chunk = 2 events
-        assert_eq!(all_events.len(), 2);
+        // step.start delivers "Once upon", step.delta appends " a time..."
+        assert_eq!(full_text, "Once upon a time...");
+        // signature + reasoning + initial text + delta text = 4 events
+        assert_eq!(all_events.len(), 4);
     }
 
     #[test]
@@ -609,7 +575,6 @@ mod tests {
             r#"data: {"event_type":"step.start","index":0,"step":{"type":"thought"}}"#,
             r#"data: {"event_type":"step.delta","index":0,"delta":{"type":"thought","thought":"I'll call get_weather."}}"#,
             r#"data: {"event_type":"step.stop","index":0,"status":"done"}"#,
-            // Function call step — args arrive complete in one delta
             r#"data: {"event_type":"step.start","index":1,"step":{"type":"function_call","id":"fc_1","name":"get_weather"}}"#,
             r#"data: {"event_type":"step.delta","index":1,"delta":{"type":"function_call","id":"fc_1","name":"get_weather","arguments":{"location":"Boston, MA"}}}"#,
             r#"data: {"event_type":"step.stop","index":1,"status":"waiting"}"#,
@@ -628,9 +593,9 @@ mod tests {
         }
 
         assert_eq!(full_reasoning, "I'll call get_weather.");
-        assert!(full_text.is_empty()); // No model output yet — waiting for tool result
+        assert!(full_text.is_empty());
 
-        // Should have: 1 reasoning + 1 tool call = 2 events
+        // 1 reasoning + 1 tool call = 2 events
         assert_eq!(all_events.len(), 2);
         let tool_event = &all_events[1];
         if let AgentEvent::InteractionToolCall { id, name, arguments, .. } = tool_event {

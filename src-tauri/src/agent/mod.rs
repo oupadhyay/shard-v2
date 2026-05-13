@@ -6,8 +6,9 @@ pub(crate) mod openrouter;
 mod types;
 
 pub use gemini::{
-    construct_gemini_messages, construct_interactions_input, parse_gemini_chunk,
-    parse_interactions_sse_line, process_interactions_event, AgentEvent,
+    construct_gemini_messages, construct_interactions_input, extract_model_text_from_steps,
+    parse_gemini_chunk, parse_interactions_sse_line, process_interactions_event, AgentEvent,
+    GEMINI_API_REVISION,
 };
 pub use openrouter::{has_images, supports_tools, to_multimodal_messages};
 pub use types::*;
@@ -2011,7 +2012,7 @@ impl<R: tauri::Runtime> Agent<R> {
             .header("Content-Type", "application/json")
             // Opt into the new steps schema (May 2026 breaking change).
             // Becomes default May 26; legacy removed June 8.
-            .header("Api-Revision", "2026-05-20")
+            .header("Api-Revision", GEMINI_API_REVISION)
             .json(&request_body)
             .send()
             .await

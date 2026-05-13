@@ -740,6 +740,7 @@ mod tests {
             }),
             content: None,
             interaction: None,
+            step: None,
         };
 
         let mut full_text = String::new();
@@ -764,6 +765,7 @@ mod tests {
             }),
             content: None,
             interaction: None,
+            step: None,
         };
 
         let mut full_text = String::new();
@@ -802,6 +804,7 @@ mod tests {
             }),
             content: None,
             interaction: None,
+            step: None,
         };
         process_interactions_event(&event1, &mut full_text, &mut full_reasoning);
 
@@ -814,6 +817,7 @@ mod tests {
             }),
             content: None,
             interaction: None,
+            step: None,
         };
         process_interactions_event(&event2, &mut full_text, &mut full_reasoning);
 
