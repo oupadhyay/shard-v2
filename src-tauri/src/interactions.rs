@@ -73,8 +73,8 @@ struct EmbeddingValues {
 // Embedding API
 // ============================================================================
 
-const EMBEDDING_MODEL_URL: &str =
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent";
+// Default lives in `crate::endpoints::gemini_embedding`. Tests override via
+// `crate::endpoints::set_overrides`.
 
 pub async fn generate_embedding(
     client: &reqwest::Client,
@@ -131,7 +131,7 @@ async fn send_embedding_request(
     payload: &EmbeddingRequest,
 ) -> Result<Vec<f32>, String> {
     let res = client
-        .post(EMBEDDING_MODEL_URL)
+        .post(crate::endpoints::gemini_embedding())
         .header("X-Goog-Api-Key", api_key)
         .json(payload)
         .send()

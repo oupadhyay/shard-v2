@@ -1,4 +1,10 @@
+pub mod agent_helpers;
+mod agent_process_message_tests;
+mod agent_provider_tests;
+mod agent_pure_tests;
+mod agent_state_tests;
 pub mod agent_tests;
+mod agent_tools_tests;
 mod background_tests;
 mod cache_tests;
 mod compaction_tests;

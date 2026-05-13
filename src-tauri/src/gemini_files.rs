@@ -44,7 +44,7 @@ pub async fn upload_image_to_gemini_files_api(
         file: FileMetadata,
     }
 
-    let init_url = "https://generativelanguage.googleapis.com/upload/v1beta/files";
+    let init_url = crate::endpoints::gemini_files_upload();
     let init_response = client
         .post(init_url)
         .header("X-Goog-Api-Key", api_key)

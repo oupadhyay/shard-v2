@@ -71,6 +71,12 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 dotenvy = "0.15"
 rand = "0.8"
 serde_yaml = "0.9"
+# HTTP mocking for agent unit tests. Tokio-native, supports streaming bodies
+# (needed for SSE responses from Gemini / OpenRouter turns).
+wiremock = "0.6"
+# Pull in `tauri/test` for the `mock_app()` builder used by both the eval
+# harness and the agent unit-test helpers in `src/tests/agent_helpers.rs`.
+tauri = { version = "2", features = ["macos-private-api", "test"] }
 
 [features]
 # Enables the evaluator-as-judge harness (`cargo run --example eval --features eval`).

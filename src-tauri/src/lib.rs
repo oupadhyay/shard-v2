@@ -15,6 +15,7 @@ pub mod compaction;
 pub mod config;
 pub mod context;
 pub mod db;
+pub mod endpoints;
 mod gemini_files;
 mod heartbeat;
 mod integrations;
