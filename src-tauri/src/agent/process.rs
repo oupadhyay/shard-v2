@@ -410,6 +410,7 @@ impl<R: tauri::Runtime> Agent<R> {
                 peer_card: peer_card_ctx.as_deref(),
                 peer_representation: peer_rep_ctx.as_deref(),
                 is_research_mode,
+                is_cron,
             };
             let continue_turn = if is_gemini {
                 self.process_gemini_turn(

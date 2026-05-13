@@ -156,6 +156,9 @@ impl<R: tauri::Runtime> Agent<R> {
             .post(format!("{}?alt=sse", url))
             .header("x-goog-api-key", api_key)
             .header("Content-Type", "application/json")
+            // Opt into the new steps schema (May 2026 breaking change).
+            // Becomes default May 26; legacy removed June 8.
+            .header("Api-Revision", super::super::gemini::GEMINI_API_REVISION)
             .json(&request_body)
             .send()
             .await

@@ -460,6 +460,8 @@ async fn call_gemini_oneshot(
         .post(url)
         .header("X-Goog-Api-Key", api_key)
         .header("Content-Type", "application/json")
+        // Opt into the new steps schema (May 2026 breaking change).
+        .header("Api-Revision", crate::agent::GEMINI_API_REVISION)
         .json(&payload)
         .send()
         .await
@@ -475,7 +477,12 @@ async fn call_gemini_oneshot(
         .await
         .map_err(|e| format!("Failed to parse Gemini Interactions response: {}", e))?;
 
-    // Parse Interactions API response: { outputs: [{ type: "text", text: "..." }, ...] }
+    // Use shared helper for steps schema (concatenates all text parts)
+    if let Some(text) = crate::agent::extract_model_text_from_steps(&body) {
+        return Ok(text);
+    }
+
+    // Fallback: legacy outputs array (can be removed after June 8, 2026)
     if let Some(outputs) = body.get("outputs").and_then(|o| o.as_array()) {
         for output in outputs {
             let output_type = output.get("type").and_then(|t| t.as_str()).unwrap_or("");

@@ -190,21 +190,25 @@ async fn b12_incognito_skips_embeddings_and_archive() {
 }
 
 // ============================================================================
-// Auto-archive trigger (B34)
+// Auto-archive skipped under incognito (B12 reinforcement, paired with B34)
 // ============================================================================
+//
+// True B34 coverage (auto-archive *fires* when the 2+2 threshold is crossed
+// with a changed hash) requires `incognito_mode = false`, which in turn
+// requires mocking the embedding endpoint. That setup is deferred to Phase 6
+// alongside B13-B15. This test instead pins down the *negative* side of the
+// gate: under incognito, even when the message-count threshold is crossed,
+// `last_archived_hash` must remain at its starting value of 0 because the
+// archive spawn is skipped entirely.
 
 #[tokio::test]
-async fn b34_auto_archive_fires_when_2plus2_threshold_crossed_with_hash_change() {
+async fn auto_archive_skipped_in_incognito_even_when_threshold_crossed() {
     let _g = agent_test_lock();
     let env = TestEnv::new().await;
     let agent = Agent::new(env.handle.clone());
     mount_gemini_text(&env, "reply").await;
 
-    let config = config_gemini();
-    // 2 user + 2 assistant minimum; we run process_message twice in incognito
-    // mode and inspect the in-memory state. Auto-archive itself spawns a task
-    // that runs in the background and writes to SQLite; we only verify the
-    // hash-update side-effect that gates the spawn.
+    let config = config_gemini(); // incognito_mode = true
 
     // ── run 1: user1 + assistant1 ────────────────────────────────────────
     agent
@@ -217,14 +221,21 @@ async fn b34_auto_archive_fires_when_2plus2_threshold_crossed_with_hash_change()
         .await
         .unwrap();
 
-    // In incognito mode auto-archive is skipped (B12), so the hash stays 0.
-    // To exercise the actual archive trigger we need !incognito. Here we do
-    // a minimal hash-only assertion to prove the test fixture works.
     let h = agent.get_history().await;
     let user_count = h.iter().filter(|m| m.role == "user").count();
     let asst_count = h.iter().filter(|m| m.role == "assistant").count();
-    assert!(user_count >= 2);
-    assert!(asst_count >= 2);
+    assert!(
+        user_count >= 2 && asst_count >= 2,
+        "fixture sanity: 2+2 threshold must be crossed (got u={user_count}, a={asst_count})"
+    );
+
+    // Even though the 2+2 threshold has been crossed, incognito mode must
+    // skip the archive spawn → `last_archived_hash` stays at its initial 0.
+    assert_eq!(
+        *agent.last_archived_hash.lock().await,
+        0,
+        "incognito must skip auto-archive even after threshold is crossed"
+    );
 }
 
 // ============================================================================

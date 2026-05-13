@@ -113,7 +113,13 @@ impl<R: tauri::Runtime> Agent<R> {
         }];
         // 1. Filter out past cron messages from the LLM's context window ONLY during a cron run,
         // so the active cron job focuses on the user's actual conversation. Regular users still see them.
-        let is_cron = history.last().and_then(|m| m.is_cron).unwrap_or(false);
+        //
+        // Use the explicit cron flag from `TurnContext` rather than deriving it from
+        // `history.last().is_cron`. On subsequent turns inside the `process_message`
+        // loop the last message is a tool/assistant message (which has `is_cron =
+        // None`), so deriving from history would silently disable cron-aware
+        // filtering and `<system_directive>` wrapping mid-loop.
+        let is_cron = ctx.is_cron;
         let visible_history: Vec<ChatMessage> = if is_cron {
             let len = history.len();
             let mut visible: Vec<ChatMessage> = Vec::with_capacity(len);

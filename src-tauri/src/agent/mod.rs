@@ -33,8 +33,9 @@ mod types;
 mod youtube_summary;
 
 pub use gemini::{
-    construct_gemini_messages, construct_interactions_input, parse_gemini_chunk,
-    parse_interactions_sse_line, process_interactions_event, AgentEvent,
+    construct_gemini_messages, construct_interactions_input, extract_model_text_from_steps,
+    parse_gemini_chunk, parse_interactions_sse_line, process_interactions_event, AgentEvent,
+    GEMINI_API_REVISION,
 };
 pub use openrouter::{has_images, supports_tools, to_multimodal_messages};
 pub use types::*;
@@ -59,6 +60,11 @@ pub(crate) struct TurnContext<'a> {
     pub peer_card: Option<&'a str>,
     pub peer_representation: Option<&'a str>,
     pub is_research_mode: bool,
+    /// Stable cron flag for the entire `process_message` loop. Derived from
+    /// the caller's `is_cron` argument rather than `history.last().is_cron`,
+    /// because subsequent turns end with assistant/tool messages and would
+    /// otherwise lose the cron context.
+    pub is_cron: bool,
 }
 
 /// The main AI Agent managing chat history and API interactions.
