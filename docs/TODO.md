@@ -1,11 +1,18 @@
 # TODO
 
-## P0: Code Review Issues (Feb 2026)
+## Direction
 
-- [x] **Monolithic handleInput** ([src/chat.ts](../src/chat.ts)) - Split into `ChatController` class in `src/chat.ts`
-- [x] Rationalize model registry per [model strategy proposal](./model_strategy_proposal.md): remove Cerebras, add Gemma 4 26B-A4B MoE for vision/background, cut from 22 → 10 entries
+A full rewrite is **not** planned. The P0 rewrite question (originally at the top of this file) was resolved in favor of incremental work — see [Recently Completed](#recently-completed) for items that have already shipped, and the relevant `P1`/`P2` sections below for the items that became scoped tasks (Ollama, self-awareness, light mode).
 
-## P0: Local Models via Ollama
+Vercel AI SDK was evaluated and rejected: it would force the agent loop into TypeScript, losing the Rust streaming/cache/sandbox/observations stack and the entire benches suite.
+
+## Recently Completed
+
+- ✅ **Memory system rewritten with Honcho/Hermes + RRF learnings** — see [observations.rs](../src-tauri/src/observations.rs) (peer-centric DAG, peer cards, working representation), [retrieval.rs](../src-tauri/src/retrieval.rs) (BM25 + RRF fusion), [context.rs](../src-tauri/src/context.rs) (budgeted context assembly), [tool_registry.rs](../src-tauri/src/tool_registry.rs) (Hermes-style centralized registry).
+- ✅ **`agent/mod.rs` refactor** — split into 11 files (mod / process / state / types / gemini / openrouter / retry / research / schema / hash / youtube_summary). The previously-listed P2 task can be dropped.
+- ✅ **Eval harness** — `cargo run --example eval --features eval` with wiremock-based endpoint overrides; see follow-ups under [P2: Eval Harness Extensions](#p2-eval-harness-extensions).
+
+## P1: Local Models via Ollama
 
 - [ ] Add Ollama provider for local model inference (Unsloth)
   - New `agent/ollama.rs` adapter alongside `agent/gemini.rs` / `agent/openrouter.rs`
@@ -13,6 +20,19 @@
   - Target models on a 36 GB M3 Pro @ 128K context: **Gemma 4 26B-A4B** (`UD-Q4_K_XL`, MoE, ~18 GB) and **Qwen3.6-35B-A3B** (`UD-Q4_K_XL`, MoE, ~23 GB)
   - **Blocked**: Both Gemma 4 and Qwen3.6 unsloth GGUFs require split mmproj files; llama.cpp does not yet support the Gemma 4 architecture, and Ollama returns `500 Internal Server Error` on these models. Tracked in [ollama/ollama#15235](https://github.com/ollama/ollama/issues/15235). Revisit after the next Ollama vendor sync of llama.cpp.
   - **MTP (speculative decoding)**: Gemma 4 ships paired `-assistant` drafter models (lightweight 4-layer MTP heads) for ~2× inference speedup via speculative decoding. The drafter proposes N tokens autoregressively; the target verifies all N in one forward pass — identical output quality, significantly fewer forward passes. Currently only supported in HuggingFace Transformers; llama.cpp / Ollama do not yet support the MTP architecture. Worth waiting for MTP support before investing in local Gemma 4 inference. See [MTP docs](https://ai.google.dev/gemma/docs/mtp/mtp).
+
+## P1: Making Shard Self-Aware
+
+- [ ] Make Shard self-aware and able to edit its own configuration.
+- [ ] Allow Shard to create its own heartbeat files for scheduled tasks.
+- [ ] Maybe let Shard edit its own implementation code? (leave for later but factor into design)
+- [ ] Show any edits via file tree (https://trees.software/docs#vanilla-api) and diff viewer stacked to fit chat window / dedicated window layout (https://diffs.com/docs#overview)
+
+## P1: Code Refactoring
+
+- [ ] Refactor `background.rs` (~2,500 lines) into focused modules — likely `summary.rs`, `cleanup.rs`, `deriver.rs`, `dream.rs` mirroring the four jobs.
+- [ ] Refactor `heartbeat.rs` (~1,400 lines) — split spec parsing, scheduler wiring, and the draft-before-act execution loop.
+- [ ] Migrate from `screenshots` crate to `xcap` for screen capture.
 
 ## P2: Eval Harness Extensions
 
@@ -41,14 +61,6 @@ The evaluator-as-judge harness is in place (`cargo run --example eval --features
 - [ ] Add a tool to read and summarize recent browser history
   - Read Chrome/Safari history SQLite databases
   - Summarize recent browsing activity for context
-
-## P2: Code Refactoring
-
-- [ ] Refactor `agent/mod.rs` (1300+ lines) into smaller modules
-  - Split provider-specific logic: `agent/gemini_provider.rs`, `agent/openrouter_provider.rs`
-  - Extract core logic: `agent/core.rs`
-  - Consider separating retry logic, tool execution, and streaming handling
-- [ ] Migrate from `screenshots` crate to `xcap` for screen capture (P2)
 
 ## P2: Platform Gateway
 
@@ -83,7 +95,7 @@ The evaluator-as-judge harness is in place (`cargo run --example eval --features
 
 ## P2: Multi-Provider Support
 
-- [ ] Add support for Anthropic provider (Ollama tracked under P0 above).
+- [ ] Add support for Anthropic provider (Ollama tracked under [P1: Local Models via Ollama](#p1-local-models-via-ollama)).
 
 ## P2: Distribution & CI/CD
 
