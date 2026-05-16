@@ -49,6 +49,12 @@ struct Scenario {
     /// Subjective rubric — passed verbatim to the Claude judge later.
     #[serde(default)]
     rubric: Vec<String>,
+    /// Optional fixture files copied into the sandboxed app_config_dir BEFORE
+    /// the agent runs. Keys are logical destination names matching the
+    /// self_files allow-list (e.g. `config.toml`); values are paths to the
+    /// fixture file, resolved relative to the scenarios directory.
+    #[serde(default)]
+    seed_files: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -149,6 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut summary_rows: Vec<(String, bool, String)> = Vec::new();
 
+    let scenarios_root = PathBuf::from(&scenarios_dir);
     for scenario in &scenarios {
         println!("\n=== {} ({}) ===", scenario.name, scenario.id);
 
@@ -162,6 +169,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // equivalent), NOT ~/.../dev.ojasw.shard/.
         if let Ok(p) = tauri::Manager::path(&handle).app_data_dir() {
             println!("  app_data_dir = {}", p.display());
+        }
+
+        // Seed fixture files into the sandboxed app_config_dir before the
+        // agent runs. This is what makes self-edit scenarios realistic:
+        // read_file → copy verbatim → edit_file requires the file to exist.
+        if let Err(e) = seed_scenario_files(&handle, scenario, &scenarios_root) {
+            eprintln!("    seed_files error: {}", e);
         }
 
         // Wire event listeners. We mutate a single CapturedTurn per turn; the
@@ -222,6 +236,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     write_summary_md(&out_dir, &scenarios, &summary_rows)?;
     println!("\nDone. Results in {}", out_dir.display());
+    Ok(())
+}
+
+// ============================================================================
+// Fixture seeding
+// ============================================================================
+
+/// Copy scenario.seed_files into the sandboxed app_config_dir before the
+/// agent runs. Logical destination names must match the self_files allow-list
+/// (currently only `config.toml`). Source paths are resolved relative to the
+/// scenarios directory so YAMLs can keep fixtures alongside themselves.
+fn seed_scenario_files<R: tauri::Runtime>(
+    handle: &tauri::AppHandle<R>,
+    scenario: &Scenario,
+    scenarios_root: &Path,
+) -> Result<(), String> {
+    if scenario.seed_files.is_empty() {
+        return Ok(());
+    }
+    let cfg_dir = tauri::Manager::path(handle)
+        .app_config_dir()
+        .map_err(|e| format!("Failed to resolve app_config_dir: {}", e))?;
+    std::fs::create_dir_all(&cfg_dir)
+        .map_err(|e| format!("Failed to create {}: {}", cfg_dir.display(), e))?;
+    for (logical, src_rel) in &scenario.seed_files {
+        // Currently the only allow-listed target is `config.toml`. Adding
+        // heartbeats/*.toml here will track the same expansion in self_files.rs.
+        let dst = match logical.as_str() {
+            "config.toml" => cfg_dir.join("config.toml"),
+            other => {
+                return Err(format!(
+                    "Unknown seed_files target '{}'. Allowed: config.toml",
+                    other
+                ));
+            }
+        };
+        let src = scenarios_root.join(src_rel);
+        let content = std::fs::read_to_string(&src)
+            .map_err(|e| format!("Failed to read fixture {}: {}", src.display(), e))?;
+        std::fs::write(&dst, &content)
+            .map_err(|e| format!("Failed to write {}: {}", dst.display(), e))?;
+        println!("  seeded {} ← {}", dst.display(), src.display());
+    }
     Ok(())
 }
 
@@ -316,7 +373,6 @@ fn build_config(model: &str, gemini_key: &str) -> AppConfig {
         api_key: None,
         gemini_api_key: Some(gemini_key.to_string()),
         openrouter_api_key: None,
-        cerebras_api_key: None,
         brave_api_key: std::env::var("BRAVE_API_KEY")
             .or_else(|_| std::env::var("BRAVE_SEARCH_API_KEY"))
             .ok(),

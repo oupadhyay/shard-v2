@@ -23,3 +23,5 @@ export { SETTINGS_MODAL_HTML, initSettingsTabs, populateModelDropdown, populateH
 export { SESSIONS_MODAL_HTML } from "./sessions";
 export { resizeImage } from "./image";
 export { formatSessionDate, logger } from "./utils";
+export { mountDiffViewer } from "./diff-viewer";
+export type { EditOutcome, DiffViewerController } from "./diff-viewer";

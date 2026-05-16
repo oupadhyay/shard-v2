@@ -13,7 +13,7 @@
 //! incognito mode.
 
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::integrations::{
     arxiv::{perform_arxiv_lookup, read_arxiv_paper},
@@ -553,6 +553,50 @@ impl<R: tauri::Runtime> Agent<R> {
                         context
                     }
                 )
+            }
+            "read_file" => {
+                let path = args["path"].as_str().unwrap_or_default();
+                match crate::self_files::read_allowed_file(app_handle, path) {
+                    Ok(contents) => {
+                        if contents.is_empty() {
+                            format!("(file '{}' is empty or does not yet exist)", path)
+                        } else {
+                            format!("Contents of {}:\n\n```\n{}\n```", path, contents)
+                        }
+                    }
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+            "edit_file" => {
+                let path = args["path"].as_str().unwrap_or_default();
+                let old_str = args["old_str"].as_str().unwrap_or("");
+                let new_str = args["new_str"].as_str().unwrap_or("");
+                let replace_all = args["replace_all"].as_bool().unwrap_or(false);
+
+                match crate::self_files::edit_allowed_file(
+                    app_handle, path, old_str, new_str, replace_all,
+                ) {
+                    Ok(outcome) => {
+                        log::info!(
+                            "[edit_file] {} ({} replacement{})",
+                            outcome.path,
+                            outcome.replacements,
+                            if outcome.replacements == 1 { "" } else { "s" }
+                        );
+
+                        // Structured event for frontend diff viewer / file tree.
+                        let _ = app_handle.emit("file-edited", &outcome);
+
+                        format!(
+                            "Edited `{}` ({} replacement{}).\n\n```diff\n{}\n```",
+                            outcome.path,
+                            outcome.replacements,
+                            if outcome.replacements == 1 { "" } else { "s" },
+                            outcome.unified_diff
+                        )
+                    }
+                    Err(e) => format!("Error: {}", e),
+                }
             }
             _ => format!("Unknown tool: {}", function_name),
         }

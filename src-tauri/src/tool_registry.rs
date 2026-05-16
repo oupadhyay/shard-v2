@@ -65,6 +65,9 @@ const GLOBAL_TOOLS: &[&str] = &[
     "youtube_transcript",
     "run_python",
     "wake_me_up_in",
+    // Self-awareness: read + edit Shard's own files (allow-listed)
+    "read_file",
+    "edit_file",
 ];
 
 impl Default for ToolRegistry {
@@ -396,21 +399,55 @@ impl ToolRegistry {
             parallel: false, cache_ttl: None, draft: false, strict: Some(true)
         );
 
-        // ── Heartbeat-only (draft-gated) tools ───────────────────────────
+        // ── Self-awareness: read an allow-listed file ────────────────────
         register!(
-            "edit_config", "automation",
-            "Edit Shard's configuration values. Can change the selected model, toggle features, or update settings. This is a high-risk action that requires user approval.",
+            "read_file", "automation",
+            "Read the contents of an allow-listed Shard file (e.g. 'config.toml'). Returns the file contents verbatim. API-key fields are stripped on save and never present in config.toml. Call this BEFORE edit_file so you know the exact current text — `edit_file` requires an exact `old_str` substring match.",
             json!({
                 "type": "object",
                 "properties": {
-                    "key": { "type": "string", "description": "Configuration key to modify (e.g. 'selected_model', 'enable_tools', 'research_mode')" },
-                    "value": { "type": "string", "description": "New value for the configuration key" }
+                    "path": {
+                        "type": "string",
+                        "description": "Allow-listed file path. Currently allowed: 'config.toml' (Shard's runtime configuration)."
+                    }
                 },
-                "required": ["key", "value"],
+                "required": ["path"],
                 "additionalProperties": false
             }),
-            parallel: false, cache_ttl: None, draft: true, strict: Some(true)
+            parallel: true, cache_ttl: None, draft: false, strict: Some(true)
         );
+
+        // ── Self-awareness: edit an allow-listed file ────────────────────
+        register!(
+            "edit_file", "automation",
+            "Edit an allow-listed Shard file by replacing `old_str` with `new_str`. Currently allow-listed: 'config.toml' only. `old_str` MUST be an exact substring of the file (whitespace included) and unique unless `replace_all=true`. Returns a unified diff of the change; the frontend renders this as a diff viewer. Refuses any edit that touches API-key fields.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Allow-listed file path. Currently allowed: 'config.toml'."
+                    },
+                    "old_str": {
+                        "type": "string",
+                        "description": "Exact text to replace. Must occur verbatim in the file. If empty and the file is empty, the file is created with `new_str`."
+                    },
+                    "new_str": {
+                        "type": "string",
+                        "description": "Replacement text. May be empty (to delete `old_str`)."
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "If true, replace every occurrence of `old_str`. Default false; in that case `old_str` must be unique."
+                    }
+                },
+                "required": ["path", "old_str", "new_str", "replace_all"],
+                "additionalProperties": false
+            }),
+            parallel: false, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        // ── Heartbeat-only (draft-gated) tools ───────────────────────────
 
         register!(
             "create_heartbeat", "automation",

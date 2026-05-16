@@ -25,7 +25,8 @@ mod tests {
         assert!(reg.get("list_personas").is_some());
         assert!(reg.get("run_python").is_some());
         assert!(reg.get("wake_me_up_in").is_some());
-        assert!(reg.get("edit_config").is_some());
+        assert!(reg.get("read_file").is_some());
+        assert!(reg.get("edit_file").is_some());
         assert!(reg.get("create_heartbeat").is_some());
         assert!(reg.get("delete_heartbeat").is_some());
         assert!(reg.get("edit_heartbeat").is_some());
@@ -43,11 +44,14 @@ mod tests {
         let defs = reg.get_definitions(&[]);
         let names: Vec<String> = defs.iter().map(|d| d.function.name.clone()).collect();
 
-        // Draft-gated tools should NOT appear in normal definitions
-        assert!(!names.contains(&"edit_config".to_string()));
+        // Heartbeat-only draft-gated tools should NOT appear in normal definitions
         assert!(!names.contains(&"create_heartbeat".to_string()));
         assert!(!names.contains(&"delete_heartbeat".to_string()));
         assert!(!names.contains(&"edit_heartbeat".to_string()));
+
+        // Self-awareness file tools are global (non-draft) and available in chat
+        assert!(names.contains(&"read_file".to_string()));
+        assert!(names.contains(&"edit_file".to_string()));
 
         // Global tools should appear
         assert!(names.contains(&"web_search".to_string()));
@@ -73,11 +77,14 @@ mod tests {
         let defs = reg.get_heartbeat_definitions(&[]);
         let names: Vec<String> = defs.iter().map(|d| d.function.name.clone()).collect();
 
-        // Draft-gated tools should appear in heartbeat definitions
-        assert!(names.contains(&"edit_config".to_string()));
+        // Draft-gated heartbeat tools should appear in heartbeat definitions
         assert!(names.contains(&"create_heartbeat".to_string()));
         assert!(names.contains(&"delete_heartbeat".to_string()));
         assert!(names.contains(&"edit_heartbeat".to_string()));
+
+        // Self-awareness file tools also available in heartbeat mode
+        assert!(names.contains(&"read_file".to_string()));
+        assert!(names.contains(&"edit_file".to_string()));
 
         // Plus global tools
         assert!(names.contains(&"web_search".to_string()));
@@ -177,10 +184,13 @@ mod tests {
     fn test_is_draft_gated() {
         let reg = ToolRegistry::new();
 
-        assert!(reg.is_draft_gated("edit_config"));
         assert!(reg.is_draft_gated("create_heartbeat"));
         assert!(reg.is_draft_gated("delete_heartbeat"));
         assert!(reg.is_draft_gated("edit_heartbeat"));
+
+        // Self-awareness file tools are NOT draft-gated (user is present in chat)
+        assert!(!reg.is_draft_gated("edit_file"));
+        assert!(!reg.is_draft_gated("read_file"));
 
         assert!(!reg.is_draft_gated("web_search"));
         assert!(!reg.is_draft_gated("save_memory"));

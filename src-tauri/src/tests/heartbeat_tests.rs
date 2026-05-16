@@ -336,11 +336,16 @@ fn test_load_heartbeat_specs_from_directory() {
 fn test_is_draft_gated() {
     let reg = crate::tool_registry::global();
 
-    // High-risk tools should be gated
-    assert!(reg.is_draft_gated("edit_config"));
+    // High-risk heartbeat-mutation tools should be gated
     assert!(reg.is_draft_gated("create_heartbeat"));
     assert!(reg.is_draft_gated("delete_heartbeat"));
     assert!(reg.is_draft_gated("edit_heartbeat"));
+
+    // Self-awareness file tools are NOT draft-gated — exposed in chat
+    // (Part 1 of "Make Shard self-aware". Heartbeat-side gating for the
+    // generic edit_file tool will be revisited in a later TODO part.)
+    assert!(!reg.is_draft_gated("edit_file"));
+    assert!(!reg.is_draft_gated("read_file"));
 
     // Safe tools should NOT be gated
     assert!(!reg.is_draft_gated("web_search"));
@@ -383,11 +388,14 @@ fn test_heartbeat_tools_include_draft_gated() {
     assert!(tool_names.contains(&"save_memory"));
     assert!(tool_names.contains(&"wake_me_up_in"));
 
-    // Should also include draft-gated tools
-    assert!(tool_names.contains(&"edit_config"));
+    // Should also include draft-gated heartbeat-mutation tools
     assert!(tool_names.contains(&"create_heartbeat"));
     assert!(tool_names.contains(&"delete_heartbeat"));
     assert!(tool_names.contains(&"edit_heartbeat"));
+
+    // Self-awareness file tools are global, so also present here
+    assert!(tool_names.contains(&"read_file"));
+    assert!(tool_names.contains(&"edit_file"));
 }
 
 #[test]

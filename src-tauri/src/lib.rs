@@ -28,6 +28,7 @@ mod prompts;
 pub mod retrieval;
 mod sandbox;
 mod secrets;
+pub mod self_files;
 pub mod sessions;
 pub mod tool_registry;
 pub mod vector_store;

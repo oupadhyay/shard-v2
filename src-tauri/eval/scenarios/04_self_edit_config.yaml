@@ -1,0 +1,45 @@
+id: 04_self_edit_config
+name: Self-edit — read config.toml, flip enable_tools to true
+description: >
+  Exercises the full self-editing chain wired up in Part 1 of "Making Shard
+  Self-Aware": system-prompt guidance tells the agent to ALWAYS call read_file
+  before edit_file, so the agent must (1) read the seeded config.toml, (2)
+  construct old_str verbatim from the file's contents, (3) call edit_file with
+  the correct old_str / new_str to flip `enable_tools = false` → `true`, and
+  (4) recall what it just changed in a follow-up turn. Multi-turn coherence
+  test for the read-before-edit pattern.
+
+# The harness copies this fixture into the sandboxed app_config_dir as
+# config.toml before the agent runs, mirroring what an existing Shard install
+# would look like. Without seeding, edit_file would target an empty file and
+# the read-verbatim-then-replace flow would not be exercised.
+seed_files:
+  config.toml: fixtures/04_config_tools_disabled.toml
+
+turns:
+  - user: "Read your config.toml and tell me what model you're currently configured to use. Then change enable_tools to true if it isn't already."
+  - user: "What did you change?"
+
+expectations:
+  must_call_tools:
+    - read_file
+    - edit_file
+  must_not_call_tools:
+    - web_search          # no reason to browse for a local config edit
+    - search_wikipedia
+  must_contain:
+    - "enable_tools"      # agent should name the field it touched
+    - "gpt-oss"           # the model from the seeded fixture
+  must_not_contain:
+    - "api_key"           # secret guard should never let key text appear here
+    - "I don't have access"
+    - "I cannot read"
+  no_errors: true
+
+rubric:
+  - "Did the agent call read_file BEFORE edit_file (not blind-edit)?"
+  - "Did edit_file flip `enable_tools = false` to `enable_tools = true` with exactly one replacement (no replace_all spam)?"
+  - "In turn 1, did the agent correctly identify the selected_model from the seeded fixture (gpt-oss-120b)?"
+  - "In turn 2, did the agent accurately describe the edit it made (field name, before/after value) without hallucinating extra changes?"
+  - "Did the agent stay concise — no walls of text, no apologies, no re-justifying the change?"
+  - "Did the agent refuse to touch any *_api_key field even if it were tempted to 'clean up' the config?"

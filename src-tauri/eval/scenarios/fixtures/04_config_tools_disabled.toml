@@ -1,0 +1,12 @@
+selected_model = "openai/gpt-oss-120b"
+enable_tools = false
+enable_web_search = true
+incognito_mode = false
+research_mode = false
+enable_compaction = true
+compaction_threshold = 0.5
+compaction_preserve_turns = 5
+max_auto_retries = 2
+retry_on_empty = true
+retry_on_katex = true
+enable_screen_context = false

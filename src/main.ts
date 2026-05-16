@@ -40,6 +40,8 @@ import {
   populateModelDropdown,
   formatSessionDate,
   logger,
+  mountDiffViewer,
+  type EditOutcome,
 } from "./ui";
 
 // DOM Elements
@@ -50,6 +52,17 @@ const trashBtn = document.getElementById("trash-btn") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
 const stopBtn = document.getElementById("stop-btn") as HTMLButtonElement;
 const breakoutBtn = document.getElementById("breakout-btn") as HTMLButtonElement;
+
+// Diff viewer: mount once into the chat-area's parent so the panel sits
+// between messages and the input bar without being scrolled by the chat log.
+// Listens for `file-edited` events from the backend self_files module.
+const diffHost = chatArea.parentElement ?? document.body;
+const diffViewer = mountDiffViewer(diffHost);
+// Position it visually above the chat (it will appear right under the chat
+// area in DOM order; the existing flex layout keeps it pinned above the input).
+listen<EditOutcome>(EVENTS.FILE_EDITED, (event) => {
+  diffViewer.addOrUpdate(event.payload);
+});
 
 // Breakout button: fade-out ambient panel, then open dedicated window
 breakoutBtn?.addEventListener("click", async () => {
