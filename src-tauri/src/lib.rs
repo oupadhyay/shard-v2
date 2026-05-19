@@ -12,6 +12,7 @@ pub mod agent;
 mod background;
 mod cache;
 pub mod dedup;
+pub mod file_history;
 pub mod compaction;
 pub mod config;
 pub mod context;
@@ -729,7 +730,14 @@ pub fn run() {
                 crate::webhook::start_webhook_server(webhook_handle).await;
             });
 
-            let agent = Arc::new(Agent::new(app.handle().clone()));
+            // Phase 1.1 / 2.1 — agent constructed with default hooks, then
+            // we register cross-cutting hooks (e.g. file-history error
+            // attribution) before sealing it into an Arc.
+            let mut agent_init = Agent::new(app.handle().clone());
+            agent_init.register_hook(
+                agent::hooks::file_history_hook::FileHistoryHook::new(app.handle().clone()),
+            );
+            let agent = Arc::new(agent_init);
             // Initialize memory store cache
             let memory_store = Arc::new(RwLock::new(None));
             // Load memories immediately

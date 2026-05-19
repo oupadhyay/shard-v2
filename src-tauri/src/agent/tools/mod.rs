@@ -649,6 +649,62 @@ impl<R: tauri::Runtime> Agent<R> {
                     Err(e) => format!("Error: {}", e),
                 }
             }
+            "rollback_self_edit" => {
+                let path = args["path"].as_str().unwrap_or_default();
+                let event_id = args["event_id"].as_str().filter(|s| !s.is_empty());
+                if let Err(e) = crate::self_files::validate_logical_path(path) {
+                    format!("Error: {}", e)
+                } else {
+                    let store = match crate::memories::get_vector_store(app_handle) {
+                        Ok(s) => s,
+                        Err(e) => return format!("Error: vector store unavailable: {}", e),
+                    };
+                    match crate::file_history::rollback_event(&store, path, event_id) {
+                        Ok((reverted_id, len)) => {
+                            // Emit a `file-edited` event so the diff viewer
+                            // adds a tab for the revert (with a sentinel diff
+                            // indicating the original edit's id).
+                            let _ = app_handle.emit(
+                                "file-edited",
+                                serde_json::json!({
+                                    "path": path,
+                                    "abs_path": "",
+                                    "before": "",
+                                    "after": "",
+                                    "unified_diff": format!("(rolled back to event {})", reverted_id),
+                                    "replacements": 0_usize,
+                                }),
+                            );
+                            format!(
+                                "Rolled back `{}` to event `{}` ({} bytes restored).",
+                                path, reverted_id, len
+                            )
+                        }
+                        Err(e) => format!("Error: {}", e),
+                    }
+                }
+            }
+            "file_history" => {
+                let path = args["path"].as_str().unwrap_or_default();
+                let limit = args["limit"]
+                    .as_u64()
+                    .map(|n| n.clamp(1, 50) as usize)
+                    .unwrap_or(10);
+                // Validate the path via the same allow-list as read/edit so
+                // the agent can't probe arbitrary file logs.
+                if let Err(e) = crate::self_files::validate_logical_path(path) {
+                    format!("Error: {}", e)
+                } else {
+                    let store = match crate::memories::get_vector_store(app_handle) {
+                        Ok(s) => s,
+                        Err(e) => return format!("Error: vector store unavailable: {}", e),
+                    };
+                    match crate::file_history::summarize(&store, path, limit) {
+                        Ok(summary) => summary,
+                        Err(e) => format!("Error: {}", e),
+                    }
+                }
+            }
             _ => format!("Unknown tool: {}", function_name),
         }
     }

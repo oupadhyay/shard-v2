@@ -174,3 +174,35 @@ CREATE TABLE IF NOT EXISTS dedup_window (
 );
 
 CREATE INDEX IF NOT EXISTS idx_dedup_seen ON dedup_window(last_seen);
+
+-- ============================================================================
+-- Phase 2.1 — File-centric memory
+-- ============================================================================
+-- Per-file event log used by the `file_history` tool to surface "you've
+-- edited this 4 times in 7d, last edit was followed by a test failure" before
+-- the agent does another `edit_file`. Lightweight: write-once rows, no FTS,
+-- no embeddings. Errors that show up within a short window after an edit are
+-- back-filled by the post-tool lifecycle hook.
+
+CREATE TABLE IF NOT EXISTS file_events (
+    id TEXT PRIMARY KEY,
+    logical_path TEXT NOT NULL,
+    abs_path TEXT NOT NULL,
+    event_kind TEXT NOT NULL CHECK(event_kind IN ('read','edit','revert','snapshot')),
+    session_id TEXT,
+    before_hash TEXT,
+    after_hash TEXT,
+    -- Phase 2.3: optional snapshot of the pre-edit content so `rollback_self_edit`
+    -- can restore the file without a separate git store. Capped to ~64KB at
+    -- insertion (see file_history::SNAPSHOT_SIZE_CAP); large files just lose
+    -- per-event rollback (snapshot stays NULL).
+    before_content TEXT,
+    unified_diff TEXT,
+    followed_by_error TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_events_path
+    ON file_events(logical_path, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_file_events_recent
+    ON file_events(created_at DESC);

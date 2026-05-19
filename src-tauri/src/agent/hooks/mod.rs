@@ -17,6 +17,8 @@
 //! `catch_unwind` at the dispatcher (see `dispatch_*` helpers) so one
 //! misbehaving hook can never abort an agent turn.
 
+pub mod file_history_hook;
+
 use serde_json::Value;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;

@@ -111,6 +111,27 @@ impl VectorStore {
             "CREATE INDEX IF NOT EXISTS idx_obs_decay ON observations(decay_score, deleted_at);",
         )?;
 
+        // Phase 2.3: snapshot-for-rollback column on file_events.
+        Self::ensure_column(&conn, "file_events", "before_content", "TEXT")?;
+
+        // Phase 2.2 additive migrations: typed edges + temporal validity.
+        // `edge_kind` is nullable — NULL means legacy 'derived' edge so old
+        // queries keep working. `tvalid_start`/`tvalid_end` enable
+        // supersede/causal-chain queries.
+        Self::ensure_column(&conn, "observations", "edge_kind", "TEXT")?;
+        Self::ensure_column(&conn, "observations", "tvalid_start", "TEXT")?;
+        Self::ensure_column(&conn, "observations", "tvalid_end", "TEXT")?;
+        // Backfill: legacy rows are valid starting from when they were
+        // created, with no end.
+        conn.execute(
+            "UPDATE observations SET tvalid_start = created_at WHERE tvalid_start IS NULL",
+            [],
+        )?;
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_obs_edge ON observations(edge_kind);\n\
+             CREATE INDEX IF NOT EXISTS idx_obs_tvalid ON observations(tvalid_end);",
+        )?;
+
         // Phase 1.3: drop+recreate the obs_fts_au trigger so existing
         // databases pick up the narrowed `AFTER UPDATE OF content` scope.
         // Without this, every decay_score UPDATE triggers a full FTS5 row

@@ -27,3 +27,6 @@ mod steps_schema_tests;
 mod agent_hooks_tests;
 mod dedup_tests;
 mod decay_tests;
+mod file_history_tests;
+mod typed_edges_tests;
+mod rollback_tests;

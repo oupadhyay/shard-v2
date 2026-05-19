@@ -142,3 +142,7 @@ harness = false
 [[bench]]
 name = "dedup_bench"
 harness = false
+
+[[bench]]
+name = "file_history_bench"
+harness = false

@@ -81,15 +81,48 @@ pub fn resolve_allowed_path<R: Runtime>(
 
 /// Read the contents of an allow-listed file. Creates an empty file if the
 /// target doesn't exist yet (matches normal config.toml-load behaviour).
+///
+/// Phase 2.1: records a `read` event in `file_events` so the `file_history`
+/// tool can reason about access cadence. Failures recording the event are
+/// non-fatal — the read result is still returned to the agent.
 pub fn read_allowed_file<R: Runtime>(
     app_handle: &AppHandle<R>,
     logical: &str,
 ) -> Result<String, String> {
     let abs = resolve_allowed_path(app_handle, logical)?;
-    if !abs.exists() {
-        return Ok(String::new());
+    let contents = if !abs.exists() {
+        String::new()
+    } else {
+        fs::read_to_string(&abs).map_err(|e| format!("Failed to read {}: {}", abs.display(), e))?
+    };
+
+    if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+        let session_id = current_session_id(app_handle);
+        let _ = crate::file_history::record_read(
+            &store,
+            crate::file_history::RecordRead {
+                logical_path: logical,
+                abs_path: &abs.display().to_string(),
+                content: &contents,
+                session_id: session_id.as_deref(),
+            },
+        );
     }
-    fs::read_to_string(&abs).map_err(|e| format!("Failed to read {}: {}", abs.display(), e))
+
+    Ok(contents)
+}
+
+/// Best-effort current session id for file_event attribution.
+/// Returns `None` if the agent state isn't available (e.g. during eval).
+fn current_session_id<R: Runtime>(app_handle: &AppHandle<R>) -> Option<String> {
+    use tauri::Manager;
+    let state = app_handle.try_state::<crate::AppState>()?;
+    // We can't block on a tokio Mutex from sync code; clone the agent and
+    // try a non-blocking lock. If contended, fall back to None — file_history
+    // session attribution is best-effort.
+    let agent = state.agent.clone();
+    let sid = agent.session_id.try_lock().ok().map(|g| g.clone());
+    sid
 }
 
 /// Apply an old_str -> new_str edit to an allow-listed file. Returns a
@@ -127,6 +160,25 @@ pub fn edit_allowed_file<R: Runtime>(
     fs::write(&abs, &after).map_err(|e| format!("Failed to write {}: {}", abs.display(), e))?;
 
     let unified_diff = unified_diff(&before, &after, logical);
+
+    // Phase 2.1: log to file_events so file_history / post-tool hooks can
+    // reason about cadence and error attribution. Best-effort — failures
+    // never block the edit from returning success.
+    if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+        let session_id = current_session_id(app_handle);
+        let abs_str = abs.display().to_string();
+        let _ = crate::file_history::record_edit(
+            &store,
+            crate::file_history::RecordEdit {
+                logical_path: logical,
+                abs_path: &abs_str,
+                before: &before,
+                after: &after,
+                unified_diff: &unified_diff,
+                session_id: session_id.as_deref(),
+            },
+        );
+    }
 
     Ok(EditOutcome {
         path: logical.to_string(),

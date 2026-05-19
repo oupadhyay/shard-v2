@@ -68,6 +68,8 @@ const GLOBAL_TOOLS: &[&str] = &[
     // Self-awareness: read + edit Shard's own files (allow-listed)
     "read_file",
     "edit_file",
+    "file_history",
+    "rollback_self_edit",
 ];
 
 impl Default for ToolRegistry {
@@ -445,6 +447,50 @@ impl ToolRegistry {
                 "additionalProperties": false
             }),
             parallel: false, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        // ── Self-awareness: file history (read-only, safe) ───────────────
+        register!(
+            "file_history", "automation",
+            "Return prior read/edit/revert/snapshot events for an allow-listed Shard file. Call this BEFORE editing a non-trivial file so you can see prior diffs, edit cadence, and whether earlier edits were followed by tool errors. Returns Markdown with a one-line summary, optional ⚠️ caution if prior edits caused errors, and the most recent events (with diffs).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Allow-listed file path (same names as read_file/edit_file). Currently: 'config.toml'."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum events to return (default 10, max 50). Most recent first."
+                    }
+                },
+                "required": ["path", "limit"],
+                "additionalProperties": false
+            }),
+            parallel: true, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        // ── Self-awareness: rollback (restorative, draft-gated for cron) ─
+        register!(
+            "rollback_self_edit", "automation",
+            "Restore an allow-listed file to its pre-edit state. Looks up the most recent restorable edit for `path` in file_events (or the specific `event_id` if supplied) and writes the stored snapshot back. Records a `revert` event for auditability. Use this when a recent edit caused a tool error you can see in file_history. Returns the reverted event id and new file length.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Allow-listed file path (same names as read_file/edit_file). Currently: 'config.toml'."
+                    },
+                    "event_id": {
+                        "type": "string",
+                        "description": "Optional specific file_events.id to roll back to. When omitted, rolls back the most recent restorable edit."
+                    }
+                },
+                "required": ["path", "event_id"],
+                "additionalProperties": false
+            }),
+            parallel: false, cache_ttl: None, draft: true, strict: Some(true)
         );
 
         // ── Heartbeat-only (draft-gated) tools ───────────────────────────
