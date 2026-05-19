@@ -265,6 +265,13 @@ impl<R: tauri::Runtime> Agent<R> {
                     (threshold_pct * 100.0) as u32
                 );
 
+                // Phase 1.1 — pre-compaction lifecycle hook. Lets registered
+                // hooks (e.g. Phase 3 action-frontier preservation) capture
+                // current state before pre_compaction_flush rewrites history.
+                let session_id_for_hook = self.session_id.lock().await.clone();
+                self.hooks
+                    .dispatch_pre_compact(&session_id_for_hook, current_tokens);
+
                 // Emit compaction event for UI feedback
                 let compaction_event = serde_json::json!({
                     "status": "starting",

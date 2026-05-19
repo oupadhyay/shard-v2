@@ -11,6 +11,7 @@ static CANCELLED_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 pub mod agent;
 mod background;
 mod cache;
+pub mod dedup;
 pub mod compaction;
 pub mod config;
 pub mod context;

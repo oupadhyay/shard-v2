@@ -134,3 +134,11 @@ harness = false
 [[bench]]
 name = "embedding_optimization_bench"
 harness = false
+
+[[bench]]
+name = "hooks_bench"
+harness = false
+
+[[bench]]
+name = "dedup_bench"
+harness = false

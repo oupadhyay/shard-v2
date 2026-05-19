@@ -138,7 +138,11 @@ CREATE TRIGGER IF NOT EXISTS obs_fts_ad AFTER DELETE ON observations BEGIN
   DELETE FROM observations_fts WHERE observation_id = old.id;
 END;
 
-CREATE TRIGGER IF NOT EXISTS obs_fts_au AFTER UPDATE ON observations BEGIN
+-- Phase 1.3: scope this trigger to UPDATEs of `content` only. Decay-related
+-- writes (`decay_score`, `last_accessed`, `deleted_at`) happen for every
+-- observation on every sweep and don't change the searchable text — letting
+-- this trigger reindex FTS5 anyway turned a 10k-row sweep into a ~11 s job.
+CREATE TRIGGER IF NOT EXISTS obs_fts_au AFTER UPDATE OF content ON observations BEGIN
   UPDATE observations_fts SET content = new.content WHERE observation_id = old.id;
 END;
 
@@ -151,3 +155,22 @@ CREATE TABLE IF NOT EXISTS peer_cards (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (observer, observed)
 );
+
+-- ============================================================================
+-- Phase 1.2 — SHA-256 dedup window
+-- ============================================================================
+-- Short-lived content-hash registry used to skip re-storing the same
+-- observation or tool result when the agent revisits a fact within a small
+-- time window (default 5 min). Hot-path reads are served by an in-memory
+-- HashMap in dedup.rs; this table is the durable mirror.
+
+CREATE TABLE IF NOT EXISTS dedup_window (
+    content_hash TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('observation','tool_result')),
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    hit_count INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (content_hash, kind)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dedup_seen ON dedup_window(last_seen);

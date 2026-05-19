@@ -33,12 +33,54 @@ impl<R: tauri::Runtime> Agent<R> {
         args: &Value,
         config: &crate::config::AppConfig,
     ) -> String {
+        // Phase 1.1 — pre-tool-use lifecycle hook. Hooks can short-circuit with
+        // a synthetic result (`Replace`) or refuse the call (`Abort`).
+        let invocation = super::hooks::ToolInvocation {
+            name: function_name,
+            args,
+            call_id: None,
+        };
+        match self.hooks.dispatch_pre_tool(&invocation) {
+            super::hooks::HookOutcome::Continue => {}
+            super::hooks::HookOutcome::Replace(replacement) => {
+                let outcome = super::hooks::ToolOutcome {
+                    name: function_name,
+                    args,
+                    call_id: None,
+                    result: &replacement,
+                    is_error: false,
+                };
+                self.hooks.dispatch_post_tool(&outcome);
+                return replacement;
+            }
+            super::hooks::HookOutcome::Abort(reason) => {
+                let err = format!("Error: {}", reason);
+                let outcome = super::hooks::ToolOutcome {
+                    name: function_name,
+                    args,
+                    call_id: None,
+                    result: &err,
+                    is_error: true,
+                };
+                self.hooks.dispatch_post_tool(&outcome);
+                return err;
+            }
+        }
+
         // Check cache first for cacheable tools
         if let Some(cached) = crate::cache::get_cached_result(app_handle, function_name, args) {
             log::info!(
                 "[Tool] Cache HIT for {} - returning cached result",
                 function_name
             );
+            let outcome = super::hooks::ToolOutcome {
+                name: function_name,
+                args,
+                call_id: None,
+                result: &cached,
+                is_error: false,
+            };
+            self.hooks.dispatch_post_tool(&outcome);
             return cached;
         }
 
@@ -50,6 +92,15 @@ impl<R: tauri::Runtime> Agent<R> {
         if !result.starts_with("Error") {
             crate::cache::cache_result(app_handle, function_name, args, &result);
         }
+
+        let outcome = super::hooks::ToolOutcome {
+            name: function_name,
+            args,
+            call_id: None,
+            result: &result,
+            is_error: result.starts_with("Error"),
+        };
+        self.hooks.dispatch_post_tool(&outcome);
 
         result
     }

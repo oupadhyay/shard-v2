@@ -92,9 +92,66 @@ impl VectorStore {
         // Initialize schema
         conn.execute_batch(include_str!("schema.sql"))?;
 
+        // Phase 1.3 additive migrations: add decay columns to `observations` if
+        // they aren't already present. `ALTER TABLE ... ADD COLUMN` errors if the
+        // column exists, so we guard with `pragma_table_info`.
+        Self::ensure_column(&conn, "observations", "last_accessed", "TEXT")?;
+        Self::ensure_column(
+            &conn,
+            "observations",
+            "decay_score",
+            "REAL NOT NULL DEFAULT 1.0",
+        )?;
+        // Backfill last_accessed for legacy rows on first run.
+        conn.execute(
+            "UPDATE observations SET last_accessed = created_at WHERE last_accessed IS NULL",
+            [],
+        )?;
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_obs_decay ON observations(decay_score, deleted_at);",
+        )?;
+
+        // Phase 1.3: drop+recreate the obs_fts_au trigger so existing
+        // databases pick up the narrowed `AFTER UPDATE OF content` scope.
+        // Without this, every decay_score UPDATE triggers a full FTS5 row
+        // rewrite — turning a 10k-row sweep into an 11-second job. The
+        // CREATE here mirrors schema.sql exactly.
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS obs_fts_au;\n\
+             CREATE TRIGGER IF NOT EXISTS obs_fts_au \
+                AFTER UPDATE OF content ON observations BEGIN \
+                  UPDATE observations_fts SET content = new.content \
+                  WHERE observation_id = old.id; \
+                END;",
+        )?;
+
         log::info!("[VectorStore] Opened database at {:?}", db_path);
 
         Ok(Self { conn })
+    }
+
+    /// Idempotent `ALTER TABLE ... ADD COLUMN`. Skips if the column already
+    /// exists. Used for additive Phase 1+ migrations on the `observations`
+    /// table without requiring a full migration framework.
+    fn ensure_column(
+        conn: &Connection,
+        table: &str,
+        column: &str,
+        decl: &str,
+    ) -> Result<(), VectorStoreError> {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+        let existing: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if existing.iter().any(|c| c == column) {
+            return Ok(());
+        }
+        conn.execute(
+            &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, decl),
+            [],
+        )?;
+        Ok(())
     }
 
     /// Execute a closure within a single SQLite transaction.

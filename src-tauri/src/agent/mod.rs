@@ -21,6 +21,7 @@
  */
 mod gemini;
 mod hash;
+pub mod hooks;
 pub(crate) mod openrouter;
 mod process;
 mod research;
@@ -80,6 +81,9 @@ pub struct Agent<R: tauri::Runtime = tauri::Wry> {
     pub session_id: Mutex<String>,
     pub last_archived_hash: Mutex<u64>,
     pub app_handle: tauri::AppHandle<R>,
+    /// Phase 1.1 — Lifecycle hooks. Registered once at construction; dispatch
+    /// is lock-free on the hot path. See [`hooks::LifecycleHooks`].
+    pub hooks: hooks::HookRegistry,
 }
 
 impl<R: tauri::Runtime> Agent<R> {
@@ -161,6 +165,13 @@ impl<R: tauri::Runtime> Agent<R> {
             session_id: Mutex::new(session_id),
             last_archived_hash: Mutex::new(last_archived_hash),
             app_handle,
+            hooks: hooks::HookRegistry::new(),
         }
+    }
+
+    /// Register a lifecycle hook. Intended to be called at construction time
+    /// before any agent turns start; the registry is not synchronized.
+    pub fn register_hook(&mut self, hook: std::sync::Arc<dyn hooks::LifecycleHooks>) {
+        self.hooks.push(hook);
     }
 }

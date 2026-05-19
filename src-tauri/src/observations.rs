@@ -9,10 +9,12 @@
 //! - `Inductive`: Patterns identified across multiple observations
 //! - `Contradiction`: Flagged conflicts between observations
 
+use crate::dedup::{is_duplicate, DedupKind, DEFAULT_WINDOW_SECS};
 use crate::vector_store::{compute_content_hash, VectorStore};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::time::Duration;
 
 // ============================================================================
 // Types
@@ -135,6 +137,32 @@ pub fn insert_observation(
     }
 
     Ok(())
+}
+
+/// Insert an observation only if its content hash has not been seen by the
+/// dedup window in the last `DEFAULT_WINDOW_SECS` seconds. Returns `true`
+/// when an insert actually happened, `false` when the dedup window
+/// suppressed it.
+///
+/// Phase 1.2 wrapper around [`insert_observation`]. Existing call sites can
+/// migrate incrementally; the underlying primitive remains usable when a
+/// caller explicitly wants to bypass dedup (e.g. background re-derivation
+/// jobs that re-record an existing fact intentionally).
+pub fn insert_observation_dedup(
+    store: &VectorStore,
+    obs: &Observation,
+    embedding: Option<&[f32]>,
+) -> Result<bool, String> {
+    if is_duplicate(
+        store,
+        &obs.content_hash,
+        DedupKind::Observation,
+        Duration::from_secs(DEFAULT_WINDOW_SECS),
+    ) {
+        return Ok(false);
+    }
+    insert_observation(store, obs, embedding)?;
+    Ok(true)
 }
 
 /// Soft-delete an observation (set deleted_at timestamp).
@@ -526,6 +554,182 @@ fn sanitize_fts5_query(query: &str) -> String {
     }
     // Collapse whitespace and trim
     result.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+// ============================================================================
+// Phase 1.3 — Decay & eviction
+// ============================================================================
+//
+// Each observation carries a `decay_score` in [0.0, 1.0] that decays on an
+// Ebbinghaus-style curve with a 15-day half-life, modulated upward by
+// `times_derived`. Access (`touch_observation`) reinforces the score with a
+// 1.0 ceiling. `decay_sweep` soft-deletes rows below `evict_threshold` and
+// (optionally) hard-deletes already-soft-deleted rows older than the grace
+// period. All math lives in pure helpers so the curve can be unit-tested
+// without a SQLite round-trip.
+
+/// Half-life in days for the Ebbinghaus decay curve.
+pub const DECAY_HALF_LIFE_DAYS: f32 = 15.0;
+/// Score below which an observation is a candidate for soft-deletion.
+pub const DEFAULT_EVICT_THRESHOLD: f32 = 0.05;
+/// Reinforcement boost applied per `touch_observation` call.
+const TOUCH_BOOST: f32 = 0.25;
+
+/// Pure decay function: returns the score for a fresh observation aged
+/// `age_days` with `times_derived` derivations. Independent of SQLite so it
+/// can be unit-tested.
+pub fn decay_score(age_days: f32, times_derived: u32) -> f32 {
+    if age_days <= 0.0 {
+        return 1.0;
+    }
+    let half_life = DECAY_HALF_LIFE_DAYS.max(0.001);
+    let base = (-age_days * std::f32::consts::LN_2 / half_life).exp();
+    let boost = 1.0 + (times_derived as f32 + 1.0).ln() * 0.15;
+    (base * boost).clamp(0.0, 1.0)
+}
+
+/// Bump `last_accessed` to now and reinforce `decay_score` (capped at 1.0).
+/// Returns the new score, or `None` if the observation is missing/deleted.
+pub fn touch_observation(store: &VectorStore, id: &str) -> Result<Option<f32>, String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let existing: Option<f32> = store
+        .conn
+        .query_row(
+            "SELECT decay_score FROM observations WHERE id = ? AND deleted_at IS NULL",
+            params![id],
+            |row| row.get::<_, f64>(0).map(|v| v as f32),
+        )
+        .optional()
+        .map_err(|e| format!("touch lookup failed: {}", e))?;
+
+    let Some(prev) = existing else {
+        return Ok(None);
+    };
+    let next = (prev + TOUCH_BOOST).clamp(0.0, 1.0);
+    store
+        .conn
+        .execute(
+            "UPDATE observations SET last_accessed = ?, decay_score = ? WHERE id = ?",
+            params![now, next as f64, id],
+        )
+        .map_err(|e| format!("touch update failed: {}", e))?;
+    Ok(Some(next))
+}
+
+/// Recompute `decay_score` for every live observation based on age and
+/// `times_derived`. Returns the number of rows updated.
+///
+/// The curve is computed in Rust (rather than SQL `exp()`/`log()`) so we
+/// don't have to depend on `SQLITE_ENABLE_MATH_FUNCTIONS`, which isn't
+/// enabled by default in the bundled rusqlite build. Performed inside a
+/// single transaction so a 10k-row sweep still completes in <50 ms.
+pub fn recompute_decay(store: &VectorStore) -> Result<usize, String> {
+    use chrono::DateTime;
+
+    let now = chrono::Utc::now();
+
+    // Snapshot the rows up front. The id/timestamp/times_derived tuple is
+    // ~64 bytes per row; 10k rows = ~640KB which is trivial.
+    let rows: Vec<(String, String, u32)> = {
+        let mut stmt = store
+            .conn
+            .prepare(
+                "SELECT id, COALESCE(last_accessed, created_at), times_derived \
+                 FROM observations WHERE deleted_at IS NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        let collected: Vec<(String, String, u32)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)? as u32,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        collected
+    };
+
+    let tx = store
+        .conn
+        .unchecked_transaction()
+        .map_err(|e| format!("recompute_decay tx begin failed: {}", e))?;
+    {
+        let mut stmt = tx
+            .prepare("UPDATE observations SET decay_score = ? WHERE id = ?")
+            .map_err(|e| e.to_string())?;
+        for (id, ts, times_derived) in &rows {
+            let age_days = DateTime::parse_from_rfc3339(ts)
+                .map(|t| {
+                    let secs = (now - t.with_timezone(&chrono::Utc))
+                        .num_milliseconds() as f32
+                        / 1000.0;
+                    (secs / 86_400.0).max(0.0)
+                })
+                .unwrap_or(0.0);
+            let score = decay_score(age_days, *times_derived);
+            stmt.execute(params![score as f64, id])
+                .map_err(|e| format!("recompute_decay update failed: {}", e))?;
+        }
+    }
+    tx.commit()
+        .map_err(|e| format!("recompute_decay tx commit failed: {}", e))?;
+    Ok(rows.len())
+}
+
+/// Soft-delete every live observation whose `decay_score` is below
+/// `threshold`. Returns the number of rows affected.
+pub fn decay_sweep(store: &VectorStore, threshold: f32) -> Result<usize, String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let n = store
+        .conn
+        .execute(
+            "UPDATE observations SET deleted_at = ? \
+             WHERE deleted_at IS NULL AND decay_score < ?",
+            params![now, threshold as f64],
+        )
+        .map_err(|e| format!("decay_sweep failed: {}", e))?;
+    Ok(n)
+}
+
+/// Hard-delete observations soft-deleted longer than `grace`. Also removes
+/// their embedding rows so vec0 doesn't accumulate dead vectors.
+pub fn hard_delete_expired(
+    store: &VectorStore,
+    grace: chrono::Duration,
+) -> Result<usize, String> {
+    let cutoff = (chrono::Utc::now() - grace).to_rfc3339();
+
+    // First collect the ids so we can also delete from observation_embeddings.
+    let ids: Vec<String> = {
+        let mut stmt = store
+            .conn
+            .prepare("SELECT id FROM observations WHERE deleted_at IS NOT NULL AND deleted_at < ?")
+            .map_err(|e| e.to_string())?;
+        let collected: Vec<String> = stmt
+            .query_map(params![cutoff], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        collected
+    };
+
+    let mut removed = 0usize;
+    for id in &ids {
+        let _ = store
+            .conn
+            .execute(
+                "DELETE FROM observation_embeddings WHERE observation_id = ?",
+                params![id],
+            );
+        removed += store
+            .conn
+            .execute("DELETE FROM observations WHERE id = ?", params![id])
+            .map_err(|e| format!("hard_delete failed: {}", e))?;
+    }
+    Ok(removed)
 }
 
 /// Create a new observation with auto-generated ID and content hash.
