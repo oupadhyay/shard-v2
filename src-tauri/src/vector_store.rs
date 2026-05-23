@@ -132,6 +132,10 @@ impl VectorStore {
              CREATE INDEX IF NOT EXISTS idx_obs_tvalid ON observations(tvalid_end);",
         )?;
 
+        // Phase 3.2: persist a per-sketch crystallisation timestamp so the
+        // background sweep doesn't reprocess the same recipe every 6h.
+        Self::ensure_column(&conn, "actions", "crystallized_at", "TEXT")?;
+
         // Phase 1.3: drop+recreate the obs_fts_au trigger so existing
         // databases pick up the narrowed `AFTER UPDATE OF content` scope.
         // Without this, every decay_score UPDATE triggers a full FTS5 row

@@ -684,6 +684,140 @@ impl<R: tauri::Runtime> Agent<R> {
                     }
                 }
             }
+            "action_plan" => {
+                let title = args["title"].as_str().unwrap_or_default();
+                let steps: Vec<&str> = args["steps"]
+                    .as_array()
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+                    .unwrap_or_default();
+                if title.is_empty() || steps.is_empty() {
+                    "Error: action_plan requires non-empty title and steps".to_string()
+                } else {
+                    let store = match crate::memories::get_vector_store(app_handle) {
+                        Ok(s) => s,
+                        Err(e) => return format!("Error: vector store unavailable: {}", e),
+                    };
+                    let session_id = self.session_id.lock().await.clone();
+                    match crate::actions::plan(&store, title, &steps, Some(&session_id)) {
+                        Ok(ids) => {
+                            serde_json::json!({
+                                "sketch_id": ids[0],
+                                "step_ids": &ids[1..],
+                                "count": steps.len(),
+                            })
+                            .to_string()
+                        }
+                        Err(e) => format!("Error: {}", e),
+                    }
+                }
+            }
+            "action_next" => {
+                let store = match crate::memories::get_vector_store(app_handle) {
+                    Ok(s) => s,
+                    Err(e) => return format!("Error: vector store unavailable: {}", e),
+                };
+                match crate::actions::frontier(&store) {
+                    Ok(Some(a)) => serde_json::json!({
+                        "id": a.id,
+                        "title": a.title,
+                        "priority": a.priority,
+                        "parent_id": a.parent_id,
+                        "deps": a.deps,
+                        "session_id": a.session_id,
+                    })
+                    .to_string(),
+                    Ok(None) => "null".to_string(),
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+            "action_complete" => {
+                let id = args["id"].as_str().unwrap_or_default();
+                let outcome = args["outcome"].as_str();
+                if id.is_empty() {
+                    "Error: action_complete requires an id".to_string()
+                } else {
+                    let store = match crate::memories::get_vector_store(app_handle) {
+                        Ok(s) => s,
+                        Err(e) => return format!("Error: vector store unavailable: {}", e),
+                    };
+                    match crate::actions::complete(&store, id, outcome) {
+                        Ok(()) => format!("Completed action {}", id),
+                        Err(e) => format!("Error: {}", e),
+                    }
+                }
+            }
+            "action_block" => {
+                let id = args["id"].as_str().unwrap_or_default();
+                let reason = args["reason"].as_str().unwrap_or("");
+                if id.is_empty() || reason.is_empty() {
+                    "Error: action_block requires id and reason".to_string()
+                } else {
+                    let store = match crate::memories::get_vector_store(app_handle) {
+                        Ok(s) => s,
+                        Err(e) => return format!("Error: vector store unavailable: {}", e),
+                    };
+                    match crate::actions::block(&store, id, reason) {
+                        Ok(()) => format!("Blocked action {}: {}", id, reason),
+                        Err(e) => format!("Error: {}", e),
+                    }
+                }
+            }
+            "crystallize_sketch" => {
+                let sketch_id = args["sketch_id"].as_str().unwrap_or_default();
+                if sketch_id.is_empty() {
+                    "Error: crystallize_sketch requires a sketch_id".to_string()
+                } else {
+                    // Pull the sketch synchronously, then drop the store so
+                    // the LLM await doesn't see a non-`Send` connection.
+                    let loaded = {
+                        let store = match crate::memories::get_vector_store(app_handle) {
+                            Ok(s) => s,
+                            Err(e) => return format!("Error: vector store unavailable: {}", e),
+                        };
+                        crate::crystals::load_sketch(&store, sketch_id)
+                    };
+                    match loaded {
+                        Err(e) => format!("Error: {}", e),
+                        Ok((parent, children)) => {
+                            let existing = crate::personas::list_available_personas();
+                            let http_client = reqwest::Client::new();
+                            match crate::crystals::crystallize(
+                                &http_client,
+                                config,
+                                &parent,
+                                &children,
+                                &existing,
+                            )
+                            .await
+                            {
+                                Ok(draft) => match crate::crystals::write_persona_draft(
+                                    app_handle, &draft,
+                                ) {
+                                    Ok(outcome) => {
+                                        if let Ok(store) =
+                                            crate::memories::get_vector_store(app_handle)
+                                        {
+                                            let _ = crate::crystals::mark_crystallized(
+                                                &store, sketch_id,
+                                            );
+                                        }
+                                        format!(
+                                            "Crystallised sketch `{}` into persona `{}` ({} bytes written to {}).\n\n```diff\n{}\n```",
+                                            sketch_id,
+                                            draft.slug,
+                                            outcome.after.len(),
+                                            outcome.abs_path,
+                                            outcome.unified_diff
+                                        )
+                                    }
+                                    Err(e) => format!("Error writing persona draft: {}", e),
+                                },
+                                Err(e) => format!("Error: {}", e),
+                            }
+                        }
+                    }
+                }
+            }
             "file_history" => {
                 let path = args["path"].as_str().unwrap_or_default();
                 let limit = args["limit"]

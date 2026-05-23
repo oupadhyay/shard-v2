@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use crate::agent::hooks::{LifecycleHooks, ToolOutcome};
-use crate::self_files::validate_logical_path;
+use crate::self_files::{classify_logical_path, AllowedPath};
 use crate::vector_store::VectorStore;
 
 /// Tools whose errors are considered diagnostic feedback for prior edits.
@@ -55,12 +55,17 @@ impl<R: tauri::Runtime> LifecycleHooks for FileHistoryHook<R> {
         // edit. For most tool calls there's only ever 0 or 1 candidate, so
         // walking the (small) allow-list is fine.
         for candidate in allow_listed_paths() {
-            if validate_logical_path(candidate).is_err() {
+            // Skip anything that no longer parses — keeps the hook tolerant
+            // of personas being renamed between turns.
+            if !matches!(
+                classify_logical_path(&candidate),
+                Ok(AllowedPath::ConfigToml) | Ok(AllowedPath::Persona { .. })
+            ) {
                 continue;
             }
             let _ = crate::file_history::attribute_error_to_recent_edits(
                 &store,
-                candidate,
+                &candidate,
                 outcome.result,
             );
         }
@@ -71,6 +76,17 @@ impl<R: tauri::Runtime> LifecycleHooks for FileHistoryHook<R> {
 /// runtime allow-list directly because [`crate::self_files`] keeps it as a
 /// match arm rather than data — duplicating the names here is cheap and
 /// keeps this hook decoupled.
-fn allow_listed_paths() -> &'static [&'static str] {
-    &["config.toml"]
+///
+/// Phase 3.2: also include every currently-installed persona, so edits
+/// made via the crystallise flow can be attributed back when a subsequent
+/// `run_python` / `edit_file` / `file_history` error follows the edit.
+fn allow_listed_paths() -> Vec<String> {
+    let mut out = vec!["config.toml".to_string()];
+    for slug in crate::personas::list_available_personas() {
+        // Defensive: only surface slugs the allow-list will actually accept.
+        if crate::self_files::validate_persona_slug(&slug).is_ok() {
+            out.push(format!("personas/{}.md", slug));
+        }
+    }
+    out
 }

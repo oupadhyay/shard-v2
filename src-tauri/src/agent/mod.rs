@@ -55,6 +55,11 @@ use tauri::Manager;
 use tokio::sync::Mutex;
 
 /// Context passed into each LLM turn (RAG, peer info, mode flags).
+///
+/// Phase 3.1 note: open action sketches are folded into `rag_context` by
+/// `Agent::process_message` rather than carried as a separate field, so the
+/// downstream provider helpers (`turns/gemini.rs`, `turns/openrouter.rs`)
+/// require no changes when the agent has an in-progress sketch.
 #[derive(Default)]
 pub(crate) struct TurnContext<'a> {
     pub rag_context: Option<&'a str>,

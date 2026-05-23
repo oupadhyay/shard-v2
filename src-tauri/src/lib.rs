@@ -11,6 +11,8 @@ static CANCELLED_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 pub mod agent;
 mod background;
 mod cache;
+pub mod actions;
+pub mod crystals;
 pub mod dedup;
 pub mod file_history;
 pub mod compaction;
@@ -22,6 +24,7 @@ mod gemini_files;
 mod heartbeat;
 mod integrations;
 mod interactions;
+pub mod mcp;
 pub mod memories;
 mod models;
 pub mod observations;
@@ -699,6 +702,22 @@ async fn auto_rebuild_chunk_index<R: Runtime>(app_handle: AppHandle<R>, config: 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Phase 3.3 — `shard --mcp` short-circuits Tauri boot and serves the
+    // MCP stdio loop instead. Detect before any plugin / window code so
+    // we don't spin up a webview on stdin-only invocations.
+    if std::env::args().any(|a| a == "--mcp") {
+        // Stay quiet on stderr so we don't pollute the JSON-RPC stream
+        // with diagnostics — MCP clients parse stdout as line-delimited
+        // JSON and surface stderr as protocol errors.
+        let rt = tokio::runtime::Runtime::new().expect("MCP runtime");
+        let res = rt.block_on(crate::mcp::run_stdio_server());
+        if let Err(e) = res {
+            eprintln!("[shard --mcp] {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(
@@ -730,13 +749,17 @@ pub fn run() {
                 crate::webhook::start_webhook_server(webhook_handle).await;
             });
 
-            // Phase 1.1 / 2.1 — agent constructed with default hooks, then
-            // we register cross-cutting hooks (e.g. file-history error
-            // attribution) before sealing it into an Arc.
+            // Phase 1.1 / 2.1 / 3.1 — agent constructed with default hooks,
+            // then we register cross-cutting hooks (file-history error
+            // attribution, open-sketch snapshot on pre-compact) before
+            // sealing it into an Arc.
             let mut agent_init = Agent::new(app.handle().clone());
             agent_init.register_hook(
                 agent::hooks::file_history_hook::FileHistoryHook::new(app.handle().clone()),
             );
+            agent_init.register_hook(agent::hooks::actions_hook::ActionsHook::new(
+                app.handle().clone(),
+            ));
             let agent = Arc::new(agent_init);
             // Initialize memory store cache
             let memory_store = Arc::new(RwLock::new(None));

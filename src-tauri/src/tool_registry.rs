@@ -70,6 +70,11 @@ const GLOBAL_TOOLS: &[&str] = &[
     "edit_file",
     "file_history",
     "rollback_self_edit",
+    // Phase 3.1 — Action / Frontier planner
+    "action_plan",
+    "action_next",
+    "action_complete",
+    "action_block",
 ];
 
 impl Default for ToolRegistry {
@@ -471,6 +476,68 @@ impl ToolRegistry {
             parallel: true, cache_ttl: None, draft: false, strict: Some(true)
         );
 
+        // ── Phase 3.1 — Action / Frontier planner ────────────────────────
+        register!(
+            "action_plan", "automation",
+            "Create a multi-step plan ('sketch') for a complex task. Inserts a parent action plus N children chained in order (each step depends on the previous). Returns all action ids. Call this when a task needs >1 self-edit or tool call across distinct phases — `action_next` then walks the chain, surviving compaction.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "Sketch title (the goal)." },
+                    "steps": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Ordered list of step titles. Each will be inserted as a pending child action."
+                    }
+                },
+                "required": ["title", "steps"],
+                "additionalProperties": false
+            }),
+            parallel: false, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        register!(
+            "action_next", "automation",
+            "Return the next ready action (highest priority, all dependencies done). Returns null if the queue is empty or every pending action is blocked. Call this at the top of a turn when an open sketch exists — it survives compaction so the agent can resume a refactor mid-flight.",
+            json!({
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+            }),
+            parallel: true, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        register!(
+            "action_complete", "automation",
+            "Mark an action as done and record a brief outcome. The action's dependents become eligible for `action_next` on the next call.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Action id (from action_plan or action_next)." },
+                    "outcome": { "type": "string", "description": "One-line summary of what was done." }
+                },
+                "required": ["id", "outcome"],
+                "additionalProperties": false
+            }),
+            parallel: false, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        register!(
+            "action_block", "automation",
+            "Mark an action as blocked with a reason. Removes it from the frontier until explicitly re-opened.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Action id." },
+                    "reason": { "type": "string", "description": "Why this is blocked (e.g. 'awaiting user clarification')." }
+                },
+                "required": ["id", "reason"],
+                "additionalProperties": false
+            }),
+            parallel: false, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
         // ── Self-awareness: rollback (restorative, draft-gated for cron) ─
         register!(
             "rollback_self_edit", "automation",
@@ -488,6 +555,21 @@ impl ToolRegistry {
                     }
                 },
                 "required": ["path", "event_id"],
+                "additionalProperties": false
+            }),
+            parallel: false, cache_ttl: None, draft: true, strict: Some(true)
+        );
+
+        // ── Phase 3.2 — Crystals (meta-persona only, draft-gated) ────────
+        register!(
+            "crystallize_sketch", "automation",
+            "Turn a completed action sketch into a reusable Markdown persona under `personas/<slug>.md`. Pulls the parent + children, asks the background LLM to summarise the recipe, and writes the result via the self-edit allow-list. Draft-gated — the call serializes into proactive_queue for user approval before the persona lands on disk. Persona-gated to the `meta` persona; not visible in normal chat.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "sketch_id": { "type": "string", "description": "Parent action id of the sketch to crystallise (returned by `action_plan`)." }
+                },
+                "required": ["sketch_id"],
                 "additionalProperties": false
             }),
             parallel: false, cache_ttl: None, draft: true, strict: Some(true)

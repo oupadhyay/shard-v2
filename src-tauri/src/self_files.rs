@@ -30,30 +30,101 @@ pub struct EditOutcome {
     pub replacements: usize,  // number of substitutions actually made
 }
 
+/// Logical-path classification returned by [`validate_logical_path`]. Lets
+/// callers branch on a typed enum instead of stringly-matching on the
+/// canonical path — important now that the allow-list spans multiple
+/// directories (`personas/<slug>.md` lives outside the app config dir).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AllowedPath {
+    ConfigToml,
+    /// `personas/<slug>.md` — `slug` is the validated bare slug, without the
+    /// `.md` suffix.
+    Persona { slug: String },
+}
+
 /// Pure allow-list validator. Returns the canonical logical name on success
 /// so callers can `match` on a `&'static str` rather than the user-supplied
 /// input. Factored out of [`resolve_allowed_path`] so the traversal +
 /// allow-list guards can be unit-tested without a Tauri `AppHandle`.
+///
+/// Backwards-compatible shim around [`classify_logical_path`] — returns the
+/// canonical name string. Prefer `classify_logical_path` in new code.
 pub fn validate_logical_path(logical: &str) -> Result<&'static str, String> {
+    match classify_logical_path(logical)? {
+        AllowedPath::ConfigToml => Ok("config.toml"),
+        AllowedPath::Persona { .. } => Ok("persona"),
+    }
+}
+
+/// Validate a slug for `personas/<slug>.md`. Must match `[a-z][a-z0-9-]{1,40}`.
+/// Refuses leading hyphens/digits, uppercase, underscores, or anything else
+/// that would surprise the existing `personas/<name>.md` reader.
+pub fn validate_persona_slug(slug: &str) -> Result<(), String> {
+    let len = slug.len();
+    if !(2..=41).contains(&len) {
+        return Err(format!(
+            "persona slug '{}' must be 2-41 chars (got {})",
+            slug, len
+        ));
+    }
+    let mut chars = slug.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_lowercase() {
+        return Err(format!(
+            "persona slug '{}' must start with a lowercase letter [a-z]",
+            slug
+        ));
+    }
+    for c in chars {
+        let ok = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
+        if !ok {
+            return Err(format!(
+                "persona slug '{}' may only contain [a-z0-9-] (offending char: {:?})",
+                slug, c
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Typed variant of [`validate_logical_path`]. Returns a structured
+/// [`AllowedPath`] so call-sites can carry the slug forward without a
+/// second parse.
+pub fn classify_logical_path(logical: &str) -> Result<AllowedPath, String> {
     let logical = logical.trim();
     if logical.is_empty() {
         return Err("path is empty".to_string());
     }
-    // Guard: no directory traversal, no absolute paths, no Windows separators.
+    // Guard: no `..`, no absolute paths, no Windows separators.
     if logical.contains("..") || logical.starts_with('/') || logical.contains('\\') {
         return Err(format!(
-            "Path '{}' is not allow-listed (must be a bare filename like 'config.toml')",
+            "Path '{}' is not allow-listed (must be e.g. 'config.toml' or 'personas/<slug>.md')",
             logical
         ));
     }
 
-    match logical {
-        "config.toml" => Ok("config.toml"),
-        other => Err(format!(
-            "Path '{}' is not allow-listed. Allowed: config.toml",
-            other
-        )),
+    if logical == "config.toml" {
+        return Ok(AllowedPath::ConfigToml);
     }
+    if let Some(rest) = logical.strip_prefix("personas/") {
+        let slug = rest.strip_suffix(".md").ok_or_else(|| {
+            format!(
+                "persona path '{}' must end in '.md' (e.g. personas/news-analyst.md)",
+                logical
+            )
+        })?;
+        // The slash split + `..` ban above means `slug` is already a bare
+        // filename, but enforce the regex contract explicitly.
+        validate_persona_slug(slug)?;
+        return Ok(AllowedPath::Persona {
+            slug: slug.to_string(),
+        });
+    }
+
+    Err(format!(
+        "Path '{}' is not allow-listed. Allowed: config.toml, personas/<slug>.md",
+        logical
+    ))
 }
 
 /// Resolve a logical allow-listed path to an absolute path under the app's
@@ -65,17 +136,22 @@ pub fn resolve_allowed_path<R: Runtime>(
     app_handle: &AppHandle<R>,
     logical: &str,
 ) -> Result<PathBuf, String> {
-    let canonical = validate_logical_path(logical)?;
-    match canonical {
-        "config.toml" => {
+    match classify_logical_path(logical)? {
+        AllowedPath::ConfigToml => {
             let cfg_dir = app_handle
                 .path()
                 .app_config_dir()
                 .map_err(|e| format!("Failed to resolve app config dir: {}", e))?;
             Ok(cfg_dir.join("config.toml"))
         }
-        // validate_logical_path only emits known names; this is unreachable.
-        other => Err(format!("Unhandled allow-listed name: {}", other)),
+        AllowedPath::Persona { slug } => {
+            // Personas live under `dirs::data_local_dir()/dev.ojasw.shard/personas/<slug>.md`
+            // — same root as `crate::personas::get_personas_dir`, but we
+            // intentionally re-derive here so this module stays usable in
+            // unit tests that don't load the full personas subsystem.
+            let dir = crate::personas::get_personas_dir()?;
+            Ok(dir.join(format!("{}.md", slug)))
+        }
     }
 }
 
@@ -179,6 +255,55 @@ pub fn edit_allowed_file<R: Runtime>(
             },
         );
     }
+
+    Ok(EditOutcome {
+        path: logical.to_string(),
+        abs_path: abs.display().to_string(),
+        before,
+        after,
+        unified_diff,
+        replacements,
+    })
+}
+
+/// Pure path-based variant of [`edit_allowed_file`] that does not require
+/// a Tauri `AppHandle`. Used by the MCP server façade in `crate::mcp`
+/// where there is no live Tauri runtime. The caller is responsible for
+/// resolving `abs` via [`crate::mcp::resolve_allowed_path_no_tauri`] (or
+/// equivalent) and for routing the returned [`EditOutcome`] into any
+/// downstream logging (`file_events`, diff-viewer events, …).
+///
+/// Applies the same per-file content guards (`config.toml` refuses any
+/// `*_api_key` string) and the same `apply_edit` substring semantics.
+pub fn edit_at_abs_path(
+    abs: &Path,
+    logical: &str,
+    old_str: &str,
+    new_str: &str,
+    replace_all: bool,
+) -> Result<EditOutcome, String> {
+    if logical == "config.toml" {
+        guard_no_api_key(old_str)?;
+        guard_no_api_key(new_str)?;
+    }
+
+    let before = if abs.exists() {
+        fs::read_to_string(abs).map_err(|e| format!("Failed to read {}: {}", abs.display(), e))?
+    } else {
+        String::new()
+    };
+
+    let (after, replacements) = apply_edit(&before, old_str, new_str, replace_all)?;
+
+    if let Some(parent) = abs.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create parent dir: {}", e))?;
+        }
+    }
+    fs::write(abs, &after).map_err(|e| format!("Failed to write {}: {}", abs.display(), e))?;
+
+    let unified_diff = unified_diff(&before, &after, logical);
 
     Ok(EditOutcome {
         path: logical.to_string(),
@@ -444,5 +569,63 @@ mod tests {
         let err = validate_logical_path("nonexistent.toml").unwrap_err();
         assert!(err.contains("not allow-listed"));
         assert!(err.contains("config.toml"), "should hint allowed list");
+    }
+
+    // ── Phase 3.2: personas/<slug>.md allow-list arm ───────────────────
+
+    #[test]
+    fn classify_accepts_persona_path() {
+        let out = classify_logical_path("personas/news-analyst.md").unwrap();
+        assert_eq!(
+            out,
+            AllowedPath::Persona {
+                slug: "news-analyst".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_rejects_persona_missing_md_suffix() {
+        let err = classify_logical_path("personas/news-analyst").unwrap_err();
+        assert!(err.contains(".md"));
+    }
+
+    #[test]
+    fn classify_rejects_persona_bad_slug() {
+        // Must start with a lowercase letter.
+        assert!(classify_logical_path("personas/1analyst.md").is_err());
+        assert!(classify_logical_path("personas/-bad.md").is_err());
+        assert!(classify_logical_path("personas/UPPER.md").is_err());
+        assert!(classify_logical_path("personas/snake_case.md").is_err());
+        assert!(classify_logical_path("personas/a.md").is_err()); // too short
+        assert!(classify_logical_path("personas/abc def.md").is_err()); // space
+    }
+
+    #[test]
+    fn classify_rejects_persona_traversal() {
+        // The `..` ban catches escape attempts before slug validation runs.
+        assert!(classify_logical_path("personas/../config.toml").is_err());
+        assert!(classify_logical_path("personas/./hidden.md").is_err());
+    }
+
+    #[test]
+    fn validate_persona_slug_accepts_valid() {
+        validate_persona_slug("news").unwrap();
+        validate_persona_slug("news-analyst").unwrap();
+        validate_persona_slug("a1").unwrap();
+        validate_persona_slug("multi-word-slug-1").unwrap();
+    }
+
+    #[test]
+    fn validate_persona_slug_length_bounds() {
+        assert!(validate_persona_slug("").is_err());
+        assert!(validate_persona_slug("a").is_err());
+        // 41 chars: 'a' + 40 hyphens-style chars — exact length OK.
+        let max = format!("a{}", "1".repeat(40));
+        assert_eq!(max.len(), 41);
+        validate_persona_slug(&max).unwrap();
+        // 42 chars: too long.
+        let over = format!("a{}", "1".repeat(41));
+        assert!(validate_persona_slug(&over).is_err());
     }
 }

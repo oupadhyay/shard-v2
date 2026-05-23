@@ -227,6 +227,22 @@ impl<R: tauri::Runtime> Agent<R> {
             (None, None, None)
         };
 
+        // Phase 3.1 — Surface any in-progress action sketches at the top of
+        // the RAG slot so the agent can resume a multi-step refactor even
+        // after a compaction has scrubbed the original `action_plan` call
+        // from chat history. Best-effort; if the store is unavailable or
+        // there are no open sketches, we leave rag_context_str unchanged.
+        let rag_context_str = match (
+            crate::memories::get_vector_store(app_handle)
+                .ok()
+                .and_then(|s| crate::actions::pending_sketch_summary_text(&s)),
+            rag_context_str,
+        ) {
+            (Some(sketches), Some(rag)) => Some(format!("{}\n{}", sketches, rag)),
+            (Some(sketches), None) => Some(sketches),
+            (None, rag) => rag,
+        };
+
         // ====================================================================
         // Compaction: Check if we're approaching context window limits
         // ====================================================================

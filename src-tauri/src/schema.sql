@@ -206,3 +206,34 @@ CREATE INDEX IF NOT EXISTS idx_file_events_path
     ON file_events(logical_path, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_file_events_recent
     ON file_events(created_at DESC);
+
+-- ============================================================================
+-- Phase 3.1 — Action / Frontier planner
+-- ============================================================================
+-- Persistent task graph for multi-step self-edits. `parent_id` lets actions
+-- be grouped into "sketches" (a parent action with N children). `deps` is a
+-- JSON array of action ids that must reach status 'done' before this action
+-- becomes ready. `frontier()` returns the highest-priority ready action.
+-- Kept separate from `proactive_queue` to avoid mixing draft-approval and
+-- task-planning semantics.
+
+CREATE TABLE IF NOT EXISTS actions (
+    id TEXT PRIMARY KEY,
+    parent_id TEXT,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','active','done','blocked','cancelled')),
+    priority INTEGER NOT NULL DEFAULT 0,
+    deps TEXT NOT NULL DEFAULT '[]',
+    payload TEXT,
+    session_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    block_reason TEXT,
+    outcome TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_actions_status
+    ON actions(status, priority DESC, created_at);
+CREATE INDEX IF NOT EXISTS idx_actions_parent ON actions(parent_id);
+CREATE INDEX IF NOT EXISTS idx_actions_session ON actions(session_id);

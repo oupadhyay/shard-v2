@@ -56,6 +56,7 @@ tempfile = "3"
 wasmtime = "36"
 wasmtime-wasi = "36"
 cron = "0.15.0"
+rmcp = { version = "0.5.0", features = ["server", "macros", "transport-io"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
@@ -145,4 +146,16 @@ harness = false
 
 [[bench]]
 name = "file_history_bench"
+harness = false
+
+[[bench]]
+name = "actions_bench"
+harness = false
+
+[[bench]]
+name = "crystals_bench"
+harness = false
+
+[[bench]]
+name = "mcp_bench"
 harness = false

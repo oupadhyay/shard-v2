@@ -30,3 +30,6 @@ mod decay_tests;
 mod file_history_tests;
 mod typed_edges_tests;
 mod rollback_tests;
+mod actions_tests;
+mod crystals_tests;
+mod mcp_tests;
