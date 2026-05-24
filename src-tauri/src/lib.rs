@@ -21,7 +21,7 @@ pub mod context;
 pub mod db;
 pub mod endpoints;
 mod gemini_files;
-mod heartbeat;
+pub mod heartbeat;
 mod integrations;
 mod interactions;
 pub mod mcp;

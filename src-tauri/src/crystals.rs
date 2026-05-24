@@ -460,6 +460,24 @@ pub async fn sweep_and_queue_drafts<R: tauri::Runtime>(
     Ok(queued)
 }
 
+/// Test-friendly bypass: stash a fully-formed [`PersonaDraft`] in the
+/// `proactive_queue` and stamp the source sketch's `crystallized_at` column,
+/// skipping the background LLM call. Used by the eval harness (and any
+/// future integration test) that wants to exercise the post-synthesis
+/// persistence pipeline without requiring a real LLM endpoint.
+///
+/// In production this is what `sweep_and_queue_drafts` does after the LLM
+/// returns, minus the LLM call itself.
+pub fn queue_synthetic_draft<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    draft: &PersonaDraft,
+) -> Result<(), String> {
+    crate::heartbeat::ensure_proactive_queue_table(app_handle)?;
+    queue_draft(app_handle, draft)?;
+    let store = crate::memories::get_vector_store(app_handle)?;
+    mark_crystallized(&store, &draft.source_sketch_id)
+}
+
 /// Stash a draft persona in the proactive_queue. The serialized payload
 /// matches the existing draft-act schema so the same approve/reject flow
 /// the heartbeat engine uses applies here.
