@@ -40,6 +40,8 @@ struct LastRunInfo {
     deriver_last_run: Option<String>,
     #[serde(default)]
     dream_last_run: Option<String>,
+    #[serde(default)]
+    crystals_last_run: Option<String>,
 }
 
 /// Get the path to the last_run.json file
@@ -1058,6 +1060,27 @@ pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                     Err(e) => {
                         log::error!("[Background] Deriver job failed: {}", e);
                     }
+                }
+            }
+
+            // Crystals sweep — turn completed sketches into proactive_queue
+            // persona drafts. Cheap when there are no eligible sketches; the
+            // gating predicate filters on tool-call count + success rate
+            // before the LLM call fires.
+            if should_skip_job(last_run_info.crystals_last_run.as_deref()) {
+                log::debug!(
+                    "[Background] Skipping crystals sweep - less than {} hours since last run",
+                    (JOB_INTERVAL_HOURS as f64 * SKIP_INTERVAL_FRACTION) as u64
+                );
+            } else {
+                log::info!("[Background] Running crystals sweep...");
+                match crate::crystals::sweep_and_queue_drafts(&summary_cleanup_handle).await {
+                    Ok(queued) => {
+                        log::info!("[Crystals] Queued {} drafted persona(s).", queued);
+                        last_run_info.crystals_last_run = Some(Utc::now().to_rfc3339());
+                        save_last_run_info(&summary_cleanup_handle, &last_run_info);
+                    }
+                    Err(e) => log::warn!("[Background] Crystals sweep failed: {}", e),
                 }
             }
 

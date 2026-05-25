@@ -65,6 +65,16 @@ const GLOBAL_TOOLS: &[&str] = &[
     "youtube_transcript",
     "run_python",
     "wake_me_up_in",
+    // Self-awareness: read + edit Shard's own files (allow-listed)
+    "read_file",
+    "edit_file",
+    "file_history",
+    "rollback_self_edit",
+    // Phase 3.1 — Action / Frontier planner
+    "action_plan",
+    "action_next",
+    "action_complete",
+    "action_block",
 ];
 
 impl Default for ToolRegistry {
@@ -396,21 +406,182 @@ impl ToolRegistry {
             parallel: false, cache_ttl: None, draft: false, strict: Some(true)
         );
 
-        // ── Heartbeat-only (draft-gated) tools ───────────────────────────
+        // ── Self-awareness: read an allow-listed file ────────────────────
         register!(
-            "edit_config", "automation",
-            "Edit Shard's configuration values. Can change the selected model, toggle features, or update settings. This is a high-risk action that requires user approval.",
+            "read_file", "automation",
+            "Read the contents of an allow-listed Shard file (e.g. 'config.toml' or 'personas/<slug>.md'). Returns the file contents verbatim. API-key fields are stripped on save and never present in config.toml. Call this BEFORE edit_file so you know the exact current text — `edit_file` requires an exact `old_str` substring match.",
             json!({
                 "type": "object",
                 "properties": {
-                    "key": { "type": "string", "description": "Configuration key to modify (e.g. 'selected_model', 'enable_tools', 'research_mode')" },
-                    "value": { "type": "string", "description": "New value for the configuration key" }
+                    "path": {
+                        "type": "string",
+                        "description": "Allow-listed file path. Currently allowed: 'config.toml' (Shard's runtime configuration) or 'personas/<slug>.md' (any persona Markdown file; slug matches [a-z][a-z0-9-]{1,40})."
+                    }
                 },
-                "required": ["key", "value"],
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+            parallel: true, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        // ── Self-awareness: edit an allow-listed file ────────────────────
+        register!(
+            "edit_file", "automation",
+            "Edit an allow-listed Shard file by replacing `old_str` with `new_str`. Currently allow-listed: 'config.toml' and 'personas/<slug>.md'. `old_str` MUST be an exact substring of the file (whitespace included) and unique unless `replace_all=true`. Returns a unified diff of the change; the frontend renders this as a diff viewer. Refuses any edit that touches API-key fields.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Allow-listed file path. Currently allowed: 'config.toml' or 'personas/<slug>.md'."
+                    },
+                    "old_str": {
+                        "type": "string",
+                        "description": "Exact text to replace. Must occur verbatim in the file. If empty and the file is empty, the file is created with `new_str`."
+                    },
+                    "new_str": {
+                        "type": "string",
+                        "description": "Replacement text. May be empty (to delete `old_str`)."
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "If true, replace every occurrence of `old_str`. Default false; in that case `old_str` must be unique."
+                    }
+                },
+                "required": ["path", "old_str", "new_str", "replace_all"],
+                "additionalProperties": false
+            }),
+            parallel: false, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        // ── Self-awareness: file history (read-only, safe) ───────────────
+        register!(
+            "file_history", "automation",
+            "Return prior read/edit/revert/snapshot events for an allow-listed Shard file. Call this BEFORE editing a non-trivial file so you can see prior diffs, edit cadence, and whether earlier edits were followed by tool errors. Returns Markdown with a one-line summary, optional ⚠️ caution if prior edits caused errors, and the most recent events (with diffs).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Allow-listed file path (same names as read_file/edit_file). Currently: 'config.toml' or 'personas/<slug>.md'."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum events to return (default 10, max 50). Most recent first."
+                    }
+                },
+                "required": ["path", "limit"],
+                "additionalProperties": false
+            }),
+            parallel: true, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        // ── Phase 3.1 — Action / Frontier planner ────────────────────────
+        register!(
+            "action_plan", "automation",
+            "Create a multi-step plan ('sketch') for a complex task. Inserts a parent action plus N children chained in order (each step depends on the previous). Returns all action ids. Call this when a task needs >1 self-edit or tool call across distinct phases — `action_next` then walks the chain, surviving compaction.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "Sketch title (the goal)." },
+                    "steps": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Ordered list of step titles. Each will be inserted as a pending child action."
+                    }
+                },
+                "required": ["title", "steps"],
+                "additionalProperties": false
+            }),
+            parallel: false, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        register!(
+            "action_next", "automation",
+            "Return the next ready action (highest priority, all dependencies done). Returns null if the queue is empty or every pending action is blocked. Call this at the top of a turn when an open sketch exists — it survives compaction so the agent can resume a refactor mid-flight.",
+            json!({
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+            }),
+            parallel: true, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        register!(
+            "action_complete", "automation",
+            "Mark an action as done and record a brief outcome. The action's dependents become eligible for `action_next` on the next call.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Action id (from action_plan or action_next)." },
+                    "outcome": { "type": "string", "description": "One-line summary of what was done." }
+                },
+                "required": ["id", "outcome"],
+                "additionalProperties": false
+            }),
+            parallel: false, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        register!(
+            "action_block", "automation",
+            "Mark an action as blocked with a reason. Removes it from the frontier until explicitly re-opened.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Action id." },
+                    "reason": { "type": "string", "description": "Why this is blocked (e.g. 'awaiting user clarification')." }
+                },
+                "required": ["id", "reason"],
+                "additionalProperties": false
+            }),
+            parallel: false, cache_ttl: None, draft: false, strict: Some(true)
+        );
+
+        // ── Self-awareness: rollback (restorative, draft-gated for cron) ─
+        register!(
+            "rollback_self_edit", "automation",
+            "Restore an allow-listed file to its pre-edit state. Looks up the most recent restorable edit for `path` in file_events (or the specific `event_id` if supplied) and writes the stored snapshot back. Records a `revert` event for auditability. Use this when a recent edit caused a tool error you can see in file_history. Returns the reverted event id and new file length.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Allow-listed file path (same names as read_file/edit_file). Currently: 'config.toml' or 'personas/<slug>.md'."
+                    },
+                    "event_id": {
+                        // Nullable so callers can express "no specific event"
+                        // while still satisfying OpenAI strict-mode's
+                        // requirement that every key appear in `required`.
+                        // The dispatch in agent/tools/mod.rs treats both
+                        // `null` and the empty string as "roll back the
+                        // most recent restorable edit".
+                        "type": ["string", "null"],
+                        "description": "Optional file_events.id to roll back to. Pass null (or an empty string) to roll back the most recent restorable edit for `path`."
+                    }
+                },
+                "required": ["path", "event_id"],
                 "additionalProperties": false
             }),
             parallel: false, cache_ttl: None, draft: true, strict: Some(true)
         );
+
+        // ── Phase 3.2 — Crystals (meta-persona only, draft-gated) ────────
+        register!(
+            "crystallize_sketch", "automation",
+            "Turn a completed action sketch into a reusable Markdown persona under `personas/<slug>.md`. Pulls the parent + children, asks the background LLM to summarise the recipe, and writes the result via the self-edit allow-list. Draft-gated — the call serializes into proactive_queue for user approval before the persona lands on disk. Persona-gated to the `meta` persona; not visible in normal chat.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "sketch_id": { "type": "string", "description": "Parent action id of the sketch to crystallise (returned by `action_plan`)." }
+                },
+                "required": ["sketch_id"],
+                "additionalProperties": false
+            }),
+            parallel: false, cache_ttl: None, draft: true, strict: Some(true)
+        );
+
+        // ── Heartbeat-only (draft-gated) tools ───────────────────────────
 
         register!(
             "create_heartbeat", "automation",

@@ -51,6 +51,8 @@ import {
   resizeImage,
   formatSessionDate,
   logger,
+  mountDiffViewer,
+  type EditOutcome,
 } from "./ui";
 
 // ── DOM References ────────────────────────────────────────────────────────────
@@ -67,6 +69,16 @@ const sessionSearch = document.getElementById("dedicated-session-search") as HTM
 const minimizeBtn = document.getElementById("dedicated-minimize-btn") as HTMLButtonElement;
 const closeBtn = document.getElementById("dedicated-close-btn") as HTMLButtonElement;
 const settingsModal = document.getElementById("dedicated-settings-modal") as HTMLDivElement;
+
+// ── Diff Viewer ───────────────────────────────────────────────────────────────
+// Mount once into the chat-area's parent so the panel sits between messages
+// and the input bar without being scrolled. Listens for `file-edited` events
+// emitted by the backend `self_files` module.
+const dedicatedDiffHost = chatArea.parentElement ?? document.body;
+const dedicatedDiffViewer = mountDiffViewer(dedicatedDiffHost);
+listen<EditOutcome>(EVENTS.FILE_EDITED, (event) => {
+  dedicatedDiffViewer.addOrUpdate(event.payload);
+});
 
 // ── State ─────────────────────────────────────────────────────────────────────
 

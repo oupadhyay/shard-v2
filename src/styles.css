@@ -2089,3 +2089,169 @@ body {
   color: #ff4444;
   padding: 20px;
 }
+
+/* ============================================
+   Diff Viewer (streaming edits, horizontal tabs)
+   ============================================ */
+
+.diff-viewer {
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface-elevated, rgba(20, 20, 24, 0.92));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  margin: 8px 12px 4px;
+  overflow: hidden;
+  font-family: "SF Mono", Menlo, Monaco, monospace;
+  font-size: 0.78em;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.diff-viewer[hidden] { display: none; }
+
+.diff-viewer-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.diff-viewer-title {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.55));
+  flex-shrink: 0;
+}
+
+.diff-viewer-tabs {
+  display: flex;
+  flex: 1;
+  overflow-x: auto;
+  gap: 2px;
+  scrollbar-width: thin;
+}
+.diff-viewer-tabs::-webkit-scrollbar { height: 4px; }
+.diff-viewer-tabs::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+
+.diff-viewer-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.55));
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+  font-size: 11.5px;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.diff-viewer-tab:hover {
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+  background: rgba(255, 255, 255, 0.04);
+}
+.diff-viewer-tab.active {
+  color: var(--text-primary, rgba(255, 255, 255, 0.95));
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.diff-viewer-tab-path {
+  font-weight: 500;
+}
+.diff-viewer-tab-stats {
+  display: inline-flex;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.diff-add-count { color: #6fcf97; }
+.diff-del-count { color: #eb5757; }
+
+.diff-viewer-close {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.5));
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.diff-viewer-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+}
+
+.diff-viewer-body {
+  position: relative;
+}
+
+.diff-viewer-panel[hidden] { display: none; }
+
+.diff-viewer-pathbar {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 12px;
+  background: rgba(0, 0, 0, 0.15);
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.05));
+}
+.diff-viewer-path {
+  color: var(--text-primary, rgba(255, 255, 255, 0.92));
+  font-weight: 600;
+}
+.diff-viewer-abs {
+  color: var(--text-tertiary, rgba(255, 255, 255, 0.35));
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-viewer-lines {
+  margin: 0;
+  padding: 6px 0;
+  max-height: 320px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.22);
+  /* This element used to be a <pre>, which implicitly gave us a monospace
+     font. We now render a <div> (so <div class="diff-line"> children are
+     valid HTML), so set the font + tab-size explicitly. */
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  tab-size: 4;
+}
+
+.diff-line {
+  display: block;
+  padding: 0 12px;
+  white-space: pre;
+  line-height: 1.45;
+  /* Tiny fade-in for the streaming feel. */
+  animation: diff-line-in 90ms ease-out;
+}
+@keyframes diff-line-in {
+  from { opacity: 0; transform: translateY(-1px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.diff-line.diff-add  { background: rgba(70, 200, 120, 0.10); color: #b6e6c8; }
+.diff-line.diff-del  { background: rgba(235, 87, 87, 0.10);  color: #f0b3b3; }
+.diff-line.diff-ctx  { color: var(--text-secondary, rgba(255, 255, 255, 0.65)); }
+.diff-line.diff-hunk { color: #8aa9e6; background: rgba(120, 160, 230, 0.06); }
+.diff-line.diff-meta { color: var(--text-tertiary, rgba(255, 255, 255, 0.35)); }
+
+/* When streaming completes, drop the animation to avoid replaying on scroll. */
+.diff-stream-done .diff-line { animation: none; }
+

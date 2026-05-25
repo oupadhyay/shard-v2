@@ -1,8 +1,9 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use shard_lib::observations::{
-    get_observations_by_level, get_recent_observations, get_top_derived_observations,
-    insert_observation, make_observation, search_observations_by_embedding,
-    search_observations_by_keyword, ObservationLevel,
+    decay_score, decay_sweep, get_observations_by_level, get_recent_observations,
+    get_top_derived_observations, insert_observation, make_observation, recompute_decay,
+    search_observations_by_embedding, search_observations_by_keyword, ObservationLevel,
+    DEFAULT_EVICT_THRESHOLD,
 };
 use shard_lib::vector_store::VectorStore;
 use tempfile::tempdir;
@@ -145,5 +146,81 @@ fn bench_search_functions(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_retrieval_functions, bench_search_functions);
+// ============================================================================
+// Phase 1.3 — Decay & eviction benches
+// ============================================================================
+
+fn bench_decay_score_pure(c: &mut Criterion) {
+    // Pure-math hot path; should be sub-nanosecond after optimization.
+    c.bench_function("decay_score_pure", |b| {
+        b.iter(|| {
+            black_box(decay_score(black_box(7.5), black_box(3)));
+        });
+    });
+}
+
+fn bench_recompute_decay(c: &mut Criterion) {
+    let mut group = c.benchmark_group("recompute_decay");
+    for &n in &[100usize, 1_000, 10_000] {
+        let (store, _dir) = open_bench_store();
+        populate_store(&store, n);
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| {
+                let updated = recompute_decay(black_box(&store)).unwrap();
+                black_box(updated);
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bench_decay_sweep(c: &mut Criterion) {
+    // Measure sweep against a populated store where every row is eligible.
+    // We can't reach into `store.conn` from a bench (private), so we use a
+    // very large threshold that catches every freshly-populated row
+    // (score = 1.0 by default → set threshold > 1.0 so all are below).
+    let mut group = c.benchmark_group("decay_sweep");
+    for &n in &[1_000usize, 10_000] {
+        let (store, _dir) = open_bench_store();
+        populate_store(&store, n);
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| {
+                // After the first sweep deleted_at is set for all rows; the
+                // sweep predicate `deleted_at IS NULL` then filters them out
+                // and subsequent iterations measure the no-op fast path,
+                // which is the realistic steady state for the background job.
+                let evicted = decay_sweep(black_box(&store), 2.0).unwrap();
+                black_box(evicted);
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bench_decay_sweep_threshold(c: &mut Criterion) {
+    // Same as above but with the production threshold; verifies the fast
+    // path when no rows are eligible (every row score = 1.0).
+    let mut group = c.benchmark_group("decay_sweep_noop");
+    for &n in &[1_000usize, 10_000] {
+        let (store, _dir) = open_bench_store();
+        populate_store(&store, n);
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| {
+                let evicted = decay_sweep(black_box(&store), DEFAULT_EVICT_THRESHOLD).unwrap();
+                black_box(evicted);
+            });
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_retrieval_functions,
+    bench_search_functions,
+    bench_decay_score_pure,
+    bench_recompute_decay,
+    bench_decay_sweep,
+    bench_decay_sweep_threshold,
+);
 criterion_main!(benches);

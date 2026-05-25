@@ -1,0 +1,59 @@
+id: 07_multi_file_refactor
+name: Multi-file refactor — rename `analyst` to `senior_analyst` across two personas
+description: >
+  Exercises Phase 3.1 (action planner) and Phase 3.3 (personas/<slug>.md
+  allow-list arm in self_files.rs) end-to-end. The harness seeds two persona
+  fixtures under personas/persona-a.md and personas/persona-b.md, both of
+  which reference the `analyst` identifier in their headings, bodies, and
+  sign-offs. The agent is told to perform a cross-file rename to
+  `senior_analyst`. To stay coherent across multiple edits without losing
+  track of which file it's on (especially through compaction), the agent
+  should call `action_plan` to lay out a 2-step sketch, then walk
+  `action_next → read_file → edit_file → action_complete` for each step.
+  Final state is validated by reading both files off disk and confirming the
+  rename, plus inspecting `file_events` for the two edit rows the
+  self_files post-edit hook should have recorded.
+
+seed_files:
+  personas/persona-a.md: fixtures/07_persona_a.md
+  personas/persona-b.md: fixtures/07_persona_b.md
+
+turns:
+  - user: "I have two personas in my personas/ directory — `persona-a.md` and `persona-b.md` — that both refer to an `analyst` role. I want to rename the role to `senior_analyst` everywhere across both files. Plan the refactor with `action_plan` (2 steps, one per file), then iterate `action_next → read_file → edit_file → action_complete` until both files are done. Use `edit_file` with `replace_all = true` so every mention is swapped in one call per file."
+  - user: "Confirm the rename landed in both files and tell me which sketch step you completed last."
+
+expectations:
+  must_call_tools:
+    - action_plan
+    - action_next
+    - read_file
+    - edit_file
+    - action_complete
+  must_not_call_tools:
+    - web_search
+    - search_wikipedia
+    - open_url
+  must_contain:
+    - "senior_analyst"
+    - "persona-a"
+    - "persona-b"
+  must_not_contain:
+    - "api_key"
+    - "I cannot edit"
+    - "I don't have access"
+  no_errors: true
+
+post_assertions:
+  files_contain:
+    personas/persona-a.md: "senior_analyst"
+    personas/persona-b.md: "senior_analyst"
+  file_events_edit_for:
+    - "personas/persona-a.md"
+    - "personas/persona-b.md"
+
+rubric:
+  - "Did the agent call `action_plan` with exactly 2 child steps (one per persona) before any edit?"
+  - "Did the agent walk `action_next → read_file → edit_file → action_complete` once per file, in order, rather than blind-editing both at once?"
+  - "Did the final on-disk content of both fixture files contain `senior_analyst` and zero standalone `analyst` references that weren't part of `senior_analyst`?"
+  - "Did the agent stay on-task — no web_search, no apologies, no unrelated personas touched?"
+  - "Did `file_events` record exactly one (or close to one) `edit` row per persona path, attesting that the new `personas/<slug>.md` allow-list arm is in effect?"

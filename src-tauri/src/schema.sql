@@ -138,7 +138,11 @@ CREATE TRIGGER IF NOT EXISTS obs_fts_ad AFTER DELETE ON observations BEGIN
   DELETE FROM observations_fts WHERE observation_id = old.id;
 END;
 
-CREATE TRIGGER IF NOT EXISTS obs_fts_au AFTER UPDATE ON observations BEGIN
+-- Phase 1.3: scope this trigger to UPDATEs of `content` only. Decay-related
+-- writes (`decay_score`, `last_accessed`, `deleted_at`) happen for every
+-- observation on every sweep and don't change the searchable text — letting
+-- this trigger reindex FTS5 anyway turned a 10k-row sweep into a ~11 s job.
+CREATE TRIGGER IF NOT EXISTS obs_fts_au AFTER UPDATE OF content ON observations BEGIN
   UPDATE observations_fts SET content = new.content WHERE observation_id = old.id;
 END;
 
@@ -151,3 +155,85 @@ CREATE TABLE IF NOT EXISTS peer_cards (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (observer, observed)
 );
+
+-- ============================================================================
+-- Phase 1.2 — SHA-256 dedup window
+-- ============================================================================
+-- Short-lived content-hash registry used to skip re-storing the same
+-- observation or tool result when the agent revisits a fact within a small
+-- time window (default 5 min). Hot-path reads are served by an in-memory
+-- HashMap in dedup.rs; this table is the durable mirror.
+
+CREATE TABLE IF NOT EXISTS dedup_window (
+    content_hash TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('observation','tool_result')),
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    hit_count INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (content_hash, kind)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dedup_seen ON dedup_window(last_seen);
+
+-- ============================================================================
+-- Phase 2.1 — File-centric memory
+-- ============================================================================
+-- Per-file event log used by the `file_history` tool to surface "you've
+-- edited this 4 times in 7d, last edit was followed by a test failure" before
+-- the agent does another `edit_file`. Lightweight: write-once rows, no FTS,
+-- no embeddings. Errors that show up within a short window after an edit are
+-- back-filled by the post-tool lifecycle hook.
+
+CREATE TABLE IF NOT EXISTS file_events (
+    id TEXT PRIMARY KEY,
+    logical_path TEXT NOT NULL,
+    abs_path TEXT NOT NULL,
+    event_kind TEXT NOT NULL CHECK(event_kind IN ('read','edit','revert','snapshot')),
+    session_id TEXT,
+    before_hash TEXT,
+    after_hash TEXT,
+    -- Phase 2.3: optional snapshot of the pre-edit content so `rollback_self_edit`
+    -- can restore the file without a separate git store. Capped to ~64KB at
+    -- insertion (see file_history::SNAPSHOT_SIZE_CAP); large files just lose
+    -- per-event rollback (snapshot stays NULL).
+    before_content TEXT,
+    unified_diff TEXT,
+    followed_by_error TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_events_path
+    ON file_events(logical_path, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_file_events_recent
+    ON file_events(created_at DESC);
+
+-- ============================================================================
+-- Phase 3.1 — Action / Frontier planner
+-- ============================================================================
+-- Persistent task graph for multi-step self-edits. `parent_id` lets actions
+-- be grouped into "sketches" (a parent action with N children). `deps` is a
+-- JSON array of action ids that must reach status 'done' before this action
+-- becomes ready. `frontier()` returns the highest-priority ready action.
+-- Kept separate from `proactive_queue` to avoid mixing draft-approval and
+-- task-planning semantics.
+
+CREATE TABLE IF NOT EXISTS actions (
+    id TEXT PRIMARY KEY,
+    parent_id TEXT,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','active','done','blocked','cancelled')),
+    priority INTEGER NOT NULL DEFAULT 0,
+    deps TEXT NOT NULL DEFAULT '[]',
+    payload TEXT,
+    session_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    block_reason TEXT,
+    outcome TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_actions_status
+    ON actions(status, priority DESC, created_at);
+CREATE INDEX IF NOT EXISTS idx_actions_parent ON actions(parent_id);
+CREATE INDEX IF NOT EXISTS idx_actions_session ON actions(session_id);

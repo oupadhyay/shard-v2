@@ -1,0 +1,58 @@
+id: 08_crystallize_recipe
+name: Crystals — completed sketch turns into a drafted persona in proactive_queue
+description: >
+  Exercises Phase 3.2 (crystals → persona auto-creation). A 6-step sketch is
+  pre-seeded directly into the actions table with every child marked `done`
+  (so `should_crystallize_sketch` returns Crystallize: 6/6 done, 100 % ≥ 80 %
+  success threshold, ≥ 5 non-cancelled children). After the user turn the
+  harness invokes `crystals::queue_synthetic_draft`, which mirrors what
+  `sweep_and_queue_drafts` does post-LLM (insert a row in `proactive_queue`
+  with `needs_approval = 1` + flip `actions.crystallized_at` on the sketch
+  parent) without requiring a live background-model endpoint.
+
+  The LLM crystallisation step itself is covered by unit tests
+  (crystallize_emits_valid_persona_markdown); this scenario covers the
+  draft-gate → proactive_queue → audit pipeline that lives downstream of it.
+
+  The single agent turn is intentionally trivial — the meaningful state
+  transitions are driven by `pre_seed.completed_sketches` (seeding) and
+  `post_hooks.queue_synthetic_crystal` (queueing) instead of by tool calls.
+
+pre_seed:
+  completed_sketches:
+    - title: "Migrate logging from println! to log::info!"
+      steps:
+        - "Identify all println! call sites"
+        - "Add log crate to Cargo.toml"
+        - "Replace println! in agent module"
+        - "Replace println! in tools module"
+        - "Run cargo test"
+        - "Bench retrieval"
+
+turns:
+  - user: "I just finished a 6-step refactor sketch. Please briefly acknowledge — no tools needed."
+
+post_hooks:
+  queue_synthetic_crystal:
+    sketch_index: 0
+    slug: "migrate-logging-recipe"
+
+expectations:
+  must_not_call_tools:
+    - web_search
+    - search_wikipedia
+    - crystallize_sketch   # tool is draft_gated + meta-persona-only; should not appear in normal chat
+  no_errors: true
+
+post_assertions:
+  proactive_queue_min_unreviewed: 1
+  proactive_queue_content_contains:
+    - "migrate-logging-recipe"
+    - "Crystals sweep proposes persona"
+  seeded_sketches_crystallized: true
+
+rubric:
+  - "Did the agent stay quiet (no extraneous tool calls) given the user just asked for an acknowledgement?"
+  - "Did `crystals::queue_synthetic_draft` populate `proactive_queue` with needs_approval = 1 for the slug `migrate-logging-recipe`?"
+  - "Did `actions.crystallized_at` on the seeded sketch get stamped non-NULL after the post-hook?"
+  - "Is the content body in `proactive_queue` informative (mentions the slug AND the source sketch) so the user can approve/reject from the UI without digging?"

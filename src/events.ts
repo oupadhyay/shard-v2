@@ -18,4 +18,11 @@ export const EVENTS = {
   START_HIDE: "start-hide",
   START_SHOW: "start-show",
   PROACTIVE_MESSAGE: "proactive-message",
+  /**
+   * Fired when the agent edits an allow-listed self-file via `edit_file`.
+   * Payload: `EditOutcome` from `self_files.rs` —
+   *   { path, abs_path, before, after, unified_diff, replacements }
+   * Used by the upcoming file-tree + diff-viewer UI (see TODO).
+   */
+  FILE_EDITED: "file-edited",
 } as const;

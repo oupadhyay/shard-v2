@@ -21,6 +21,7 @@
  */
 mod gemini;
 mod hash;
+pub mod hooks;
 pub(crate) mod openrouter;
 mod process;
 mod research;
@@ -54,6 +55,11 @@ use tauri::Manager;
 use tokio::sync::Mutex;
 
 /// Context passed into each LLM turn (RAG, peer info, mode flags).
+///
+/// Phase 3.1 note: open action sketches are folded into `rag_context` by
+/// `Agent::process_message` rather than carried as a separate field, so the
+/// downstream provider helpers (`turns/gemini.rs`, `turns/openrouter.rs`)
+/// require no changes when the agent has an in-progress sketch.
 #[derive(Default)]
 pub(crate) struct TurnContext<'a> {
     pub rag_context: Option<&'a str>,
@@ -80,6 +86,9 @@ pub struct Agent<R: tauri::Runtime = tauri::Wry> {
     pub session_id: Mutex<String>,
     pub last_archived_hash: Mutex<u64>,
     pub app_handle: tauri::AppHandle<R>,
+    /// Phase 1.1 — Lifecycle hooks. Registered once at construction; dispatch
+    /// is lock-free on the hot path. See [`hooks::LifecycleHooks`].
+    pub hooks: hooks::HookRegistry,
 }
 
 impl<R: tauri::Runtime> Agent<R> {
@@ -161,6 +170,13 @@ impl<R: tauri::Runtime> Agent<R> {
             session_id: Mutex::new(session_id),
             last_archived_hash: Mutex::new(last_archived_hash),
             app_handle,
+            hooks: hooks::HookRegistry::new(),
         }
+    }
+
+    /// Register a lifecycle hook. Intended to be called at construction time
+    /// before any agent turns start; the registry is not synchronized.
+    pub fn register_hook(&mut self, hook: std::sync::Arc<dyn hooks::LifecycleHooks>) {
+        self.hooks.push(hook);
     }
 }

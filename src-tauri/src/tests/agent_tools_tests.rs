@@ -409,3 +409,340 @@ mod personas {
 // The `Error:`-not-cached branch is fully covered by
 // `cache_wrapper::error_results_are_not_cached` above using youtube_transcript
 // with an invalid input — that path is deterministic and offline.
+
+// ============================================================================
+// Self-editing tools (read_file + edit_file)
+// ============================================================================
+//
+// These exercise the full backend pipeline for the generic self-awareness
+// tools introduced for Part 1 of "Make Shard self-aware":
+//   * argument parsing in `agent/tools/mod.rs`
+//   * allow-list + IO in `self_files.rs`
+//   * the `file-edited` event contract that the frontend diff viewer depends on
+//
+// No network is involved; everything runs against the tempdir-rooted $HOME
+// established by `TestEnv`, so these tests are fast and deterministic.
+
+mod self_files_dispatch {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use tauri::Listener;
+
+    fn write_config_toml(env: &TestEnv, contents: &str) {
+        use tauri::Manager;
+        let cfg_dir = env.handle.path().app_config_dir().unwrap();
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(cfg_dir.join("config.toml"), contents).unwrap();
+    }
+
+    fn read_config_toml(env: &TestEnv) -> String {
+        use tauri::Manager;
+        let cfg_dir = env.handle.path().app_config_dir().unwrap();
+        std::fs::read_to_string(cfg_dir.join("config.toml")).unwrap()
+    }
+
+    // ── read_file ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn read_file_empty_when_config_missing() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        let agent = Agent::new(env.handle.clone());
+
+        let r = agent
+            .execute_tool(
+                &env.handle,
+                "read_file",
+                &json!({"path": "config.toml"}),
+                &config(),
+            )
+            .await;
+        // `read_file` returns raw file contents so the agent can paste
+        // them verbatim into `edit_file`'s `old_str`. Missing files
+        // therefore return an empty string rather than a prose hint.
+        assert!(
+            r.is_empty(),
+            "expected empty string for missing file, got: {:?}",
+            r
+        );
+    }
+
+    #[tokio::test]
+    async fn read_file_returns_contents_when_present() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        write_config_toml(&env, "selected_model = \"gpt-oss-120b\"\n");
+        let agent = Agent::new(env.handle.clone());
+
+        let r = agent
+            .execute_tool(
+                &env.handle,
+                "read_file",
+                &json!({"path": "config.toml"}),
+                &config(),
+            )
+            .await;
+        assert!(r.contains("selected_model"));
+        assert!(r.contains("gpt-oss-120b"));
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_empty_path() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        let agent = Agent::new(env.handle.clone());
+
+        let r = agent
+            .execute_tool(&env.handle, "read_file", &json!({"path": ""}), &config())
+            .await;
+        assert!(r.starts_with("Error"), "got: {}", r);
+        assert!(r.contains("empty"), "got: {}", r);
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_unknown_path() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        let agent = Agent::new(env.handle.clone());
+
+        let r = agent
+            .execute_tool(
+                &env.handle,
+                "read_file",
+                &json!({"path": "nonexistent.toml"}),
+                &config(),
+            )
+            .await;
+        assert!(r.starts_with("Error"), "got: {}", r);
+        assert!(r.contains("not allow-listed"), "got: {}", r);
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_directory_traversal() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        let agent = Agent::new(env.handle.clone());
+
+        let r = agent
+            .execute_tool(
+                &env.handle,
+                "read_file",
+                &json!({"path": "../config.toml"}),
+                &config(),
+            )
+            .await;
+        assert!(r.starts_with("Error"), "got: {}", r);
+        assert!(r.contains("not allow-listed"), "got: {}", r);
+    }
+
+    // ── edit_file ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn edit_file_creates_initial_content_from_empty() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        let agent = Agent::new(env.handle.clone());
+
+        let r = agent
+            .execute_tool(
+                &env.handle,
+                "edit_file",
+                &json!({
+                    "path": "config.toml",
+                    "old_str": "",
+                    "new_str": "selected_model = \"gpt-oss-120b\"\n",
+                    "replace_all": false,
+                }),
+                &config(),
+            )
+            .await;
+        assert!(!r.starts_with("Error"), "unexpected error: {}", r);
+        assert!(r.contains("Edited"));
+        assert!(r.contains("```diff"));
+        // File on disk reflects the new content.
+        assert_eq!(read_config_toml(&env), "selected_model = \"gpt-oss-120b\"\n");
+    }
+
+    #[tokio::test]
+    async fn edit_file_round_trip_replace() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        write_config_toml(&env, "selected_model = \"old-model\"\n");
+        let agent = Agent::new(env.handle.clone());
+
+        let r = agent
+            .execute_tool(
+                &env.handle,
+                "edit_file",
+                &json!({
+                    "path": "config.toml",
+                    "old_str": "old-model",
+                    "new_str": "new-model",
+                    "replace_all": false,
+                }),
+                &config(),
+            )
+            .await;
+        assert!(!r.starts_with("Error"), "got: {}", r);
+        assert_eq!(read_config_toml(&env), "selected_model = \"new-model\"\n");
+    }
+
+    #[tokio::test]
+    async fn edit_file_blocks_api_key_in_old_str() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        write_config_toml(&env, "gemini_api_key = \"placeholder\"\n");
+        let agent = Agent::new(env.handle.clone());
+
+        let r = agent
+            .execute_tool(
+                &env.handle,
+                "edit_file",
+                &json!({
+                    "path": "config.toml",
+                    "old_str": "gemini_api_key = \"placeholder\"",
+                    "new_str": "",
+                    "replace_all": false,
+                }),
+                &config(),
+            )
+            .await;
+        assert!(r.starts_with("Error"), "got: {}", r);
+        assert!(r.contains("api_key"));
+    }
+
+    #[tokio::test]
+    async fn edit_file_blocks_api_key_in_new_str() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        write_config_toml(&env, "selected_model = \"x\"\n");
+        let agent = Agent::new(env.handle.clone());
+
+        let r = agent
+            .execute_tool(
+                &env.handle,
+                "edit_file",
+                &json!({
+                    "path": "config.toml",
+                    "old_str": "selected_model = \"x\"",
+                    "new_str": "gemini_api_key = \"leaked\"",
+                    "replace_all": false,
+                }),
+                &config(),
+            )
+            .await;
+        assert!(r.starts_with("Error"), "got: {}", r);
+        assert!(r.contains("api_key"));
+        // File on disk should be untouched.
+        assert_eq!(read_config_toml(&env), "selected_model = \"x\"\n");
+    }
+
+    #[tokio::test]
+    async fn edit_file_rejects_ambiguous_old_str_without_replace_all() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        write_config_toml(&env, "foo = 1\nfoo = 2\n");
+        let agent = Agent::new(env.handle.clone());
+
+        let r = agent
+            .execute_tool(
+                &env.handle,
+                "edit_file",
+                &json!({
+                    "path": "config.toml",
+                    "old_str": "foo",
+                    "new_str": "bar",
+                    "replace_all": false,
+                }),
+                &config(),
+            )
+            .await;
+        assert!(r.starts_with("Error"), "got: {}", r);
+        assert!(r.contains("matches 2 times"));
+        // File untouched.
+        assert_eq!(read_config_toml(&env), "foo = 1\nfoo = 2\n");
+    }
+
+    #[tokio::test]
+    async fn edit_file_replace_all_succeeds_with_multiple_matches() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        write_config_toml(&env, "foo = 1\nfoo = 2\n");
+        let agent = Agent::new(env.handle.clone());
+
+        let r = agent
+            .execute_tool(
+                &env.handle,
+                "edit_file",
+                &json!({
+                    "path": "config.toml",
+                    "old_str": "foo",
+                    "new_str": "bar",
+                    "replace_all": true,
+                }),
+                &config(),
+            )
+            .await;
+        assert!(!r.starts_with("Error"), "got: {}", r);
+        assert!(r.contains("2 replacements"));
+        assert_eq!(read_config_toml(&env), "bar = 1\nbar = 2\n");
+    }
+
+    // ── file-edited event contract ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn edit_file_emits_file_edited_event_with_outcome_payload() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        write_config_toml(&env, "selected_model = \"alpha\"\n");
+
+        // Install a listener BEFORE invoking the tool so we capture the
+        // emission. Payload arrives as a JSON-encoded string of EditOutcome.
+        let payloads: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let p = payloads.clone();
+        env.handle.listen("file-edited", move |e| {
+            p.lock().unwrap().push(e.payload().to_string());
+        });
+
+        let agent = Agent::new(env.handle.clone());
+        let r = agent
+            .execute_tool(
+                &env.handle,
+                "edit_file",
+                &json!({
+                    "path": "config.toml",
+                    "old_str": "alpha",
+                    "new_str": "beta",
+                    "replace_all": false,
+                }),
+                &config(),
+            )
+            .await;
+        assert!(!r.starts_with("Error"), "got: {}", r);
+
+        // tauri::Listener fires synchronously on the same thread that emits.
+        // Even so, give the runtime a yield so we don't race the listener
+        // registration in unusual schedulers.
+        tokio::task::yield_now().await;
+
+        let captured = payloads.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            1,
+            "expected exactly one file-edited event, got {}",
+            captured.len()
+        );
+
+        // Validate the structured EditOutcome shape the frontend depends on.
+        let v: serde_json::Value =
+            serde_json::from_str(&captured[0]).expect("payload should be valid JSON");
+        assert_eq!(v["path"], "config.toml");
+        assert!(v["abs_path"].as_str().unwrap().ends_with("config.toml"));
+        assert_eq!(v["before"], "selected_model = \"alpha\"\n");
+        assert_eq!(v["after"], "selected_model = \"beta\"\n");
+        assert_eq!(v["replacements"], 1);
+        let diff = v["unified_diff"].as_str().unwrap();
+        assert!(diff.contains("-selected_model = \"alpha\""));
+        assert!(diff.contains("+selected_model = \"beta\""));
+    }
+}

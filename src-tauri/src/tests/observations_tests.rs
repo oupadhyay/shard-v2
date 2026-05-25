@@ -203,6 +203,7 @@ fn test_format_observations_groups_by_level() {
             level: ObservationLevel::Inductive,
             source_ids: vec![], times_derived: 0, session_name: None,
             content_hash: "h1".into(), created_at: "2025-01-01".into(), deleted_at: None,
+            edge_kind: None, tvalid_start: None, tvalid_end: None,
         },
         Observation {
             id: "2".into(), observer: "shard".into(), observed: "user".into(),
@@ -210,6 +211,7 @@ fn test_format_observations_groups_by_level() {
             level: ObservationLevel::Explicit,
             source_ids: vec![], times_derived: 0, session_name: None,
             content_hash: "h2".into(), created_at: "2025-01-02".into(), deleted_at: None,
+            edge_kind: None, tvalid_start: None, tvalid_end: None,
         },
         Observation {
             id: "3".into(), observer: "shard".into(), observed: "user".into(),
@@ -217,6 +219,7 @@ fn test_format_observations_groups_by_level() {
             level: ObservationLevel::Deductive,
             source_ids: vec!["2".into()], times_derived: 0, session_name: None,
             content_hash: "h3".into(), created_at: "2025-01-03".into(), deleted_at: None,
+            edge_kind: None, tvalid_start: None, tvalid_end: None,
         },
     ];
 

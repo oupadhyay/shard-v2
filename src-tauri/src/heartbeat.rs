@@ -1234,31 +1234,10 @@ async fn execute_draft_gated_tool<R: Runtime>(
     args: &serde_json::Value,
 ) -> Result<String, String> {
     match tool_name {
-        "edit_config" => {
-            let key = args["key"]
-                .as_str()
-                .ok_or("Missing 'key' argument")?;
-            let value = args["value"]
-                .as_str()
-                .ok_or("Missing 'value' argument")?;
-
-            let mut config = crate::config::load_config(app_handle)?;
-
-            // Apply the edit based on the key
-            match key {
-                "selected_model" => config.selected_model = Some(value.to_string()),
-                "background_model" => config.background_model = Some(value.to_string()),
-                "enable_tools" => config.enable_tools = Some(value.parse::<bool>().unwrap_or(true)),
-                "research_mode" => config.research_mode = Some(value.parse::<bool>().unwrap_or(false)),
-                "incognito_mode" => config.incognito_mode = Some(value.parse::<bool>().unwrap_or(false)),
-                "enable_screen_context" => config.enable_screen_context = Some(value.parse::<bool>().unwrap_or(false)),
-                "enable_compaction" => config.enable_compaction = Some(value.parse::<bool>().unwrap_or(true)),
-                _ => return Err(format!("Unknown config key: '{}'", key)),
-            }
-
-            crate::config::save_config(app_handle, &config)?;
-            Ok(format!("Config '{}' updated to '{}'", key, value))
-        }
+        // NOTE: `edit_config` was retired in favor of the generic `edit_file`
+        // self-awareness tool (allow-listed to config.toml). `edit_file` is
+        // not draft-gated and is dispatched via the normal Agent tool loop,
+        // so it never reaches this function.
         "create_heartbeat" => {
             let name = args["name"]
                 .as_str()
