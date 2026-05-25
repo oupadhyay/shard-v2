@@ -457,9 +457,12 @@ mod self_files_dispatch {
                 &config(),
             )
             .await;
+        // `read_file` returns raw file contents so the agent can paste
+        // them verbatim into `edit_file`'s `old_str`. Missing files
+        // therefore return an empty string rather than a prose hint.
         assert!(
-            r.contains("empty or does not yet exist"),
-            "expected empty-file hint, got: {}",
+            r.is_empty(),
+            "expected empty string for missing file, got: {:?}",
             r
         );
     }

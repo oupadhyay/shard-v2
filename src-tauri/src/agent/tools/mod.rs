@@ -606,15 +606,13 @@ impl<R: tauri::Runtime> Agent<R> {
                 )
             }
             "read_file" => {
+                // Return raw file contents (or empty string when the file
+                // doesn't exist yet) so the agent can copy substrings
+                // verbatim into `edit_file`'s `old_str`. Matches the MCP
+                // handler in `crate::mcp::handlers::handle_read_file`.
                 let path = args["path"].as_str().unwrap_or_default();
                 match crate::self_files::read_allowed_file(app_handle, path) {
-                    Ok(contents) => {
-                        if contents.is_empty() {
-                            format!("(file '{}' is empty or does not yet exist)", path)
-                        } else {
-                            format!("Contents of {}:\n\n```\n{}\n```", path, contents)
-                        }
-                    }
+                    Ok(contents) => contents,
                     Err(e) => format!("Error: {}", e),
                 }
             }

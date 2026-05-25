@@ -2225,6 +2225,12 @@ body {
   max-height: 320px;
   overflow-y: auto;
   background: rgba(0, 0, 0, 0.22);
+  /* This element used to be a <pre>, which implicitly gave us a monospace
+     font. We now render a <div> (so <div class="diff-line"> children are
+     valid HTML), so set the font + tab-size explicitly. */
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  tab-size: 4;
 }
 
 .diff-line {

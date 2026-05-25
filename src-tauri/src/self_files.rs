@@ -453,9 +453,6 @@ fn common_suffix_len<T: PartialEq>(a: &[T], b: &[T]) -> usize {
     i
 }
 
-#[allow(dead_code)]
-pub fn _exists_for_tests(_p: &Path) {} // marker to silence dead-code on Path import
-
 #[cfg(test)]
 mod tests {
     use super::*;

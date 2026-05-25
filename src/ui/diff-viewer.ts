@@ -153,12 +153,16 @@ export function mountDiffViewer(host: HTMLElement): DiffViewerController {
       panel.className = "diff-viewer-panel";
       panel.setAttribute("role", "tabpanel");
       panel.dataset.path = path;
+      // NOTE: `.diff-viewer-lines` is a <div> rather than a <pre> because
+      // `streamDiffInto` appends <div class="diff-line"> children, and only
+      // phrasing content is valid inside <pre>. Whitespace is preserved via
+      // `white-space: pre` in styles.css.
       panel.innerHTML = DOMPurify.sanitize(`
         <div class="diff-viewer-pathbar">
           <span class="diff-viewer-path"></span>
           <span class="diff-viewer-abs"></span>
         </div>
-        <pre class="diff-viewer-lines"></pre>
+        <div class="diff-viewer-lines"></div>
       `);
 
       tabsEl.appendChild(tab);

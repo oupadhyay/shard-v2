@@ -409,13 +409,13 @@ impl ToolRegistry {
         // ── Self-awareness: read an allow-listed file ────────────────────
         register!(
             "read_file", "automation",
-            "Read the contents of an allow-listed Shard file (e.g. 'config.toml'). Returns the file contents verbatim. API-key fields are stripped on save and never present in config.toml. Call this BEFORE edit_file so you know the exact current text — `edit_file` requires an exact `old_str` substring match.",
+            "Read the contents of an allow-listed Shard file (e.g. 'config.toml' or 'personas/<slug>.md'). Returns the file contents verbatim. API-key fields are stripped on save and never present in config.toml. Call this BEFORE edit_file so you know the exact current text — `edit_file` requires an exact `old_str` substring match.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Allow-listed file path. Currently allowed: 'config.toml' (Shard's runtime configuration)."
+                        "description": "Allow-listed file path. Currently allowed: 'config.toml' (Shard's runtime configuration) or 'personas/<slug>.md' (any persona Markdown file; slug matches [a-z][a-z0-9-]{1,40})."
                     }
                 },
                 "required": ["path"],
@@ -427,13 +427,13 @@ impl ToolRegistry {
         // ── Self-awareness: edit an allow-listed file ────────────────────
         register!(
             "edit_file", "automation",
-            "Edit an allow-listed Shard file by replacing `old_str` with `new_str`. Currently allow-listed: 'config.toml' only. `old_str` MUST be an exact substring of the file (whitespace included) and unique unless `replace_all=true`. Returns a unified diff of the change; the frontend renders this as a diff viewer. Refuses any edit that touches API-key fields.",
+            "Edit an allow-listed Shard file by replacing `old_str` with `new_str`. Currently allow-listed: 'config.toml' and 'personas/<slug>.md'. `old_str` MUST be an exact substring of the file (whitespace included) and unique unless `replace_all=true`. Returns a unified diff of the change; the frontend renders this as a diff viewer. Refuses any edit that touches API-key fields.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Allow-listed file path. Currently allowed: 'config.toml'."
+                        "description": "Allow-listed file path. Currently allowed: 'config.toml' or 'personas/<slug>.md'."
                     },
                     "old_str": {
                         "type": "string",
@@ -463,7 +463,7 @@ impl ToolRegistry {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Allow-listed file path (same names as read_file/edit_file). Currently: 'config.toml'."
+                        "description": "Allow-listed file path (same names as read_file/edit_file). Currently: 'config.toml' or 'personas/<slug>.md'."
                     },
                     "limit": {
                         "type": "integer",
@@ -547,11 +547,17 @@ impl ToolRegistry {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Allow-listed file path (same names as read_file/edit_file). Currently: 'config.toml'."
+                        "description": "Allow-listed file path (same names as read_file/edit_file). Currently: 'config.toml' or 'personas/<slug>.md'."
                     },
                     "event_id": {
-                        "type": "string",
-                        "description": "Optional specific file_events.id to roll back to. When omitted, rolls back the most recent restorable edit."
+                        // Nullable so callers can express "no specific event"
+                        // while still satisfying OpenAI strict-mode's
+                        // requirement that every key appear in `required`.
+                        // The dispatch in agent/tools/mod.rs treats both
+                        // `null` and the empty string as "roll back the
+                        // most recent restorable edit".
+                        "type": ["string", "null"],
+                        "description": "Optional file_events.id to roll back to. Pass null (or an empty string) to roll back the most recent restorable edit for `path`."
                     }
                 },
                 "required": ["path", "event_id"],

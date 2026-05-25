@@ -41,14 +41,41 @@ use std::path::PathBuf;
 pub const SHARD_BUNDLE_ID: &str = "dev.ojasw.shard";
 
 /// `<data_local_dir>/dev.ojasw.shard/` — root for memories.sqlite, personas,
-/// MEMORIES.json, config.toml, etc. Mirrors `app_data_dir()` /
-/// `app_config_dir()` on macOS / Linux. Created on demand.
+/// MEMORIES.json, etc. Mirrors Tauri's `app_data_dir()` on macOS / Linux.
+/// Created on demand.
+///
+/// Note: this is NOT the right base for `config.toml` on Linux — that file
+/// lives under `app_config_dir()`, which `dirs::data_local_dir()` does not
+/// match. Use [`shard_config_dir`] for `config.toml` so MCP-mode reads the
+/// same file the GUI/agent writes.
 pub fn shard_data_dir() -> Result<PathBuf, String> {
     let base = dirs::data_local_dir()
         .ok_or_else(|| "Could not locate platform data dir".to_string())?;
     let dir = base.join(SHARD_BUNDLE_ID);
     if !dir.exists() {
         std::fs::create_dir_all(&dir).map_err(|e| format!("create data dir: {}", e))?;
+    }
+    Ok(dir)
+}
+
+/// `<config_dir>/dev.ojasw.shard/` — root for `config.toml`. Mirrors
+/// Tauri's `app_config_dir()`:
+///
+/// | OS      | `app_config_dir()`                | `dirs::config_dir()` |
+/// |---------|-----------------------------------|-----------------------|
+/// | macOS   | `~/Library/Application Support/…` | `~/Library/Application Support`   |
+/// | Linux   | `~/.config/…`                     | `~/.config`           |
+/// | Windows | `%APPDATA%\…`                     | `%APPDATA%`           |
+///
+/// On macOS this happens to equal `data_local_dir()`, but on Linux the
+/// two diverge (`~/.config` vs `~/.local/share`), so MCP mode must use the
+/// config-dir variant to stay consistent with the Tauri-side reader.
+pub fn shard_config_dir() -> Result<PathBuf, String> {
+    let base = dirs::config_dir()
+        .ok_or_else(|| "Could not locate platform config dir".to_string())?;
+    let dir = base.join(SHARD_BUNDLE_ID);
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create config dir: {}", e))?;
     }
     Ok(dir)
 }
@@ -67,7 +94,10 @@ pub fn shard_db_path() -> Result<PathBuf, String> {
 pub fn resolve_allowed_path_no_tauri(logical: &str) -> Result<PathBuf, String> {
     use crate::self_files::{classify_logical_path, AllowedPath};
     match classify_logical_path(logical)? {
-        AllowedPath::ConfigToml => Ok(shard_data_dir()?.join("config.toml")),
+        // Must use config_dir (NOT data_local_dir) to match Tauri's
+        // `app_config_dir()` — on Linux these diverge (`~/.config` vs
+        // `~/.local/share`). See [`shard_config_dir`].
+        AllowedPath::ConfigToml => Ok(shard_config_dir()?.join("config.toml")),
         AllowedPath::Persona { slug } => {
             let dir = crate::personas::get_personas_dir()?;
             Ok(dir.join(format!("{}.md", slug)))
