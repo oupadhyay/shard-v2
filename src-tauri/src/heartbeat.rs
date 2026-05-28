@@ -234,12 +234,19 @@ pub fn normalize_heartbeat_slug(name: &str) -> String {
         normalized = format!("hb-{}", normalized);
     }
 
-    // Enforce length bounds (2..=41)
-    if normalized.len() < 2 {
-        normalized = format!("{}-hb", normalized);
-    }
+    // Truncate to maximum 41 first
     normalized.truncate(41);
+    // Strip trailing/leading hyphens again in case truncation left a trailing hyphen
     normalized = normalized.trim_matches('-').to_string();
+
+    // Now enforce length bounds (2..=41)
+    if normalized.len() < 2 {
+        if normalized.is_empty() {
+            normalized = "hb".to_string();
+        } else {
+            normalized = format!("{}-hb", normalized);
+        }
+    }
     normalized
 }
 
@@ -1303,16 +1310,25 @@ pub async fn execute_approved_draft<R: Runtime>(
 ) -> Result<String, String> {
     // 1. Fetch the proactive message to get the draft payload
     let store = crate::memories::get_vector_store(app_handle)?;
-    let row: (Option<String>, String) = store
+    let row: (Option<String>, String, Option<String>) = store
         .conn
         .query_row(
-            "SELECT draft_payload, heartbeat_session FROM proactive_queue WHERE id = ?1 AND draft_payload IS NOT NULL",
+            "SELECT draft_payload, heartbeat_session, reviewed_at FROM proactive_queue WHERE id = ?1 AND draft_payload IS NOT NULL",
             rusqlite::params![message_id],
-            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
         )
         .map_err(|e| format!("Draft not found: {}", e))?;
 
-    let (draft_json_opt, _session) = row;
+    let (draft_json_opt, _session, reviewed_at) = row;
+    if reviewed_at.is_some() {
+        return Err("Draft has already been reviewed".to_string());
+    }
     let draft_json = draft_json_opt.ok_or("Message has no draft payload — not a draft action")?;
     let draft: DraftPayload =
         serde_json::from_str(&draft_json).map_err(|e| format!("Invalid draft payload: {}", e))?;
@@ -1351,7 +1367,7 @@ pub async fn execute_approved_draft<R: Runtime>(
 
 /// Execute a draft-gated tool (config/heartbeat mutations).
 /// These only run after explicit user approval.
-async fn execute_draft_gated_tool<R: Runtime>(
+pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
     app_handle: &AppHandle<R>,
     tool_name: &str,
     args: &serde_json::Value,
@@ -1397,6 +1413,9 @@ async fn execute_draft_gated_tool<R: Runtime>(
                 toml_content.push_str(&format!("max_tool_calls = {}\n", m));
             }
             toml_content.push_str(&format!("prompt = \"\"\"{}\"\"\"\n", prompt));
+
+            // Validate generated TOML structure before writing
+            parse_heartbeat_spec(&toml_content, &safe_name)?;
 
             fs::write(&filepath, &toml_content)
                 .map_err(|e| format!("Failed to write heartbeat: {}", e))?;
@@ -1468,10 +1487,69 @@ async fn execute_draft_gated_tool<R: Runtime>(
             }
             output.push_str(&format!("prompt = \"\"\"{}\"\"\"\n", spec.prompt));
 
+            // Validate generated TOML structure before writing
+            parse_heartbeat_spec(&output, &safe_name)?;
+
             fs::write(&filepath, &output)
                 .map_err(|e| format!("Failed to write heartbeat: {}", e))?;
 
             Ok(format!("Updated heartbeat '{}'", safe_name))
+        }
+        "rollback_self_edit" => {
+            let path = args["path"].as_str().unwrap_or_default();
+            let event_id = args["event_id"].as_str().filter(|s| !s.is_empty());
+
+            crate::self_files::validate_logical_path(path)?;
+            let store = crate::memories::get_vector_store(app_handle)?;
+            let (reverted_id, len) = crate::file_history::rollback_event(&store, path, event_id)
+                .map_err(|e| format!("Rollback failed: {}", e))?;
+
+            // Emit a `file-edited` event so the diff viewer adds a tab for the revert
+            let _ = app_handle.emit(
+                "file-edited",
+                serde_json::json!({
+                    "path": path,
+                    "abs_path": "",
+                    "before": "",
+                    "after": "",
+                    "unified_diff": format!("(rolled back to event {})", reverted_id),
+                    "replacements": 0_usize,
+                }),
+            );
+            Ok(format!(
+                "Rolled back `{}` to event `{}` ({} bytes restored).",
+                path, reverted_id, len
+            ))
+        }
+        "crystallize_sketch" => {
+            let logical_path = args["logical_path"]
+                .as_str()
+                .ok_or("Missing 'logical_path' argument")?;
+            let markdown = args["markdown"]
+                .as_str()
+                .ok_or("Missing 'markdown' argument")?;
+            let source_sketch_id = args["source_sketch_id"]
+                .as_str()
+                .ok_or("Missing 'source_sketch_id' argument")?;
+
+            crate::self_files::validate_logical_path(logical_path)?;
+            let outcome = crate::self_files::edit_allowed_file(
+                app_handle,
+                logical_path,
+                "",
+                markdown,
+                false,
+            )?;
+            let _ = app_handle.emit("file-edited", &outcome);
+
+            if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+                let _ = crate::crystals::mark_crystallized(&store, source_sketch_id);
+            }
+
+            Ok(format!(
+                "Crystallized sketch `{}` into draft persona `{}` ({} bytes written).",
+                source_sketch_id, logical_path, outcome.after.len()
+            ))
         }
         "edit_file" => {
             let path = args["path"].as_str().ok_or("Missing 'path' argument")?;
