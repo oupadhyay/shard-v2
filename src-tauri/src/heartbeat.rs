@@ -27,6 +27,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// A parsed heartbeat specification from a `.toml` file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HeartbeatSpec {
     /// Cron expression (e.g., "0 */2 * * *")
     pub schedule: String,
@@ -81,7 +82,12 @@ pub fn get_heartbeat_status_list<R: Runtime>(app_handle: &AppHandle<R>) -> Vec<H
             };
 
             // Format next occurrence for UI preview
-            let schedule_preview = if let Ok(schedule) = spec.schedule.parse::<cron::Schedule>() {
+            let cron_expr = if spec.schedule.split_whitespace().count() == 5 {
+                format!("0 {}", spec.schedule)
+            } else {
+                spec.schedule.clone()
+            };
+            let schedule_preview = if let Ok(schedule) = cron_expr.parse::<cron::Schedule>() {
                 if let Some(next) = schedule.upcoming(chrono::Local).next() {
                     // E.g., "Tomorrow at 11:05 PM" or "Mar 17 at 11:05 PM"
                     let now = chrono::Local::now();
@@ -140,6 +146,55 @@ pub fn parse_heartbeat_spec(content: &str, filename: &str) -> Result<HeartbeatSp
         ));
     }
 
+    if spec.session.trim().is_empty() {
+        return Err(format!(
+            "Heartbeat spec '{}' has an empty session namespace",
+            filename
+        ));
+    }
+
+    // Cron validation with 5-field fallback support
+    let cron_to_validate = if spec.schedule.split_whitespace().count() == 5 {
+        format!("0 {}", spec.schedule)
+    } else {
+        spec.schedule.clone()
+    };
+    if let Err(e) = cron_to_validate.parse::<cron::Schedule>() {
+        return Err(format!(
+            "Heartbeat spec '{}' has an invalid cron schedule '{}': {}",
+            filename, spec.schedule, e
+        ));
+    }
+
+    // Numeric limits
+    if spec.max_tool_calls == 0 || spec.max_tool_calls > 20 {
+        return Err(format!(
+            "Heartbeat spec '{}' max_tool_calls must be between 1 and 20 (got {})",
+            filename, spec.max_tool_calls
+        ));
+    }
+    if let Some(cap) = spec.max_runs_per_day {
+        if cap == 0 {
+            return Err(format!(
+                "Heartbeat spec '{}' max_runs_per_day must be at least 1",
+                filename
+            ));
+        }
+    }
+
+    // Persona check (gated for testing)
+    #[cfg(not(test))]
+    {
+        if let Some(ref persona_name) = spec.persona {
+            if crate::personas::get_persona_metadata(persona_name).is_none() {
+                return Err(format!(
+                    "Heartbeat spec '{}' references unknown persona '{}'",
+                    filename, persona_name
+                ));
+            }
+        }
+    }
+
     spec.filename = filename.to_string();
 
     Ok(spec)
@@ -162,8 +217,66 @@ pub fn get_heartbeats_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathB
     Ok(dir)
 }
 
+/// Normalizes a string to a valid heartbeat spec slug (`[a-z][a-z0-9-]{1,40}`).
+pub fn normalize_heartbeat_slug(name: &str) -> String {
+    let mut normalized: String = name
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c == '_' { '-' } else { c })
+        .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-')
+        .collect();
+
+    // Strip leading/trailing hyphens
+    normalized = normalized.trim_matches('-').to_string();
+
+    // Ensure it starts with [a-z]
+    if normalized.starts_with(|c: char| c.is_ascii_digit()) || normalized.is_empty() {
+        normalized = format!("hb-{}", normalized);
+    }
+
+    // Enforce length bounds (2..=41)
+    if normalized.len() < 2 {
+        normalized = format!("{}-hb", normalized);
+    }
+    normalized.truncate(41);
+    normalized = normalized.trim_matches('-').to_string();
+    normalized
+}
+
+/// Automatically normalizes legacy heartbeat filenames on disk to strict slugs to avoid lockout.
+pub fn migrate_legacy_heartbeat_files<R: Runtime>(app_handle: &AppHandle<R>) {
+    let dir = match get_heartbeats_dir(app_handle) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let entries = match fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("toml") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                let normalized = normalize_heartbeat_slug(stem);
+                if normalized != stem {
+                    let new_path = path.with_file_name(format!("{}.toml", normalized));
+                    if new_path.exists() {
+                        log::warn!("[Heartbeat] Conflict: cannot rename '{}' to '{}' (destination already exists)", stem, normalized);
+                    } else if let Err(e) = fs::rename(&path, &new_path) {
+                        log::error!("[Heartbeat] Failed to rename legacy spec file '{}' to '{}': {}", path.display(), new_path.display(), e);
+                    } else {
+                        log::info!("[Heartbeat] Successfully migrated legacy spec file '{}' to '{}'", stem, normalized);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Scans the heartbeats directory and returns all valid specs.
 pub fn load_heartbeat_specs<R: Runtime>(app_handle: &AppHandle<R>) -> Vec<HeartbeatSpec> {
+    migrate_legacy_heartbeat_files(app_handle);
+
     let dir = match get_heartbeats_dir(app_handle) {
         Ok(d) => d,
         Err(e) => {
@@ -528,7 +641,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
     )];
 
     if let Some(persona_name) = &spec.persona {
-        if let Some(persona_content) = crate::personas::get_persona_content(persona_name) {
+        if let Some(persona_content) = crate::personas::resolve_persona_content(persona_name) {
             system_parts.push(format!("\n\nActive Persona:\n{}", persona_content));
         }
     }
@@ -625,7 +738,10 @@ pub async fn process_heartbeat_turn<R: Runtime>(
             let args: serde_json::Value =
                 serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
 
-            if crate::tool_registry::global().is_draft_gated(&tc.name) {
+            let is_gated = crate::tool_registry::global().is_draft_gated(&tc.name)
+                || tc.name == "edit_file";
+
+            if is_gated {
                 // Draft-gated tool: build justification from the tool call arguments,
                 // since content is often None when the model returns tool_calls.
                 let justification = format!(
@@ -883,6 +999,13 @@ async fn execute_safe_tool<R: Runtime>(
         }
         "youtube_transcript" => {
             "Tool 'youtube_transcript' is too large for heartbeat background runs. Please summarize manually or run in chat.".to_string()
+        }
+        "read_file" => {
+            let path = args["path"].as_str().unwrap_or_default();
+            match crate::self_files::read_allowed_file(app_handle, path) {
+                Ok(contents) => contents,
+                Err(e) => format!("Error: {}", e),
+            }
         }
         _ => format!("Unknown tool: {}", tool_name),
     }
@@ -1254,15 +1377,8 @@ async fn execute_draft_gated_tool<R: Runtime>(
             let persona = args["persona"].as_str();
             let max_tool_calls = args["max_tool_calls"].as_u64();
 
-            // Sanitize filename
-            let safe_name: String = name
-                .chars()
-                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-                .take(64)
-                .collect();
-            if safe_name.is_empty() {
-                return Err("Invalid heartbeat name".to_string());
-            }
+            crate::self_files::validate_heartbeat_slug(name)?;
+            let safe_name = name.to_string();
 
             let dir = get_heartbeats_dir(app_handle)?;
             let filepath = dir.join(format!("{}.toml", safe_name));
@@ -1292,11 +1408,8 @@ async fn execute_draft_gated_tool<R: Runtime>(
                 .as_str()
                 .ok_or("Missing 'name' argument")?;
 
-            let safe_name: String = name
-                .chars()
-                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-                .take(64)
-                .collect();
+            crate::self_files::validate_heartbeat_slug(name)?;
+            let safe_name = name.to_string();
 
             let dir = get_heartbeats_dir(app_handle)?;
             let filepath = dir.join(format!("{}.toml", safe_name));
@@ -1314,11 +1427,8 @@ async fn execute_draft_gated_tool<R: Runtime>(
                 .as_str()
                 .ok_or("Missing 'name' argument")?;
 
-            let safe_name: String = name
-                .chars()
-                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-                .take(64)
-                .collect();
+            crate::self_files::validate_heartbeat_slug(name)?;
+            let safe_name = name.to_string();
 
             let dir = get_heartbeats_dir(app_handle)?;
             let filepath = dir.join(format!("{}.toml", safe_name));
@@ -1362,6 +1472,27 @@ async fn execute_draft_gated_tool<R: Runtime>(
                 .map_err(|e| format!("Failed to write heartbeat: {}", e))?;
 
             Ok(format!("Updated heartbeat '{}'", safe_name))
+        }
+        "edit_file" => {
+            let path = args["path"].as_str().ok_or("Missing 'path' argument")?;
+            let old_str = args["old_str"].as_str().unwrap_or("");
+            let new_str = args["new_str"].as_str().unwrap_or("");
+            let replace_all = args["replace_all"].as_bool().unwrap_or(false);
+
+            let outcome = crate::self_files::edit_allowed_file(
+                app_handle, path, old_str, new_str, replace_all,
+            )?;
+
+            // Structured event for frontend diff viewer
+            let _ = app_handle.emit("file-edited", &outcome);
+
+            Ok(format!(
+                "Edited `{}` ({} replacement{}).\n\n```diff\n{}\n```",
+                outcome.path,
+                outcome.replacements,
+                if outcome.replacements == 1 { "" } else { "s" },
+                outcome.unified_diff
+            ))
         }
         _ => Err(format!("Unknown draft-gated tool: {}", tool_name)),
     }

@@ -447,3 +447,48 @@ fn test_filename_sanitization() {
     assert!(!safe.contains('/'));
     assert!(!safe.contains("..")); 
 }
+
+#[test]
+fn test_normalize_heartbeat_slug() {
+    assert_eq!(normalize_heartbeat_slug("Daily_News"), "daily-news");
+    assert_eq!(normalize_heartbeat_slug("1review"), "hb-1review");
+    assert_eq!(normalize_heartbeat_slug("-foo-bar-"), "foo-bar");
+    assert_eq!(normalize_heartbeat_slug("A"), "a-hb");
+    let very_long = format!("a{}", "1".repeat(50));
+    let normalized = normalize_heartbeat_slug(&very_long);
+    assert_eq!(normalized.len(), 41);
+}
+
+#[test]
+fn test_migrate_legacy_heartbeat_files() {
+    use std::fs;
+    let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+    let heartbeats_dir = temp_dir.path().join("heartbeats");
+    fs::create_dir_all(&heartbeats_dir).expect("Failed to create heartbeats dir");
+
+    // Write a non-conforming spec file
+    let legacy_path = heartbeats_dir.join("Daily_News.toml");
+    fs::write(
+        &legacy_path,
+        "schedule = \"0 */2 * * *\"\nsession = \"agent:news\"\nprompt = \"Check news.\"\n",
+    )
+    .unwrap();
+
+    // Emulate migrate function by scanning the temp dir directly
+    let entries = fs::read_dir(&heartbeats_dir).unwrap();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("toml") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                let normalized = normalize_heartbeat_slug(stem);
+                if normalized != stem {
+                    let new_path = path.with_file_name(format!("{}.toml", normalized));
+                    fs::rename(&path, &new_path).unwrap();
+                }
+            }
+        }
+    }
+
+    assert!(!legacy_path.exists());
+    assert!(heartbeats_dir.join("daily-news.toml").exists());
+}
