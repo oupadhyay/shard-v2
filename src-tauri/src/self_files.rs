@@ -278,6 +278,10 @@ pub fn edit_allowed_file<R: Runtime>(
 
     let (after, replacements) = apply_edit(&before, old_str, new_str, replace_all)?;
 
+    if let AllowedPath::HeartbeatSpec { name } = classify_logical_path(logical)? {
+        crate::heartbeat::parse_heartbeat_spec(&after, &name)?;
+    }
+
     if let Some(parent) = abs.parent() {
         if !parent.exists() {
             fs::create_dir_all(parent)
@@ -345,6 +349,10 @@ pub fn edit_at_abs_path(
     };
 
     let (after, replacements) = apply_edit(&before, old_str, new_str, replace_all)?;
+
+    if let AllowedPath::HeartbeatSpec { name } = classify_logical_path(logical)? {
+        crate::heartbeat::parse_heartbeat_spec(&after, &name)?;
+    }
 
     if let Some(parent) = abs.parent() {
         if !parent.exists() {
@@ -696,5 +704,21 @@ mod tests {
         assert!(classify_logical_path("heartbeats/news-analyst").is_err()); // missing suffix
         assert!(classify_logical_path("heartbeats/../news.toml").is_err()); // traversal
         assert!(classify_logical_path("heartbeats/sub/news.toml").is_err()); // nested folder
+    }
+
+    #[test]
+    fn edit_heartbeat_fails_on_bad_toml() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("daily-review.toml");
+
+        let err = edit_at_abs_path(
+            &path,
+            "heartbeats/daily-review.toml",
+            "",
+            "invalid = toml [ [",
+            false
+        ).unwrap_err();
+
+        assert!(err.contains("parsing TOML") || err.contains("Error parsing TOML"));
     }
 }
