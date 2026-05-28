@@ -40,6 +40,9 @@ pub enum AllowedPath {
     /// `personas/<slug>.md` — `slug` is the validated bare slug, without the
     /// `.md` suffix.
     Persona { slug: String },
+    /// `heartbeats/<name>.toml` — `name` is the validated bare slug, without the
+    /// `.toml` suffix.
+    HeartbeatSpec { name: String },
 }
 
 /// Pure allow-list validator. Returns the canonical logical name on success
@@ -53,7 +56,39 @@ pub fn validate_logical_path(logical: &str) -> Result<&'static str, String> {
     match classify_logical_path(logical)? {
         AllowedPath::ConfigToml => Ok("config.toml"),
         AllowedPath::Persona { .. } => Ok("persona"),
+        AllowedPath::HeartbeatSpec { .. } => Ok("heartbeat"),
     }
+}
+
+/// Validate a slug for `heartbeats/<name>.toml`. Must match `[a-z][a-z0-9-]{1,40}`.
+/// Refuses leading hyphens/digits, uppercase, underscores, or anything else
+/// that would surprise the existing `heartbeats/<name>.toml` reader.
+pub fn validate_heartbeat_slug(slug: &str) -> Result<(), String> {
+    let len = slug.len();
+    if !(2..=41).contains(&len) {
+        return Err(format!(
+            "heartbeat slug '{}' must be 2-41 chars (got {})",
+            slug, len
+        ));
+    }
+    let mut chars = slug.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_lowercase() {
+        return Err(format!(
+            "heartbeat slug '{}' must start with a lowercase letter [a-z]",
+            slug
+        ));
+    }
+    for c in chars {
+        let ok = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
+        if !ok {
+            return Err(format!(
+                "heartbeat slug '{}' may only contain [a-z0-9-] (offending char: {:?})",
+                slug, c
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Validate a slug for `personas/<slug>.md`. Must match `[a-z][a-z0-9-]{1,40}`.
@@ -120,9 +155,21 @@ pub fn classify_logical_path(logical: &str) -> Result<AllowedPath, String> {
             slug: slug.to_string(),
         });
     }
+    if let Some(rest) = logical.strip_prefix("heartbeats/") {
+        let name = rest.strip_suffix(".toml").ok_or_else(|| {
+            format!(
+                "heartbeat path '{}' must end in '.toml' (e.g. heartbeats/news-analyst.toml)",
+                logical
+            )
+        })?;
+        validate_heartbeat_slug(name)?;
+        return Ok(AllowedPath::HeartbeatSpec {
+            name: name.to_string(),
+        });
+    }
 
     Err(format!(
-        "Path '{}' is not allow-listed. Allowed: config.toml, personas/<slug>.md",
+        "Path '{}' is not allow-listed. Allowed: config.toml, personas/<slug>.md, heartbeats/<name>.toml",
         logical
     ))
 }
@@ -151,6 +198,10 @@ pub fn resolve_allowed_path<R: Runtime>(
             // unit tests that don't load the full personas subsystem.
             let dir = crate::personas::get_personas_dir()?;
             Ok(dir.join(format!("{}.md", slug)))
+        }
+        AllowedPath::HeartbeatSpec { name } => {
+            let dir = crate::heartbeat::get_heartbeats_dir(app_handle)?;
+            Ok(dir.join(format!("{}.toml", name)))
         }
     }
 }
@@ -624,5 +675,26 @@ mod tests {
         // 42 chars: too long.
         let over = format!("a{}", "1".repeat(41));
         assert!(validate_persona_slug(&over).is_err());
+    }
+
+    // Heartbeat classification tests
+    #[test]
+    fn classify_accepts_heartbeat_path() {
+        let out = classify_logical_path("heartbeats/daily-review.toml").unwrap();
+        assert_eq!(
+            out,
+            AllowedPath::HeartbeatSpec {
+                name: "daily-review".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_rejects_heartbeat_bad_slug() {
+        assert!(classify_logical_path("heartbeats/1review.toml").is_err());
+        assert!(classify_logical_path("heartbeats/UPPER.toml").is_err());
+        assert!(classify_logical_path("heartbeats/news-analyst").is_err()); // missing suffix
+        assert!(classify_logical_path("heartbeats/../news.toml").is_err()); // traversal
+        assert!(classify_logical_path("heartbeats/sub/news.toml").is_err()); // nested folder
     }
 }

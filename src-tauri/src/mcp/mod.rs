@@ -94,13 +94,20 @@ pub fn shard_db_path() -> Result<PathBuf, String> {
 pub fn resolve_allowed_path_no_tauri(logical: &str) -> Result<PathBuf, String> {
     use crate::self_files::{classify_logical_path, AllowedPath};
     match classify_logical_path(logical)? {
-        // Must use config_dir (NOT data_local_dir) to match Tauri's
-        // `app_config_dir()` — on Linux these diverge (`~/.config` vs
-        // `~/.local/share`). See [`shard_config_dir`].
-        AllowedPath::ConfigToml => Ok(shard_config_dir()?.join("config.toml")),
+        AllowedPath::ConfigToml => {
+            let base = dirs::config_dir()
+                .ok_or_else(|| "Could not locate platform config dir".to_string())?;
+            Ok(base.join(SHARD_BUNDLE_ID).join("config.toml"))
+        }
         AllowedPath::Persona { slug } => {
-            let dir = crate::personas::get_personas_dir()?;
-            Ok(dir.join(format!("{}.md", slug)))
+            let base = dirs::data_local_dir()
+                .ok_or_else(|| "Could not locate platform data dir".to_string())?;
+            Ok(base.join(SHARD_BUNDLE_ID).join("personas").join(format!("{}.md", slug)))
+        }
+        AllowedPath::HeartbeatSpec { name } => {
+            let base = dirs::data_local_dir()
+                .ok_or_else(|| "Could not locate platform data dir".to_string())?;
+            Ok(base.join(SHARD_BUNDLE_ID).join("heartbeats").join(format!("{}.toml", name)))
         }
     }
 }
