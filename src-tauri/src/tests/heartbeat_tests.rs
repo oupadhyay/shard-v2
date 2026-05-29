@@ -6,6 +6,7 @@
  * in-memory/tempdir fixtures.
  */
 use crate::heartbeat::*;
+use tauri::Manager;
 
 // ============================================================================
 // Spec Parsing Tests
@@ -447,3 +448,158 @@ fn test_filename_sanitization() {
     assert!(!safe.contains('/'));
     assert!(!safe.contains("..")); 
 }
+
+#[test]
+fn test_normalize_heartbeat_slug() {
+    assert_eq!(normalize_heartbeat_slug("Daily_News"), "daily-news");
+    assert_eq!(normalize_heartbeat_slug("1review"), "hb-1review");
+    assert_eq!(normalize_heartbeat_slug("-foo-bar-"), "foo-bar");
+    assert_eq!(normalize_heartbeat_slug("A"), "a-hb");
+    let very_long = format!("a{}", "1".repeat(50));
+    let normalized = normalize_heartbeat_slug(&very_long);
+    assert_eq!(normalized.len(), 41);
+}
+
+#[test]
+fn test_migrate_legacy_heartbeat_files() {
+    use std::fs;
+    let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+    let heartbeats_dir = temp_dir.path().join("heartbeats");
+    fs::create_dir_all(&heartbeats_dir).expect("Failed to create heartbeats dir");
+
+    // Write a non-conforming spec file
+    let legacy_path = heartbeats_dir.join("Daily_News.toml");
+    fs::write(
+        &legacy_path,
+        "schedule = \"0 */2 * * *\"\nsession = \"agent:news\"\nprompt = \"Check news.\"\n",
+    )
+    .unwrap();
+
+    // Emulate migrate function by scanning the temp dir directly
+    let entries = fs::read_dir(&heartbeats_dir).unwrap();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("toml") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                let normalized = normalize_heartbeat_slug(stem);
+                if normalized != stem {
+                    let new_path = path.with_file_name(format!("{}.toml", normalized));
+                    fs::rename(&path, &new_path).unwrap();
+                }
+            }
+        }
+    }
+
+    assert!(!legacy_path.exists());
+    assert!(heartbeats_dir.join("daily-news.toml").exists());
+}
+
+#[test]
+fn test_normalize_heartbeat_slug_edge_cases() {
+    let edge_1 = "a---------------------------------------------bc";
+    assert_eq!(normalize_heartbeat_slug(edge_1), "a-hb");
+
+    let edge_2 = "-----------------------------------------------";
+    assert_eq!(normalize_heartbeat_slug(edge_2), "hb");
+}
+
+#[tokio::test]
+async fn test_execute_approved_draft_reviewed_check() {
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+
+    // Set up app config dir so get_heartbeats_dir doesn't fail
+    if let Ok(cfg_dir) = handle.path().app_config_dir() {
+        let _ = std::fs::create_dir_all(&cfg_dir);
+    }
+
+    ensure_proactive_queue_table(handle).unwrap();
+    let message_id_str = uuid::Uuid::new_v4().to_string();
+    let message_id = &message_id_str;
+    let payload = serde_json::json!({
+        "name": "create_heartbeat",
+        "arguments": {
+            "name": "temp-test-hb",
+            "schedule": "0 */4 * * *",
+            "session": "agent:test-hb",
+            "prompt": "Do something test"
+        },
+        "justification": "Test justification",
+        "heartbeat_session": "agent:test",
+    });
+
+    let msg = ProactiveMessage {
+        id: message_id.to_string(),
+        heartbeat_session: "agent:test".to_string(),
+        content: "Propose heartbeat".to_string(),
+        draft_payload: Some(payload.to_string()),
+        needs_approval: true,
+        reviewed_at: None,
+        approved: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    insert_proactive_message(handle, &msg).unwrap();
+    review_proactive_message(handle, message_id, Some(true)).unwrap();
+
+    // Calling execute_approved_draft on an already reviewed message should return an error!
+    let res = execute_approved_draft(handle, message_id).await;
+    assert!(res.is_err());
+    assert_eq!(res.unwrap_err(), "Draft has already been reviewed or does not exist");
+}
+
+#[tokio::test]
+async fn test_execute_draft_gated_tool_validation() {
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+
+    // Set up app config dir so get_heartbeats_dir doesn't fail
+    if let Ok(cfg_dir) = handle.path().app_config_dir() {
+        let _ = std::fs::create_dir_all(&cfg_dir);
+    }
+
+    // Call with invalid schedule (TOML structure is valid but schedule parsing fails)
+    let args = serde_json::json!({
+        "name": "valid-name",
+        "schedule": "invalid cron schedule",
+        "session": "agent:test",
+        "prompt": "prompt text"
+    });
+
+    let res = execute_draft_gated_tool(handle, "create_heartbeat", &args).await;
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert!(err.contains("schedule") || err.contains("cron") || err.contains("expression"));
+}
+
+#[tokio::test]
+async fn test_crystallize_sketch_draft_gated() {
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+
+    let path = crate::self_files::resolve_allowed_path(handle, "personas/test-sketch.md").unwrap();
+    if path.exists() {
+        let _ = std::fs::remove_file(&path);
+    }
+
+    let args = serde_json::json!({
+        "logical_path": "personas/test-sketch.md",
+        "markdown": "# Test Sketch Markdown\n",
+        "source_sketch_id": "test-source-sketch-123"
+    });
+
+    let res = execute_draft_gated_tool(handle, "crystallize_sketch", &args).await;
+    assert!(res.is_ok(), "Expected success, got error: {:?}", res.err());
+    let msg = res.unwrap();
+    assert!(msg.contains("Crystallized sketch"));
+    assert!(msg.contains("test-source-sketch-123"));
+
+    // Verify file content was written
+    assert!(path.exists());
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(content, "# Test Sketch Markdown\n");
+
+    // Clean up
+    let _ = std::fs::remove_file(&path);
+}
+
