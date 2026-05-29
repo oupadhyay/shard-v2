@@ -545,7 +545,7 @@ async fn test_execute_approved_draft_reviewed_check() {
     // Calling execute_approved_draft on an already reviewed message should return an error!
     let res = execute_approved_draft(handle, message_id).await;
     assert!(res.is_err());
-    assert_eq!(res.unwrap_err(), "Draft has already been reviewed");
+    assert_eq!(res.unwrap_err(), "Draft has already been reviewed or does not exist");
 }
 
 #[tokio::test]
@@ -570,5 +570,36 @@ async fn test_execute_draft_gated_tool_validation() {
     assert!(res.is_err());
     let err = res.unwrap_err();
     assert!(err.contains("schedule") || err.contains("cron") || err.contains("expression"));
+}
+
+#[tokio::test]
+async fn test_crystallize_sketch_draft_gated() {
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+
+    let path = crate::self_files::resolve_allowed_path(handle, "personas/test-sketch.md").unwrap();
+    if path.exists() {
+        let _ = std::fs::remove_file(&path);
+    }
+
+    let args = serde_json::json!({
+        "logical_path": "personas/test-sketch.md",
+        "markdown": "# Test Sketch Markdown\n",
+        "source_sketch_id": "test-source-sketch-123"
+    });
+
+    let res = execute_draft_gated_tool(handle, "crystallize_sketch", &args).await;
+    assert!(res.is_ok(), "Expected success, got error: {:?}", res.err());
+    let msg = res.unwrap();
+    assert!(msg.contains("Crystallized sketch"));
+    assert!(msg.contains("test-source-sketch-123"));
+
+    // Verify file content was written
+    assert!(path.exists());
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(content, "# Test Sketch Markdown\n");
+
+    // Clean up
+    let _ = std::fs::remove_file(&path);
 }
 

@@ -1308,27 +1308,32 @@ pub async fn execute_approved_draft<R: Runtime>(
     app_handle: &AppHandle<R>,
     message_id: &str,
 ) -> Result<String, String> {
-    // 1. Fetch the proactive message to get the draft payload
+    // 1. Claim the draft execution atomically in SQLite
     let store = crate::memories::get_vector_store(app_handle)?;
-    let row: (Option<String>, String, Option<String>) = store
+    let now_str = chrono::Utc::now().to_rfc3339();
+    let rows_affected = store
+        .conn
+        .execute(
+            "UPDATE proactive_queue SET reviewed_at = ?1 WHERE id = ?2 AND reviewed_at IS NULL AND draft_payload IS NOT NULL",
+            rusqlite::params![now_str, message_id],
+        )
+        .map_err(|e| format!("Failed to claim draft execution: {}", e))?;
+
+    if rows_affected == 0 {
+        return Err("Draft has already been reviewed or does not exist".to_string());
+    }
+
+    // 2. Fetch the draft payload
+    let row: (Option<String>, String) = store
         .conn
         .query_row(
-            "SELECT draft_payload, heartbeat_session, reviewed_at FROM proactive_queue WHERE id = ?1 AND draft_payload IS NOT NULL",
+            "SELECT draft_payload, heartbeat_session FROM proactive_queue WHERE id = ?1",
             rusqlite::params![message_id],
-            |row| {
-                Ok((
-                    row.get::<_, Option<String>>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                ))
-            },
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
         )
         .map_err(|e| format!("Draft not found: {}", e))?;
 
-    let (draft_json_opt, _session, reviewed_at) = row;
-    if reviewed_at.is_some() {
-        return Err("Draft has already been reviewed".to_string());
-    }
+    let (draft_json_opt, _session) = row;
     let draft_json = draft_json_opt.ok_or("Message has no draft payload — not a draft action")?;
     let draft: DraftPayload =
         serde_json::from_str(&draft_json).map_err(|e| format!("Invalid draft payload: {}", e))?;
@@ -1338,10 +1343,10 @@ pub async fn execute_approved_draft<R: Runtime>(
         draft.name
     );
 
-    // 2. Execute the tool
+    // 3. Execute the tool
     let result = execute_draft_gated_tool(app_handle, &draft.name, &draft.arguments).await?;
 
-    // 3. Persist the execution & result to the session's chat history
+    // 4. Persist the execution & result to the session's chat history
     let summary = format!("**Executed Draft Action:** `{}`\n```json\n{}\n```\n**Result:**\n{}",
         draft.name,
         serde_json::to_string_pretty(&draft.arguments).unwrap_or_default(),
@@ -1522,34 +1527,64 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
             ))
         }
         "crystallize_sketch" => {
-            let logical_path = args["logical_path"]
-                .as_str()
-                .ok_or("Missing 'logical_path' argument")?;
-            let markdown = args["markdown"]
-                .as_str()
-                .ok_or("Missing 'markdown' argument")?;
-            let source_sketch_id = args["source_sketch_id"]
-                .as_str()
-                .ok_or("Missing 'source_sketch_id' argument")?;
+            if let Some(sketch_id) = args["sketch_id"].as_str() {
+                if sketch_id.is_empty() {
+                    return Err("Error: crystallize_sketch requires a non-empty sketch_id".to_string());
+                }
+                let config = crate::config::load_config(app_handle)?;
+                let store = crate::memories::get_vector_store(app_handle)?;
+                let (parent, children) = crate::crystals::load_sketch(&store, sketch_id)?;
+                let existing = crate::personas::list_available_personas();
+                let http_client = reqwest::Client::new();
+                let draft = crate::crystals::crystallize(
+                    &http_client,
+                    &config,
+                    &parent,
+                    &children,
+                    &existing,
+                )
+                .await?;
 
-            crate::self_files::validate_logical_path(logical_path)?;
-            let outcome = crate::self_files::edit_allowed_file(
-                app_handle,
-                logical_path,
-                "",
-                markdown,
-                false,
-            )?;
-            let _ = app_handle.emit("file-edited", &outcome);
+                let outcome = crate::crystals::write_persona_draft(app_handle, &draft)?;
+                let _ = crate::crystals::mark_crystallized(&store, sketch_id);
 
-            if let Ok(store) = crate::memories::get_vector_store(app_handle) {
-                let _ = crate::crystals::mark_crystallized(&store, source_sketch_id);
+                Ok(format!(
+                    "Crystallized sketch `{}` into draft persona `{}` ({} bytes written to {}).",
+                    sketch_id,
+                    draft.logical_path,
+                    outcome.after.len(),
+                    outcome.abs_path
+                ))
+            } else {
+                let logical_path = args["logical_path"]
+                    .as_str()
+                    .ok_or("Missing 'logical_path' or 'sketch_id' argument")?;
+                let markdown = args["markdown"]
+                    .as_str()
+                    .ok_or("Missing 'markdown' argument")?;
+                let source_sketch_id = args["source_sketch_id"]
+                    .as_str()
+                    .ok_or("Missing 'source_sketch_id' argument")?;
+
+                crate::self_files::validate_logical_path(logical_path)?;
+                let outcome = crate::self_files::edit_allowed_file(
+                    app_handle,
+                    logical_path,
+                    "",
+                    markdown,
+                    false,
+                )?;
+                let _ = app_handle.emit("file-edited", &outcome);
+
+                if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+                    let _ = crate::crystals::mark_crystallized(&store, source_sketch_id);
+                }
+
+                Ok(format!(
+                    "Crystallized sketch `{}` into draft persona `{}` ({} bytes written).",
+                    source_sketch_id, logical_path, outcome.after.len()
+                ))
             }
-
-            Ok(format!(
-                "Crystallized sketch `{}` into draft persona `{}` ({} bytes written).",
-                source_sketch_id, logical_path, outcome.after.len()
-            ))
         }
         "edit_file" => {
             let path = args["path"].as_str().ok_or("Missing 'path' argument")?;

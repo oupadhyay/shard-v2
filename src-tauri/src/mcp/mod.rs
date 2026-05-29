@@ -104,10 +104,8 @@ pub fn resolve_allowed_path_no_tauri(logical: &str) -> Result<PathBuf, String> {
                 .ok_or_else(|| "Could not locate platform data dir".to_string())?;
             Ok(base.join(SHARD_BUNDLE_ID).join("personas").join(format!("{}.md", slug)))
         }
-        AllowedPath::HeartbeatSpec { name } => {
-            let base = dirs::data_local_dir()
-                .ok_or_else(|| "Could not locate platform data dir".to_string())?;
-            Ok(base.join(SHARD_BUNDLE_ID).join("heartbeats").join(format!("{}.toml", name)))
+        AllowedPath::HeartbeatSpec { .. } => {
+            Err("Heartbeat spec access is not permitted in MCP mode".to_string())
         }
     }
 }
