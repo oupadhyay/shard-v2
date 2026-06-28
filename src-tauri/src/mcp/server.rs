@@ -16,8 +16,8 @@ use std::sync::Arc;
 use rmcp::{
     handler::server::ServerHandler,
     model::{
-        CallToolRequestParam, CallToolResult, Content, ErrorData as McpError,
-        Implementation, InitializeResult, ListToolsResult, PaginatedRequestParam,
+        CallToolRequestParams, CallToolResult, Content, ErrorData as McpError,
+        Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams,
         ProtocolVersion, ServerCapabilities, ServerInfo, Tool,
     },
     service::{RequestContext, RoleServer, ServiceExt},
@@ -121,36 +121,37 @@ impl ServerHandler for ShardMcpServer {
         caps.tools = Some(rmcp::model::ToolsCapability {
             list_changed: Some(false),
         });
-        InitializeResult {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: caps,
-            server_info: Implementation {
-                name: "shard-mcp".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
-            instructions: Some(
-                "Shard's memory + self-edit primitives over MCP. Curated, read-mostly subset of the agent toolset."
-                    .to_string(),
-            ),
-        }
+        // `InitializeResult` / `Implementation` are `#[non_exhaustive]` in
+        // rmcp 1.x, so construct them via their builders rather than struct
+        // literals.
+        InitializeResult::new(caps)
+            .with_protocol_version(ProtocolVersion::default())
+            .with_server_info(Implementation::new(
+                "shard-mcp",
+                env!("CARGO_PKG_VERSION"),
+            ))
+            .with_instructions(
+                "Shard's memory + self-edit primitives over MCP. Curated, read-mostly subset of the agent toolset.",
+            )
     }
 
     fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         async move {
             Ok(ListToolsResult {
                 tools: Self::list_curated_tools(),
                 next_cursor: None,
+                ..Default::default()
             })
         }
     }
 
     fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         async move {

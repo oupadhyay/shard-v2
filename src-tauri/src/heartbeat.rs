@@ -860,6 +860,21 @@ pub async fn process_heartbeat_turn<R: Runtime>(
     }
 }
 
+/// Type-erased boundary around [`process_heartbeat_turn`].
+///
+/// `execute_safe_tool` can recursively schedule another heartbeat turn (via the
+/// `wake_me_up_in` tool). Calling `process_heartbeat_turn` directly from inside
+/// the spawned task makes the trait solver chase an infinite `Send` cycle
+/// (`execute_safe_tool` → `process_heartbeat_turn` → `execute_safe_tool`). The
+/// explicit `+ Send` return type here lets the solver discharge that obligation
+/// at the boundary, breaking the cycle.
+fn boxed_heartbeat_turn<R: Runtime>(
+    app_handle: AppHandle<R>,
+    spec: HeartbeatSpec,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>, String>> + Send>> {
+    Box::pin(async move { process_heartbeat_turn(&app_handle, &spec).await })
+}
+
 /// Execute a safe (non-draft-gated) tool during a heartbeat run.
 /// Mirrors the Agent's execute_tool_uncached logic for the subset of tools
 /// available to heartbeats.
@@ -982,10 +997,63 @@ async fn execute_safe_tool<R: Runtime>(
             }
         }
         "wake_me_up_in" => {
-            // TODO: Implement wake_me_up_in for heartbeats — spawn a one-shot delayed
-            // task (similar to agent/mod.rs implementation) so heartbeats can schedule
-            // follow-up actions without requiring a new cron spec.
-            "Tool 'wake_me_up_in' is not yet implemented for heartbeat runs. Use the heartbeat's cron schedule for recurring tasks.".to_string()
+            // One-shot delayed follow-up: spawn a task that sleeps, then runs a
+            // dynamic heartbeat turn with the supplied context. Mirrors the
+            // agent-side implementation in `agent/tools/mod.rs`, letting a
+            // heartbeat schedule a follow-up without needing a new cron spec.
+            let duration_minutes = args["duration_minutes"].as_u64().unwrap_or(0);
+            let context = args["context"].as_str().unwrap_or_default().to_string();
+
+            if duration_minutes == 0 || duration_minutes > 1440 {
+                return "Error: duration_minutes must be between 1 and 1440 (24 hours).".to_string();
+            }
+
+            if context.trim().is_empty() {
+                return "Error: context must not be empty.".to_string();
+            }
+
+            let duration = std::time::Duration::from_secs(duration_minutes * 60);
+            let handle = app_handle.clone();
+            let session_id = format!("heartbeat:alarm:{}", uuid::Uuid::new_v4());
+            let ctx = context.clone();
+
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(duration).await;
+                log::info!(
+                    "[WakeMeUp] Heartbeat timer fired after {} min for alarm session",
+                    duration_minutes
+                );
+
+                let spec = HeartbeatSpec {
+                    schedule: String::new(), // One-shot, not cron-scheduled
+                    session: session_id.clone(),
+                    persona: None,
+                    max_tool_calls: 3,
+                    max_runs_per_day: None,
+                    prompt: ctx,
+                    filename: "dynamic-alarm".to_string(),
+                };
+
+                // Go through the boxed boundary helper to break the recursive
+                // async cycle (execute_safe_tool → process_heartbeat_turn →
+                // execute_safe_tool); its explicit `+ Send` return type lets the
+                // trait solver discharge the `Send` obligation without recursing.
+                match boxed_heartbeat_turn(handle, spec).await {
+                    Ok(_) => log::info!("[WakeMeUp] Heartbeat alarm processed successfully"),
+                    Err(e) => log::error!("[WakeMeUp] Heartbeat alarm failed: {}", e),
+                }
+            });
+
+            format!(
+                "Timer set for {} minute(s). Context: '{}'",
+                duration_minutes,
+                if context.len() > 100 {
+                    let boundary = context.floor_char_boundary(100);
+                    format!("{}...", &context[..boundary])
+                } else {
+                    context
+                }
+            )
         }
         "get_weather" => {
             let location = args["location"].as_str().unwrap_or_default();
