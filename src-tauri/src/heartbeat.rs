@@ -745,8 +745,12 @@ pub async fn process_heartbeat_turn<R: Runtime>(
             let args: serde_json::Value =
                 serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
 
-            let is_gated = crate::tool_registry::global().is_draft_gated(&tc.name)
-                || tc.name == "edit_file";
+            // `edit_file` is intentionally NOT draft-gated for heartbeats: it
+            // runs immediately without user approval, but `edit_allowed_file`
+            // applies a compile check (config.toml must parse as AppConfig,
+            // heartbeat specs must parse as a HeartbeatSpec) and rejects the
+            // edit before anything is written if it would break.
+            let is_gated = crate::tool_registry::global().is_draft_gated(&tc.name);
 
             if is_gated {
                 // Draft-gated tool: build justification from the tool call arguments,
@@ -1079,6 +1083,33 @@ async fn execute_safe_tool<R: Runtime>(
             let path = args["path"].as_str().unwrap_or_default();
             match crate::self_files::read_allowed_file(app_handle, path) {
                 Ok(contents) => contents,
+                Err(e) => format!("Error: {}", e),
+            }
+        }
+        "edit_file" => {
+            // No user approval required, but `edit_allowed_file` runs a compile
+            // check on the result (config.toml must parse as AppConfig,
+            // heartbeat specs as a HeartbeatSpec). On failure nothing is
+            // written and the error is surfaced back to the model.
+            let path = args["path"].as_str().unwrap_or_default();
+            let old_str = args["old_str"].as_str().unwrap_or("");
+            let new_str = args["new_str"].as_str().unwrap_or("");
+            let replace_all = args["replace_all"].as_bool().unwrap_or(false);
+
+            match crate::self_files::edit_allowed_file(
+                app_handle, path, old_str, new_str, replace_all,
+            ) {
+                Ok(outcome) => {
+                    // Structured event for the frontend diff viewer.
+                    let _ = app_handle.emit("file-edited", &outcome);
+                    format!(
+                        "Edited `{}` ({} replacement{}).\n\n```diff\n{}\n```",
+                        outcome.path,
+                        outcome.replacements,
+                        if outcome.replacements == 1 { "" } else { "s" },
+                        outcome.unified_diff
+                    )
+                }
                 Err(e) => format!("Error: {}", e),
             }
         }

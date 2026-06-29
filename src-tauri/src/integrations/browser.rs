@@ -49,6 +49,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore] // Hits the live Jina Reader API (needs network + a Jina key; can 401/429)
     async fn test_read_url_wikipedia() {
         let client = Client::new();
         let result = read_url(&client, "https://en.wikipedia.org/wiki/Tauri").await;

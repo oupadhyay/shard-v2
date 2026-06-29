@@ -21,17 +21,12 @@ use crate::mcp::{
     shard_data_dir, shard_db_path, ShardMcpServer, CURATED_TOOL_NAMES,
 };
 use serde_json::json;
-use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-fn mcp_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let m = LOCK.get_or_init(|| Mutex::new(()));
-    match m.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    }
-}
+// Delegate to the single canonical `$HOME` lock so MCP tests serialize against
+// agent/heartbeat/persona tests too — they all mutate the same process-global
+// `$HOME` and otherwise race on the shared on-disk DB.
+use crate::tests::agent_helpers::home_lock as mcp_test_lock;
 
 /// Redirect `$HOME` to a tempdir so `dirs::data_local_dir()` resolves
 /// inside the sandbox. The MCP module derives every on-disk path from

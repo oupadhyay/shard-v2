@@ -278,9 +278,7 @@ pub fn edit_allowed_file<R: Runtime>(
 
     let (after, replacements) = apply_edit(&before, old_str, new_str, replace_all)?;
 
-    if let AllowedPath::HeartbeatSpec { name } = classify_logical_path(logical)? {
-        crate::heartbeat::parse_heartbeat_spec(&after, &name)?;
-    }
+    compile_check_after_edit(logical, &after)?;
 
     if let Some(parent) = abs.parent() {
         if !parent.exists() {
@@ -350,9 +348,7 @@ pub fn edit_at_abs_path(
 
     let (after, replacements) = apply_edit(&before, old_str, new_str, replace_all)?;
 
-    if let AllowedPath::HeartbeatSpec { name } = classify_logical_path(logical)? {
-        crate::heartbeat::parse_heartbeat_spec(&after, &name)?;
-    }
+    compile_check_after_edit(logical, &after)?;
 
     if let Some(parent) = abs.parent() {
         if !parent.exists() {
@@ -372,6 +368,26 @@ pub fn edit_at_abs_path(
         unified_diff,
         replacements,
     })
+}
+
+/// Post-edit "compile check": validate that the edited content still parses
+/// for its file type *before* it is persisted. Structured self-files must stay
+/// loadable, so a failing check rejects the edit (the caller never reaches
+/// `fs::write`) and the agent can't write a file that would break startup:
+///
+/// * `config.toml` must deserialize into [`crate::config::AppConfig`].
+/// * `heartbeats/<name>.toml` must parse as a `HeartbeatSpec`.
+/// * `personas/<slug>.md` is free-form markdown and has no compile step.
+fn compile_check_after_edit(logical: &str, after: &str) -> Result<(), String> {
+    match classify_logical_path(logical)? {
+        AllowedPath::ConfigToml => toml::from_str::<crate::config::AppConfig>(after)
+            .map(|_| ())
+            .map_err(|e| format!("compile check failed: config.toml is not valid: {}", e)),
+        AllowedPath::HeartbeatSpec { name } => {
+            crate::heartbeat::parse_heartbeat_spec(after, &name).map(|_| ())
+        }
+        AllowedPath::Persona { .. } => Ok(()),
+    }
 }
 
 /// Pure substring edit, factored out for unit testing.
@@ -720,5 +736,54 @@ mod tests {
         ).unwrap_err();
 
         assert!(err.contains("parsing TOML") || err.contains("Error parsing TOML"));
+    }
+
+    // config.toml compile-check tests — `edit_allowed_file` / `edit_at_abs_path`
+    // must reject edits whose result wouldn't deserialize into `AppConfig`,
+    // before anything is written to disk.
+    #[test]
+    fn edit_config_fails_on_invalid_toml() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+
+        let err = edit_at_abs_path(&path, "config.toml", "", "this is = not valid = toml [[", false)
+            .unwrap_err();
+
+        assert!(err.contains("compile check failed"), "got: {err}");
+        // Failing the compile check must not persist anything.
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn edit_config_fails_on_type_mismatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+
+        // Valid TOML, but `enable_tools` must be a bool — the AppConfig compile
+        // check catches this where a plain TOML syntax check would not.
+        let err = edit_at_abs_path(&path, "config.toml", "", "enable_tools = 123\n", false)
+            .unwrap_err();
+
+        assert!(err.contains("compile check failed"), "got: {err}");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn edit_config_accepts_valid_toml() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        std::fs::write(&path, "enable_tools = true\n").unwrap();
+
+        let outcome = edit_at_abs_path(
+            &path,
+            "config.toml",
+            "enable_tools = true",
+            "enable_tools = false",
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.replacements, 1);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "enable_tools = false\n");
     }
 }

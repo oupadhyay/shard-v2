@@ -667,7 +667,9 @@ mod self_files_dispatch {
     async fn edit_file_replace_all_succeeds_with_multiple_matches() {
         let _g = agent_test_lock();
         let env = TestEnv::new().await;
-        write_config_toml(&env, "foo = 1\nfoo = 2\n");
+        // Use a real config field so the result still passes the AppConfig
+        // compile check; the substring `foo` appears twice for replace_all.
+        write_config_toml(&env, "system_prompt = \"foo foo\"\n");
         let agent = Agent::new(env.handle.clone());
 
         let r = agent
@@ -685,7 +687,7 @@ mod self_files_dispatch {
             .await;
         assert!(!r.starts_with("Error"), "got: {}", r);
         assert!(r.contains("2 replacements"));
-        assert_eq!(read_config_toml(&env), "bar = 1\nbar = 2\n");
+        assert_eq!(read_config_toml(&env), "system_prompt = \"bar bar\"\n");
     }
 
     // ── file-edited event contract ───────────────────────────────────────
