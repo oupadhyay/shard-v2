@@ -1091,9 +1091,23 @@ async fn execute_safe_tool<R: Runtime>(
             // check on the result (config.toml must parse as AppConfig,
             // heartbeat specs as a HeartbeatSpec). On failure nothing is
             // written and the error is surfaced back to the model.
-            let path = args["path"].as_str().unwrap_or_default();
-            let old_str = args["old_str"].as_str().unwrap_or("");
-            let new_str = args["new_str"].as_str().unwrap_or("");
+            //
+            // Require the keys to be present (matching the MCP handler) so a
+            // malformed tool-call payload fails fast rather than silently
+            // creating/overwriting a file with empty content. An empty
+            // `old_str` is still allowed — that's how a new file is created.
+            let path = match args.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => return "Error: edit_file requires `path`".to_string(),
+            };
+            let old_str = match args.get("old_str").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => return "Error: edit_file requires `old_str`".to_string(),
+            };
+            let new_str = match args.get("new_str").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => return "Error: edit_file requires `new_str`".to_string(),
+            };
             let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
             match crate::self_files::edit_allowed_file(

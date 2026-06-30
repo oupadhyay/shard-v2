@@ -385,9 +385,9 @@ fn compile_check_after_edit(logical: &str, after: &str) -> Result<(), String> {
         AllowedPath::ConfigToml => toml::from_str::<crate::config::AppConfig>(after)
             .map(|_| ())
             .map_err(|e| format!("compile check failed: config.toml is not valid: {}", e)),
-        AllowedPath::HeartbeatSpec { name } => {
-            crate::heartbeat::parse_heartbeat_spec(after, &name).map(|_| ())
-        }
+        AllowedPath::HeartbeatSpec { name } => crate::heartbeat::parse_heartbeat_spec(after, &name)
+            .map(|_| ())
+            .map_err(|e| format!("compile check failed: heartbeat spec is not valid: {}", e)),
         AllowedPath::Persona { .. } => {
             let warnings = crate::personas::scan_persona_content(after);
             if warnings.is_empty() {
@@ -748,6 +748,7 @@ mod tests {
             false
         ).unwrap_err();
 
+        assert!(err.contains("compile check failed"), "got: {err}");
         assert!(err.contains("parsing TOML") || err.contains("Error parsing TOML"));
     }
 
