@@ -33,15 +33,61 @@ use wiremock::MockServer;
 
 use crate::endpoints::{self, Endpoints};
 
-/// Process-wide lock around `$HOME` mutation + endpoint overrides. Every
-/// agent test must hold this for its full duration.
-pub fn agent_test_lock() -> MutexGuard<'static, ()> {
+/// The single canonical process-wide lock guarding `$HOME` (and the global
+/// endpoint overrides). `$HOME` is shared mutable process state, so **every**
+/// test that redirects it — agent, mcp, heartbeat, persona, crystals — must
+/// serialize on *this* lock. Using per-module locks only serializes within a
+/// group and lets tests in different groups clobber each other's `$HOME` (and
+/// therefore each other's on-disk SQLite DB), which is the historical source
+/// of flaky "no such table" failures.
+pub fn home_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let m = LOCK.get_or_init(|| Mutex::new(()));
     // Recover from poisoning so a panicking test doesn't break every other test.
     match m.lock() {
         Ok(g) => g,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// Process-wide lock around `$HOME` mutation + endpoint overrides. Every
+/// agent test must hold this for its full duration. Alias for [`home_lock`].
+pub fn agent_test_lock() -> MutexGuard<'static, ()> {
+    home_lock()
+}
+
+/// RAII guard that redirects `$HOME` to a fresh tempdir for the duration of a
+/// test, so `app_data_dir()` / `dirs::data_local_dir()` resolve inside an
+/// isolated sandbox. **Must** be created while holding [`home_lock`].
+pub struct HomeJail {
+    _td: tempfile::TempDir,
+    prev: Option<std::ffi::OsString>,
+}
+
+impl HomeJail {
+    pub fn new() -> Self {
+        let td = tempfile::Builder::new()
+            .prefix("shard-test-")
+            .tempdir()
+            .expect("tempdir");
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", td.path());
+        Self { _td: td, prev }
+    }
+}
+
+impl Default for HomeJail {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for HomeJail {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
     }
 }
 

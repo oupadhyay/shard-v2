@@ -6,6 +6,7 @@
  * in-memory/tempdir fixtures.
  */
 use crate::heartbeat::*;
+use crate::tests::agent_helpers::{home_lock, HomeJail};
 use tauri::Manager;
 
 // ============================================================================
@@ -342,9 +343,12 @@ fn test_is_draft_gated() {
     assert!(reg.is_draft_gated("delete_heartbeat"));
     assert!(reg.is_draft_gated("edit_heartbeat"));
 
-    // Self-awareness file tools are NOT draft-gated — exposed in chat
-    // (Part 1 of "Make Shard self-aware". Heartbeat-side gating for the
-    // generic edit_file tool will be revisited in a later TODO part.)
+    // Self-awareness file tools are NOT draft-gated — exposed in chat and,
+    // for heartbeats, run without approval. `edit_file` is instead gated by a
+    // compile check inside `self_files::edit_allowed_file` (config.toml must
+    // parse as AppConfig, heartbeat specs as a HeartbeatSpec) that rejects a
+    // bad edit before anything is written (see `edit_config_*` tests in
+    // `self_files`).
     assert!(!reg.is_draft_gated("edit_file"));
     assert!(!reg.is_draft_gated("read_file"));
 
@@ -505,6 +509,8 @@ fn test_normalize_heartbeat_slug_edge_cases() {
 
 #[tokio::test]
 async fn test_execute_approved_draft_reviewed_check() {
+    let _home_lock = home_lock();
+    let _home_jail = HomeJail::new();
     let app = tauri::test::mock_app();
     let handle = app.handle();
 
@@ -550,6 +556,8 @@ async fn test_execute_approved_draft_reviewed_check() {
 
 #[tokio::test]
 async fn test_execute_draft_gated_tool_validation() {
+    let _home_lock = home_lock();
+    let _home_jail = HomeJail::new();
     let app = tauri::test::mock_app();
     let handle = app.handle();
 
@@ -574,6 +582,8 @@ async fn test_execute_draft_gated_tool_validation() {
 
 #[tokio::test]
 async fn test_crystallize_sketch_draft_gated() {
+    let _home_lock = home_lock();
+    let _home_jail = HomeJail::new();
     let app = tauri::test::mock_app();
     let handle = app.handle();
 

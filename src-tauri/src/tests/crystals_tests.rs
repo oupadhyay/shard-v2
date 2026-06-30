@@ -18,19 +18,13 @@ use crate::crystals::{
     write_persona_draft, CrystallizeDecision,
 };
 use crate::vector_store::VectorStore;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use tempfile::tempdir;
 
-/// Tests that touch the global personas dir / Tauri runtime must serialize
-/// to avoid `$HOME` races (mirrors `agent_test_lock` in agent_helpers).
-fn personas_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let m = LOCK.get_or_init(|| Mutex::new(()));
-    match m.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    }
-}
+/// Tests that touch the global personas dir / Tauri runtime must serialize on
+/// the single canonical `$HOME` lock so they don't race agent/mcp/heartbeat
+/// tests that mutate the same process-global `$HOME`.
+use crate::tests::agent_helpers::home_lock as personas_test_lock;
 
 fn open() -> (VectorStore, tempfile::TempDir) {
     let dir = tempdir().unwrap();

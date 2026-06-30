@@ -22,7 +22,7 @@ export const EVENTS = {
    * Fired when the agent edits an allow-listed self-file via `edit_file`.
    * Payload: `EditOutcome` from `self_files.rs` —
    *   { path, abs_path, before, after, unified_diff, replacements }
-   * Used by the upcoming file-tree + diff-viewer UI (see TODO).
+   * Consumed by the streaming diff-viewer UI (`src/ui/diff-viewer.ts`).
    */
   FILE_EDITED: "file-edited",
 } as const;

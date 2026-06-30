@@ -5,7 +5,21 @@ mod tests {
         list_available_personas_v2, resolve_persona_content,
         get_persona_metadata, scan_persona_content,
     };
+    use crate::tests::agent_helpers::{home_lock, HomeJail};
     use std::fs;
+    use std::sync::MutexGuard;
+
+    /// Guard for tests that read/write the shared personas dir: holds the
+    /// canonical process-wide `$HOME` lock and redirects `$HOME` to a fresh
+    /// tempdir so `get_personas_dir()` resolves to an isolated sandbox. Without
+    /// this, concurrent tests mutating `$HOME` make these write→list→assert
+    /// sequences flaky.
+    #[must_use]
+    fn fs_guard() -> (MutexGuard<'static, ()>, HomeJail) {
+        let lock = home_lock();
+        let jail = HomeJail::new();
+        (lock, jail)
+    }
 
     #[test]
     fn test_list_available_skills_does_not_panic() {
@@ -57,6 +71,7 @@ mod tests {
 
     #[test]
     fn test_skill_creation_and_retrieval() {
+        let _g = fs_guard();
         if let Ok(dir) = get_personas_dir() {
             let test_skill_path = dir.join("test_skill_xyz.md");
             let test_content = "This is a test persona content.";
@@ -78,6 +93,7 @@ mod tests {
 
     #[test]
     fn test_skill_required_tools_extraction() {
+        let _g = fs_guard();
         if let Ok(dir) = get_personas_dir() {
             // LF test
             let test_skill_path_lf = dir.join("test_tools_skill_lf.md");
@@ -103,6 +119,7 @@ mod tests {
 
     #[test]
     fn test_list_available_personas_v2_includes_flat_files() {
+        let _g = fs_guard();
         if let Ok(dir) = get_personas_dir() {
             let test_path = dir.join("test_v2_flat.md");
             if fs::write(&test_path, "# Flat persona").is_ok() {
@@ -115,6 +132,7 @@ mod tests {
 
     #[test]
     fn test_list_available_personas_v2_includes_directory_skills() {
+        let _g = fs_guard();
         if let Ok(dir) = get_personas_dir() {
             let skill_dir = dir.join("test_v2_dirskill");
             let _ = fs::create_dir_all(&skill_dir);
@@ -129,6 +147,7 @@ mod tests {
 
     #[test]
     fn test_list_available_personas_v2_nested_directory() {
+        let _g = fs_guard();
         if let Ok(dir) = get_personas_dir() {
             let nested_dir = dir.join("test_v2_cat").join("test_v2_nested");
             let _ = fs::create_dir_all(&nested_dir);
@@ -144,6 +163,7 @@ mod tests {
 
     #[test]
     fn test_resolve_persona_content_flat() {
+        let _g = fs_guard();
         if let Ok(dir) = get_personas_dir() {
             let test_path = dir.join("test_resolve_flat.md");
             let content = "# Resolve flat test";
@@ -157,6 +177,7 @@ mod tests {
 
     #[test]
     fn test_resolve_persona_content_directory() {
+        let _g = fs_guard();
         if let Ok(dir) = get_personas_dir() {
             let skill_dir = dir.join("test_resolve_dir");
             let _ = fs::create_dir_all(&skill_dir);
@@ -180,6 +201,7 @@ mod tests {
 
     #[test]
     fn test_resolve_persona_content_nested() {
+        let _g = fs_guard();
         if let Ok(dir) = get_personas_dir() {
             let nested_dir = dir.join("test_res_cat").join("test_res_nested");
             let _ = fs::create_dir_all(&nested_dir);
@@ -243,6 +265,7 @@ mod tests {
 
     #[test]
     fn test_metadata_extraction_with_description() {
+        let _g = fs_guard();
         if let Ok(dir) = get_personas_dir() {
             let test_path = dir.join("test_meta_desc.md");
             let content = "---\ndescription: A weather expert persona\nrequired_tools:\n  - get_weather\ncategory: science\n---\n# Weather Expert";
@@ -259,6 +282,7 @@ mod tests {
 
     #[test]
     fn test_metadata_extraction_no_frontmatter() {
+        let _g = fs_guard();
         if let Ok(dir) = get_personas_dir() {
             let test_path = dir.join("test_meta_none.md");
             let content = "# Simple persona\nNo frontmatter here.";

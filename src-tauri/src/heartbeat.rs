@@ -745,8 +745,12 @@ pub async fn process_heartbeat_turn<R: Runtime>(
             let args: serde_json::Value =
                 serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
 
-            let is_gated = crate::tool_registry::global().is_draft_gated(&tc.name)
-                || tc.name == "edit_file";
+            // `edit_file` is intentionally NOT draft-gated for heartbeats: it
+            // runs immediately without user approval, but `edit_allowed_file`
+            // applies a compile check (config.toml must parse as AppConfig,
+            // heartbeat specs must parse as a HeartbeatSpec) and rejects the
+            // edit before anything is written if it would break.
+            let is_gated = crate::tool_registry::global().is_draft_gated(&tc.name);
 
             if is_gated {
                 // Draft-gated tool: build justification from the tool call arguments,
@@ -858,6 +862,21 @@ pub async fn process_heartbeat_turn<R: Runtime>(
 
         Ok(Some(trimmed.to_string()))
     }
+}
+
+/// Type-erased boundary around [`process_heartbeat_turn`].
+///
+/// `execute_safe_tool` can recursively schedule another heartbeat turn (via the
+/// `wake_me_up_in` tool). Calling `process_heartbeat_turn` directly from inside
+/// the spawned task makes the trait solver chase an infinite `Send` cycle
+/// (`execute_safe_tool` → `process_heartbeat_turn` → `execute_safe_tool`). The
+/// explicit `+ Send` return type here lets the solver discharge that obligation
+/// at the boundary, breaking the cycle.
+fn boxed_heartbeat_turn<R: Runtime>(
+    app_handle: AppHandle<R>,
+    spec: HeartbeatSpec,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>, String>> + Send>> {
+    Box::pin(async move { process_heartbeat_turn(&app_handle, &spec).await })
 }
 
 /// Execute a safe (non-draft-gated) tool during a heartbeat run.
@@ -982,10 +1001,63 @@ async fn execute_safe_tool<R: Runtime>(
             }
         }
         "wake_me_up_in" => {
-            // TODO: Implement wake_me_up_in for heartbeats — spawn a one-shot delayed
-            // task (similar to agent/mod.rs implementation) so heartbeats can schedule
-            // follow-up actions without requiring a new cron spec.
-            "Tool 'wake_me_up_in' is not yet implemented for heartbeat runs. Use the heartbeat's cron schedule for recurring tasks.".to_string()
+            // One-shot delayed follow-up: spawn a task that sleeps, then runs a
+            // dynamic heartbeat turn with the supplied context. Mirrors the
+            // agent-side implementation in `agent/tools/mod.rs`, letting a
+            // heartbeat schedule a follow-up without needing a new cron spec.
+            let duration_minutes = args["duration_minutes"].as_u64().unwrap_or(0);
+            let context = args["context"].as_str().unwrap_or_default().to_string();
+
+            if duration_minutes == 0 || duration_minutes > 1440 {
+                return "Error: duration_minutes must be between 1 and 1440 (24 hours).".to_string();
+            }
+
+            if context.trim().is_empty() {
+                return "Error: context must not be empty.".to_string();
+            }
+
+            let duration = std::time::Duration::from_secs(duration_minutes * 60);
+            let handle = app_handle.clone();
+            let session_id = format!("heartbeat:alarm:{}", uuid::Uuid::new_v4());
+            let ctx = context.clone();
+
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(duration).await;
+                log::info!(
+                    "[WakeMeUp] Heartbeat timer fired after {} min for alarm session",
+                    duration_minutes
+                );
+
+                let spec = HeartbeatSpec {
+                    schedule: String::new(), // One-shot, not cron-scheduled
+                    session: session_id.clone(),
+                    persona: None,
+                    max_tool_calls: 3,
+                    max_runs_per_day: None,
+                    prompt: ctx,
+                    filename: "dynamic-alarm".to_string(),
+                };
+
+                // Go through the boxed boundary helper to break the recursive
+                // async cycle (execute_safe_tool → process_heartbeat_turn →
+                // execute_safe_tool); its explicit `+ Send` return type lets the
+                // trait solver discharge the `Send` obligation without recursing.
+                match boxed_heartbeat_turn(handle, spec).await {
+                    Ok(_) => log::info!("[WakeMeUp] Heartbeat alarm processed successfully"),
+                    Err(e) => log::error!("[WakeMeUp] Heartbeat alarm failed: {}", e),
+                }
+            });
+
+            format!(
+                "Timer set for {} minute(s). Context: '{}'",
+                duration_minutes,
+                if context.len() > 100 {
+                    let boundary = context.floor_char_boundary(100);
+                    format!("{}...", &context[..boundary])
+                } else {
+                    context
+                }
+            )
         }
         "get_weather" => {
             let location = args["location"].as_str().unwrap_or_default();
@@ -1011,6 +1083,47 @@ async fn execute_safe_tool<R: Runtime>(
             let path = args["path"].as_str().unwrap_or_default();
             match crate::self_files::read_allowed_file(app_handle, path) {
                 Ok(contents) => contents,
+                Err(e) => format!("Error: {}", e),
+            }
+        }
+        "edit_file" => {
+            // No user approval required, but `edit_allowed_file` runs a compile
+            // check on the result (config.toml must parse as AppConfig,
+            // heartbeat specs as a HeartbeatSpec). On failure nothing is
+            // written and the error is surfaced back to the model.
+            //
+            // Require the keys to be present (matching the MCP handler) so a
+            // malformed tool-call payload fails fast rather than silently
+            // creating/overwriting a file with empty content. An empty
+            // `old_str` is still allowed — that's how a new file is created.
+            let path = match args.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => return "Error: edit_file requires `path`".to_string(),
+            };
+            let old_str = match args.get("old_str").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => return "Error: edit_file requires `old_str`".to_string(),
+            };
+            let new_str = match args.get("new_str").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => return "Error: edit_file requires `new_str`".to_string(),
+            };
+            let replace_all = args["replace_all"].as_bool().unwrap_or(false);
+
+            match crate::self_files::edit_allowed_file(
+                app_handle, path, old_str, new_str, replace_all,
+            ) {
+                Ok(outcome) => {
+                    // Structured event for the frontend diff viewer.
+                    let _ = app_handle.emit("file-edited", &outcome);
+                    format!(
+                        "Edited `{}` ({} replacement{}).\n\n```diff\n{}\n```",
+                        outcome.path,
+                        outcome.replacements,
+                        if outcome.replacements == 1 { "" } else { "s" },
+                        outcome.unified_diff
+                    )
+                }
                 Err(e) => format!("Error: {}", e),
             }
         }
