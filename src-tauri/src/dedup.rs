@@ -73,12 +73,7 @@ fn with_cache<R>(f: impl FnOnce(&mut HashMap<(String, DedupKind), HotEntry>) -> 
 ///
 /// On a cache miss the entry is inserted with `hit_count = 1` and `false`
 /// is returned, signalling the caller should proceed with the write.
-pub fn is_duplicate(
-    store: &VectorStore,
-    hash: &str,
-    kind: DedupKind,
-    window: Duration,
-) -> bool {
+pub fn is_duplicate(store: &VectorStore, hash: &str, kind: DedupKind, window: Duration) -> bool {
     let now = Instant::now();
     let key = (hash.to_string(), kind);
 

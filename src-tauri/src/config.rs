@@ -331,7 +331,10 @@ mod tests {
             provider_name: "Groq".to_string(),
             reasoning_effort: None,
         };
-        assert_eq!(pc.full_url(), "https://api.groq.com/openai/v1/chat/completions");
+        assert_eq!(
+            pc.full_url(),
+            "https://api.groq.com/openai/v1/chat/completions"
+        );
     }
 
     #[test]

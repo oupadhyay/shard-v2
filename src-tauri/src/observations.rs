@@ -437,7 +437,8 @@ pub fn get_working_representation(
 ) -> Result<Vec<Observation>, String> {
     let per_bucket = (total_budget / 3).max(1);
 
-    let semantic = search_observations_by_embedding(store, observed, query_embedding, per_bucket, 0.45)?;
+    let semantic =
+        search_observations_by_embedding(store, observed, query_embedding, per_bucket, 0.45)?;
     let top = get_top_derived_observations(store, observed, per_bucket)?;
     let recent = get_recent_observations(store, observed, per_bucket)?;
 
@@ -465,9 +466,18 @@ pub fn format_observations_as_markdown(observations: &[Observation]) -> String {
     let mut out = String::from("## User Profile (Observations)\n\n");
 
     // Group by level for structured output
-    let explicit: Vec<_> = observations.iter().filter(|o| o.level == ObservationLevel::Explicit).collect();
-    let deductive: Vec<_> = observations.iter().filter(|o| o.level == ObservationLevel::Deductive).collect();
-    let inductive: Vec<_> = observations.iter().filter(|o| o.level == ObservationLevel::Inductive).collect();
+    let explicit: Vec<_> = observations
+        .iter()
+        .filter(|o| o.level == ObservationLevel::Explicit)
+        .collect();
+    let deductive: Vec<_> = observations
+        .iter()
+        .filter(|o| o.level == ObservationLevel::Deductive)
+        .collect();
+    let inductive: Vec<_> = observations
+        .iter()
+        .filter(|o| o.level == ObservationLevel::Inductive)
+        .collect();
 
     if !inductive.is_empty() {
         out.push_str("**Patterns & Traits:**\n");
@@ -518,8 +528,7 @@ pub fn get_peer_card(
 
     match result {
         Some((facts_json, updated_at)) => {
-            let facts: Vec<String> =
-                serde_json::from_str(&facts_json).unwrap_or_default();
+            let facts: Vec<String> = serde_json::from_str(&facts_json).unwrap_or_default();
             Ok(Some(PeerCard {
                 observer: observer.to_string(),
                 observed: observed.to_string(),
@@ -725,9 +734,8 @@ pub fn recompute_decay(store: &VectorStore) -> Result<usize, String> {
         for (id, ts, times_derived) in &rows {
             let age_days = DateTime::parse_from_rfc3339(ts)
                 .map(|t| {
-                    let secs = (now - t.with_timezone(&chrono::Utc))
-                        .num_milliseconds() as f32
-                        / 1000.0;
+                    let secs =
+                        (now - t.with_timezone(&chrono::Utc)).num_milliseconds() as f32 / 1000.0;
                     (secs / 86_400.0).max(0.0)
                 })
                 .unwrap_or(0.0);
@@ -758,10 +766,7 @@ pub fn decay_sweep(store: &VectorStore, threshold: f32) -> Result<usize, String>
 
 /// Hard-delete observations soft-deleted longer than `grace`. Also removes
 /// their embedding rows so vec0 doesn't accumulate dead vectors.
-pub fn hard_delete_expired(
-    store: &VectorStore,
-    grace: chrono::Duration,
-) -> Result<usize, String> {
+pub fn hard_delete_expired(store: &VectorStore, grace: chrono::Duration) -> Result<usize, String> {
     let cutoff = (chrono::Utc::now() - grace).to_rfc3339();
 
     // First collect the ids so we can also delete from observation_embeddings.
@@ -780,12 +785,10 @@ pub fn hard_delete_expired(
 
     let mut removed = 0usize;
     for id in &ids {
-        let _ = store
-            .conn
-            .execute(
-                "DELETE FROM observation_embeddings WHERE observation_id = ?",
-                params![id],
-            );
+        let _ = store.conn.execute(
+            "DELETE FROM observation_embeddings WHERE observation_id = ?",
+            params![id],
+        );
         removed += store
             .conn
             .execute("DELETE FROM observations WHERE id = ?", params![id])
@@ -894,23 +897,43 @@ pub fn causal_chain(
             continue;
         }
         // Hydrate the row itself.
-        let row: Option<(String, String, String, String, String, String, i64, Option<String>, String, String, Option<String>)> =
-            store
-                .conn
-                .query_row(
-                    "SELECT id, observer, observed, content, level, source_ids, times_derived, \
+        let row: Option<(
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            Option<String>,
+            String,
+            String,
+            Option<String>,
+        )> = store
+            .conn
+            .query_row(
+                "SELECT id, observer, observed, content, level, source_ids, times_derived, \
                             session_name, content_hash, created_at, deleted_at \
                      FROM observations WHERE id = ?",
-                    params![id],
-                    |r| {
-                        Ok((
-                            r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
-                            r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?,
-                        ))
-                    },
-                )
-                .optional()
-                .map_err(|e| e.to_string())?;
+                params![id],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                        r.get(9)?,
+                        r.get(10)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
         let Some(tuple) = row else { continue };
         let source_ids: Vec<String> = serde_json::from_str(&tuple.5).unwrap_or_default();
         // Skip the starting row itself in the output — `causal_chain`
@@ -966,5 +989,6 @@ pub fn currently_valid(
             Ok(row_to_observation(row))
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }

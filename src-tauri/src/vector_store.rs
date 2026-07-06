@@ -72,8 +72,15 @@ impl VectorStore {
         static VEC_INIT_STATUS: OnceLock<i32> = OnceLock::new();
 
         let init_rc = *VEC_INIT_STATUS.get_or_init(|| unsafe {
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<*const (), unsafe extern "C" fn(*mut rusqlite::ffi::sqlite3, *mut *const i8, *const rusqlite::ffi::sqlite3_api_routines) -> i32>(
-                sqlite_vec::sqlite3_vec_init as *const (),
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(
+                    *mut rusqlite::ffi::sqlite3,
+                    *mut *const i8,
+                    *const rusqlite::ffi::sqlite3_api_routines,
+                ) -> i32,
+            >(
+                sqlite_vec::sqlite3_vec_init as *const ()
             )))
         });
 
@@ -899,7 +906,10 @@ mod tests {
 
         // Empty string
         let empty_hash = compute_content_hash("");
-        assert_eq!(empty_hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            empty_hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
 
         // Unicode / Emoji
         let unicode_hash = compute_content_hash("🦀 Rust");

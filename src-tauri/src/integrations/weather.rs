@@ -128,7 +128,10 @@ pub async fn perform_weather_lookup(
         ("latitude", lat.to_string()),
         ("longitude", lon.to_string()),
         ("current", "temperature_2m,weather_code".to_string()),
-        ("daily", "weather_code,temperature_2m_max,temperature_2m_min".to_string()),
+        (
+            "daily",
+            "weather_code,temperature_2m_max,temperature_2m_min".to_string(),
+        ),
         ("timezone", "auto".to_string()),
     ];
 
@@ -156,7 +159,10 @@ pub async fn perform_weather_lookup(
 
     if let Some(current) = weather_data.current {
         if let Some(temp) = current.temperature_2m {
-            let unit = weather_data.current_units.and_then(|u| u.temperature_2m).unwrap_or_else(|| "C".to_string());
+            let unit = weather_data
+                .current_units
+                .and_then(|u| u.temperature_2m)
+                .unwrap_or_else(|| "C".to_string());
             result_json["current"] = serde_json::json!({
                 "temperature": temp,
                 "unit": unit,
@@ -166,10 +172,17 @@ pub async fn perform_weather_lookup(
     }
 
     if let Some(daily) = weather_data.daily {
-        if let (Some(times), Some(codes), Some(maxes), Some(mins)) = (daily.time, daily.weather_code, daily.temperature_2m_max, daily.temperature_2m_min) {
+        if let (Some(times), Some(codes), Some(maxes), Some(mins)) = (
+            daily.time,
+            daily.weather_code,
+            daily.temperature_2m_max,
+            daily.temperature_2m_min,
+        ) {
             let mut forecast = Vec::new();
             for i in 0..times.len().min(7) {
-                if let (Some(t), Some(c), Some(max), Some(min)) = (times.get(i), codes.get(i), maxes.get(i), mins.get(i)) {
+                if let (Some(t), Some(c), Some(max), Some(min)) =
+                    (times.get(i), codes.get(i), maxes.get(i), mins.get(i))
+                {
                     forecast.push(serde_json::json!({
                         "date": t,
                         "weather_code": c,

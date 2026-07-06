@@ -17,7 +17,10 @@ use serde::Deserialize;
 
 /// Validate that a string looks like a YouTube video ID (11 alphanumeric chars including - and _).
 fn is_valid_video_id(id: &str) -> bool {
-    id.len() == 11 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    id.len() == 11
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Extract a YouTube video ID from a URL or return the input if it already looks like an ID.
@@ -147,10 +150,7 @@ pub struct TranscriptResult {
 ///
 /// Uses `yt-dlp -j` to get subtitle URLs, then fetches the XML caption track.
 /// Prefers manual English captions, falls back to auto-generated, then first available.
-pub async fn fetch_transcript(
-    client: &Client,
-    video_id: &str,
-) -> Result<TranscriptResult, String> {
+pub async fn fetch_transcript(client: &Client, video_id: &str) -> Result<TranscriptResult, String> {
     log::info!("[YouTube] Fetching transcript for video: {}", video_id);
 
     // 1. Run yt-dlp to get video metadata JSON
@@ -256,8 +256,14 @@ async fn run_ytdlp(video_url: &str) -> Result<YtDlpMetadata, String> {
     // deadlocks if OS pipe buffers fill up.
     use tokio::io::AsyncReadExt;
 
-    let mut stdout = child.stdout.take().ok_or("Failed to capture yt-dlp stdout")?;
-    let mut stderr = child.stderr.take().ok_or("Failed to capture yt-dlp stderr")?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or("Failed to capture yt-dlp stdout")?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or("Failed to capture yt-dlp stderr")?;
 
     let join_fut = async {
         let mut stdout_buf = Vec::new();
@@ -267,32 +273,28 @@ async fn run_ytdlp(video_url: &str) -> Result<YtDlpMetadata, String> {
         let stdout_fut = stdout.read_to_end(&mut stdout_buf);
         let stderr_fut = stderr.read_to_end(&mut stderr_buf);
 
-        let (status_res, stdout_res, stderr_res) =
-            tokio::join!(wait_fut, stdout_fut, stderr_fut);
+        let (status_res, stdout_res, stderr_res) = tokio::join!(wait_fut, stdout_fut, stderr_fut);
 
         let status = status_res?;
         stdout_res?;
         stderr_res?;
 
         Ok::<(std::process::ExitStatus, Vec<u8>, Vec<u8>), std::io::Error>((
-            status,
-            stdout_buf,
-            stderr_buf,
+            status, stdout_buf, stderr_buf,
         ))
     };
 
     let timeout = std::time::Duration::from_secs(30);
-    let (status, stdout_buf, stderr_buf) =
-        match tokio::time::timeout(timeout, join_fut).await {
-            Err(_) => {
-                let _ = child.kill().await;
-                return Err("yt-dlp timed out after 30 seconds".to_string());
-            }
-            Ok(Err(e)) => {
-                return Err(format!("Failed to run yt-dlp: {}", e));
-            }
-            Ok(Ok((status, stdout_buf, stderr_buf))) => (status, stdout_buf, stderr_buf),
-        };
+    let (status, stdout_buf, stderr_buf) = match tokio::time::timeout(timeout, join_fut).await {
+        Err(_) => {
+            let _ = child.kill().await;
+            return Err("yt-dlp timed out after 30 seconds".to_string());
+        }
+        Ok(Err(e)) => {
+            return Err(format!("Failed to run yt-dlp: {}", e));
+        }
+        Ok(Ok((status, stdout_buf, stderr_buf))) => (status, stdout_buf, stderr_buf),
+    };
 
     if !status.success() {
         let stderr_str = String::from_utf8_lossy(&stderr_buf);
@@ -423,7 +425,10 @@ pub fn format_transcript(
 
     if let Some(last) = segments.last() {
         let total_secs = (last.start_secs + last.duration_secs) as u32;
-        result.push_str(&format!("Duration: {}\n", format_timestamp(total_secs, false)));
+        result.push_str(&format!(
+            "Duration: {}\n",
+            format_timestamp(total_secs, false)
+        ));
     }
 
     result.push('\n');
@@ -514,7 +519,10 @@ mod tests {
         assert_eq!(extract_video_id("not a url"), None);
         assert_eq!(extract_video_id("https://google.com"), None);
         assert_eq!(extract_video_id(""), None);
-        assert_eq!(extract_video_id("https://youtube.com.evil.tld/watch?v=dQw4w9WgXcQ"), None);
+        assert_eq!(
+            extract_video_id("https://youtube.com.evil.tld/watch?v=dQw4w9WgXcQ"),
+            None
+        );
     }
 
     #[test]
@@ -681,13 +689,11 @@ mod tests {
 
     #[test]
     fn test_format_transcript_with_metadata() {
-        let segments = vec![
-            TimedSegment {
-                start_secs: 0.0,
-                duration_secs: 5.0,
-                text: "Welcome".to_string(),
-            },
-        ];
+        let segments = vec![TimedSegment {
+            start_secs: 0.0,
+            duration_secs: 5.0,
+            text: "Welcome".to_string(),
+        }];
         let formatted = format_transcript(&segments, Some("My Video"), Some("My Channel"));
         assert!(formatted.contains("Title: My Video"));
         assert!(formatted.contains("Channel: My Channel"));

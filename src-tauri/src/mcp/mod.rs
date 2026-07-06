@@ -49,8 +49,8 @@ pub const SHARD_BUNDLE_ID: &str = "dev.ojasw.shard";
 /// match. Use [`shard_config_dir`] for `config.toml` so MCP-mode reads the
 /// same file the GUI/agent writes.
 pub fn shard_data_dir() -> Result<PathBuf, String> {
-    let base = dirs::data_local_dir()
-        .ok_or_else(|| "Could not locate platform data dir".to_string())?;
+    let base =
+        dirs::data_local_dir().ok_or_else(|| "Could not locate platform data dir".to_string())?;
     let dir = base.join(SHARD_BUNDLE_ID);
     if !dir.exists() {
         std::fs::create_dir_all(&dir).map_err(|e| format!("create data dir: {}", e))?;
@@ -71,8 +71,8 @@ pub fn shard_data_dir() -> Result<PathBuf, String> {
 /// two diverge (`~/.config` vs `~/.local/share`), so MCP mode must use the
 /// config-dir variant to stay consistent with the Tauri-side reader.
 pub fn shard_config_dir() -> Result<PathBuf, String> {
-    let base = dirs::config_dir()
-        .ok_or_else(|| "Could not locate platform config dir".to_string())?;
+    let base =
+        dirs::config_dir().ok_or_else(|| "Could not locate platform config dir".to_string())?;
     let dir = base.join(SHARD_BUNDLE_ID);
     if !dir.exists() {
         std::fs::create_dir_all(&dir).map_err(|e| format!("create config dir: {}", e))?;
@@ -102,7 +102,10 @@ pub fn resolve_allowed_path_no_tauri(logical: &str) -> Result<PathBuf, String> {
         AllowedPath::Persona { slug } => {
             let base = dirs::data_local_dir()
                 .ok_or_else(|| "Could not locate platform data dir".to_string())?;
-            Ok(base.join(SHARD_BUNDLE_ID).join("personas").join(format!("{}.md", slug)))
+            Ok(base
+                .join(SHARD_BUNDLE_ID)
+                .join("personas")
+                .join(format!("{}.md", slug)))
         }
         AllowedPath::HeartbeatSpec { .. } => {
             Err("Heartbeat spec access is not permitted in MCP mode".to_string())

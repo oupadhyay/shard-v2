@@ -4,8 +4,8 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Runtime, Emitter};
 use std::net::SocketAddr;
+use tauri::{AppHandle, Emitter, Runtime};
 
 pub struct WebhookState<R: Runtime> {
     app_handle: AppHandle<R>,
@@ -36,9 +36,12 @@ pub async fn start_webhook_server<R: Runtime>(app_handle: AppHandle<R>) {
 
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => {
-            log::info!("[Webhook] Successfully bound to port {}", l.local_addr().unwrap());
+            log::info!(
+                "[Webhook] Successfully bound to port {}",
+                l.local_addr().unwrap()
+            );
             l
-        },
+        }
         Err(e) => {
             log::error!("[Webhook] Failed to bind: {}", e);
             return;
@@ -85,10 +88,13 @@ async fn handle_callback<R: Runtime>(
     // In the future, we will route this payload back into the active Shard context (UI or Agent)
     // using the id to look up the pending transaction.
     // For now, emit a simple event to the frontend for visibility
-    let _ = state.app_handle.emit("webhook-received", serde_json::json!({
-        "id": id,
-        "payload": payload
-    }));
+    let _ = state.app_handle.emit(
+        "webhook-received",
+        serde_json::json!({
+            "id": id,
+            "payload": payload
+        }),
+    );
 
     "Received"
 }

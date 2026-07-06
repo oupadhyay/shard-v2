@@ -171,7 +171,10 @@ fn record_edit_skips_snapshot_for_oversized_files() {
             |r| r.get(0),
         )
         .unwrap();
-    assert!(stored.is_none(), "oversized edits must not store a snapshot");
+    assert!(
+        stored.is_none(),
+        "oversized edits must not store a snapshot"
+    );
 
     // And rollback for that specific id must fail loudly.
     let err = rollback_event(&store, "config.toml", Some(&id)).unwrap_err();

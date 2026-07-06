@@ -65,13 +65,9 @@ def factorial(n):
 
 print(factorial(10))
 "#;
-        let result = sandbox::execute_python(
-            code,
-            std::path::PathBuf::from("resources"),
-            10,
-        )
-        .await
-        .expect("execute_python should succeed");
+        let result = sandbox::execute_python(code, std::path::PathBuf::from("resources"), 10)
+            .await
+            .expect("execute_python should succeed");
 
         assert!(
             result.stdout.contains("3628800"),
@@ -84,13 +80,9 @@ print(factorial(10))
     async fn test_empty_code() {
         // Empty code is valid Python — it just produces no output.
         // The "no code provided" guard is in the agent match arm, not the sandbox.
-        let result = sandbox::execute_python(
-            "",
-            std::path::PathBuf::from("resources"),
-            10,
-        )
-        .await
-        .expect("empty code is valid Python, should not error");
+        let result = sandbox::execute_python("", std::path::PathBuf::from("resources"), 10)
+            .await
+            .expect("empty code is valid Python, should not error");
 
         assert!(result.stdout.is_empty());
         assert!(!result.timed_out);
@@ -98,12 +90,8 @@ print(factorial(10))
 
     #[tokio::test]
     async fn test_whitespace_only_code() {
-        let result = sandbox::execute_python(
-            "   \n  \t  ",
-            std::path::PathBuf::from("resources"),
-            10,
-        )
-        .await;
+        let result =
+            sandbox::execute_python("   \n  \t  ", std::path::PathBuf::from("resources"), 10).await;
 
         // Empty code is caught at the match arm level, not in sandbox.
         // The sandbox itself may succeed with whitespace-only code (no output).
@@ -130,15 +118,14 @@ print(factorial(10))
 
     #[tokio::test]
     async fn test_no_output() {
-        let result = sandbox::execute_python(
-            "x = 42",
-            std::path::PathBuf::from("resources"),
-            10,
-        )
-        .await
-        .expect("execute_python should succeed");
+        let result = sandbox::execute_python("x = 42", std::path::PathBuf::from("resources"), 10)
+            .await
+            .expect("execute_python should succeed");
 
-        assert!(result.stdout.is_empty(), "stdout should be empty for no-print code");
+        assert!(
+            result.stdout.is_empty(),
+            "stdout should be empty for no-print code"
+        );
         assert!(!result.timed_out);
     }
 
@@ -150,13 +137,9 @@ with open('/scratch/test.txt', 'w') as f:
 with open('/scratch/test.txt', 'r') as f:
     print(f.read())
 "#;
-        let result = sandbox::execute_python(
-            code,
-            std::path::PathBuf::from("resources"),
-            10,
-        )
-        .await
-        .expect("execute_python should succeed");
+        let result = sandbox::execute_python(code, std::path::PathBuf::from("resources"), 10)
+            .await
+            .expect("execute_python should succeed");
 
         assert!(
             result.stdout.contains("hello from scratch"),
@@ -180,13 +163,9 @@ except Exception as e:
     print(f'ESCAPE_FAILED: {{e}}')"#,
             escape_path
         );
-        let result = sandbox::execute_python(
-            &code,
-            std::path::PathBuf::from("resources"),
-            10,
-        )
-        .await
-        .expect("execute_python should succeed even when code fails to write file");
+        let result = sandbox::execute_python(&code, std::path::PathBuf::from("resources"), 10)
+            .await
+            .expect("execute_python should succeed even when code fails to write file");
 
         assert!(
             result.stdout.contains("ESCAPE_FAILED"),

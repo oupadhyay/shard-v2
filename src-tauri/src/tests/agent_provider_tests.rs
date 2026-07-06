@@ -146,10 +146,7 @@ mod classify_intent {
             .mount(&env.server)
             .await;
 
-        let r = agent
-            .classify_intent("anything", "test-key")
-            .await
-            .unwrap();
+        let r = agent.classify_intent("anything", "test-key").await.unwrap();
         assert!(!r);
     }
 }
@@ -179,7 +176,13 @@ mod gemini_turn {
         let mut history = vec![user("hi")];
         let config = config_with_gemini();
         let r = agent
-            .process_gemini_turn(&env.handle, &config, &mut history, 1, &TurnContext::default())
+            .process_gemini_turn(
+                &env.handle,
+                &config,
+                &mut history,
+                1,
+                &TurnContext::default(),
+            )
             .await;
 
         assert!(r.is_err());
@@ -228,7 +231,13 @@ mod gemini_turn {
         let mut history = vec![user("hi")];
         let config = config_with_gemini();
         let r = agent
-            .process_gemini_turn(&env.handle, &config, &mut history, 1, &TurnContext::default())
+            .process_gemini_turn(
+                &env.handle,
+                &config,
+                &mut history,
+                1,
+                &TurnContext::default(),
+            )
             .await;
 
         // No tool calls → Ok(false), assistant message pushed with concatenated text.
@@ -254,7 +263,13 @@ mod gemini_turn {
         config.selected_model = Some("gemini-3.1-flash-lite-preview".into());
         let mut history = vec![user("hi")];
         let r = agent
-            .process_gemini_turn(&env.handle, &config, &mut history, 1, &TurnContext::default())
+            .process_gemini_turn(
+                &env.handle,
+                &config,
+                &mut history,
+                1,
+                &TurnContext::default(),
+            )
             .await;
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("No Gemini API key"));
@@ -291,7 +306,10 @@ mod openrouter_turn {
             .await;
         assert!(r.is_err());
         let err = r.unwrap_err();
-        assert!(err.contains("OpenRouter") || err.contains("API key"), "{err}");
+        assert!(
+            err.contains("OpenRouter") || err.contains("API key"),
+            "{err}"
+        );
     }
 
     #[tokio::test]

@@ -45,7 +45,12 @@ fn first_call_is_not_duplicate() {
 #[test]
 fn second_call_within_window_is_duplicate() {
     let (store, _dir, _guard) = open_store();
-    let _ = is_duplicate(&store, "hash-a", DedupKind::Observation, Duration::from_secs(300));
+    let _ = is_duplicate(
+        &store,
+        "hash-a",
+        DedupKind::Observation,
+        Duration::from_secs(300),
+    );
     assert!(is_duplicate(
         &store,
         "hash-a",
@@ -161,7 +166,12 @@ fn concurrent_inserts_race_safe() {
         let hh = h.to_string();
         handles.push(thread::spawn(move || {
             let guard = s.lock().unwrap();
-            is_duplicate(&guard, &hh, DedupKind::Observation, Duration::from_secs(300))
+            is_duplicate(
+                &guard,
+                &hh,
+                DedupKind::Observation,
+                Duration::from_secs(300),
+            )
         }));
     }
     let mut dup_count = 0usize;

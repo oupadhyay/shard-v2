@@ -264,7 +264,8 @@ pub fn get_events(
                 id: row.get(0)?,
                 logical_path: row.get(1)?,
                 abs_path: row.get(2)?,
-                event_kind: FileEventKind::parse(&row.get::<_, String>(3)?).unwrap_or(FileEventKind::Read),
+                event_kind: FileEventKind::parse(&row.get::<_, String>(3)?)
+                    .unwrap_or(FileEventKind::Read),
                 session_id: row.get(4).ok(),
                 before_hash: row.get(5).ok(),
                 after_hash: row.get(6).ok(),
@@ -346,10 +347,7 @@ pub fn summarize(store: &VectorStore, logical_path: &str, limit: usize) -> Resul
     ));
     for ev in &events {
         let when = &ev.created_at;
-        let session = ev
-            .session_id
-            .as_deref()
-            .unwrap_or("(no session)");
+        let session = ev.session_id.as_deref().unwrap_or("(no session)");
         out.push_str(&format!(
             "### {} • {} • session {}\n",
             ev.event_kind.as_str(),

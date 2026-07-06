@@ -31,7 +31,9 @@ fn status_roundtrip() {
 fn insert_lone_action_appears_on_frontier() {
     let (store, _dir) = open();
     let id = insert_action(&store, None, "do thing", &[], 0, None, None).unwrap();
-    let front = frontier(&store).unwrap().expect("frontier should not be empty");
+    let front = frontier(&store)
+        .unwrap()
+        .expect("frontier should not be empty");
     assert_eq!(front.id, id);
     assert_eq!(front.status, ActionStatus::Pending);
 }
@@ -107,7 +109,11 @@ fn plan_creates_chained_sketch() {
     let ids = plan(
         &store,
         "Rename persona analyst→senior_analyst",
-        &["rename in personas/", "update referencing config keys", "verify with file_history"],
+        &[
+            "rename in personas/",
+            "update referencing config keys",
+            "verify with file_history",
+        ],
         Some("sess-1"),
     )
     .unwrap();
@@ -211,7 +217,11 @@ fn multi_root_sketch_returns_one_per_root() {
     complete(&store, &ids_b[0], None).unwrap();
 
     let sketches = crate::actions::pending_sketch_summary(&store).unwrap();
-    assert_eq!(sketches.len(), 2, "expected one summary entry per open root");
+    assert_eq!(
+        sketches.len(),
+        2,
+        "expected one summary entry per open root"
+    );
 
     let mut roots: Vec<String> = sketches.iter().map(|s| s.root_id.clone()).collect();
     roots.sort();
@@ -269,6 +279,8 @@ fn compaction_preserves_open_sketch() {
     assert!(snapshot_after.contains("update config refs"));
 
     // Frontier walks straight into the next pending step.
-    let next = frontier(&reopened).unwrap().expect("frontier should resume");
+    let next = frontier(&reopened)
+        .unwrap()
+        .expect("frontier should resume");
     assert_eq!(next.id, ids[2]);
 }

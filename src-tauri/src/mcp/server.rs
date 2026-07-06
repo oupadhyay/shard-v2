@@ -16,9 +16,9 @@ use std::sync::Arc;
 use rmcp::{
     handler::server::ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, Content, ErrorData as McpError,
-        Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams,
-        ProtocolVersion, ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParams, CallToolResult, Content, ErrorData as McpError, Implementation,
+        InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
+        ServerCapabilities, ServerInfo, Tool,
     },
     service::{RequestContext, RoleServer, ServiceExt},
 };
@@ -155,10 +155,7 @@ impl ServerHandler for ShardMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         async move {
-            let args = request
-                .arguments
-                .map(Value::Object)
-                .unwrap_or(Value::Null);
+            let args = request.arguments.map(Value::Object).unwrap_or(Value::Null);
             match self.dispatch(&request.name, args).await {
                 Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
                 Err(e) => {

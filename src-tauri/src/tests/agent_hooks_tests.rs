@@ -85,7 +85,11 @@ fn make_invocation<'a>(name: &'a str, args: &'a serde_json::Value) -> ToolInvoca
     }
 }
 
-fn make_outcome<'a>(name: &'a str, args: &'a serde_json::Value, result: &'a str) -> ToolOutcome<'a> {
+fn make_outcome<'a>(
+    name: &'a str,
+    args: &'a serde_json::Value,
+    result: &'a str,
+) -> ToolOutcome<'a> {
     ToolOutcome {
         name,
         args,

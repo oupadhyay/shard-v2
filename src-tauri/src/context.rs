@@ -34,7 +34,9 @@ impl SessionContext {
 
     /// Get just the peer representation string (for dedicated prompt slot).
     pub fn peer_representation_str(&self) -> Option<&str> {
-        self.peer_representation.as_deref().filter(|s| !s.is_empty())
+        self.peer_representation
+            .as_deref()
+            .filter(|s| !s.is_empty())
     }
 
     /// Get just the RAG context (interactions + topics, without peer data).
@@ -105,8 +107,8 @@ impl SessionContext {
 /// of the current inline RAG assembly block.
 pub async fn build_session_context<R: Runtime>(
     app_handle: &AppHandle<R>,
-    _http_client: &reqwest::Client,  // reserved for future embedding generation
-    _config: &crate::config::AppConfig,  // reserved for future budget tuning
+    _http_client: &reqwest::Client, // reserved for future embedding generation
+    _config: &crate::config::AppConfig, // reserved for future budget tuning
     query: &str,
     query_embedding: &[f32],
 ) -> SessionContext {
@@ -124,7 +126,10 @@ pub async fn build_session_context<R: Runtime>(
             log::info!("[Context] No relevant past interactions found");
             None
         } else {
-            log::info!("[Context] Found {} relevant past interactions", relevant.len());
+            log::info!(
+                "[Context] Found {} relevant past interactions",
+                relevant.len()
+            );
             let mut s = String::from("\n\nRelevant Past Interactions:\n");
             for entry in relevant {
                 s.push_str(&format!(
@@ -187,10 +192,8 @@ pub async fn build_session_context<R: Runtime>(
         let handle = app_handle.clone();
         let embedding = query_embedding.to_vec();
 
-        match tokio::task::spawn_blocking(move || {
-            build_observation_context(&handle, &embedding)
-        })
-        .await
+        match tokio::task::spawn_blocking(move || build_observation_context(&handle, &embedding))
+            .await
         {
             Ok(Ok((rep, card))) => (rep, card),
             Ok(Err(e)) => {
@@ -229,9 +232,7 @@ fn build_observation_context<R: Runtime>(
 
     // Peer card
     let card_str = match crate::observations::get_peer_card(&store, "shard", "user")? {
-        Some(card) if !card.facts.is_empty() => {
-            Some(crate::observations::format_peer_card(&card))
-        }
+        Some(card) if !card.facts.is_empty() => Some(crate::observations::format_peer_card(&card)),
         _ => None,
     };
 
@@ -252,7 +253,9 @@ fn build_observation_context<R: Runtime>(
     let rep_str = if observations.is_empty() {
         None
     } else {
-        Some(crate::observations::format_observations_as_markdown(&observations))
+        Some(crate::observations::format_observations_as_markdown(
+            &observations,
+        ))
     };
 
     Ok((rep_str, card_str))

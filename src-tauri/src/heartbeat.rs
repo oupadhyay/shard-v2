@@ -70,7 +70,9 @@ pub struct HeartbeatStatusInfo {
 }
 
 /// Returns status info for all loaded heartbeat specs.
-pub fn get_heartbeat_status_list<R: Runtime>(app_handle: &AppHandle<R>) -> Vec<HeartbeatStatusInfo> {
+pub fn get_heartbeat_status_list<R: Runtime>(
+    app_handle: &AppHandle<R>,
+) -> Vec<HeartbeatStatusInfo> {
     load_heartbeat_specs(app_handle)
         .into_iter()
         .map(|spec| {
@@ -135,15 +137,11 @@ pub fn get_heartbeat_status_list<R: Runtime>(app_handle: &AppHandle<R>) -> Vec<H
 /// prompt = "The prompt body goes here."
 /// ```
 pub fn parse_heartbeat_spec(content: &str, filename: &str) -> Result<HeartbeatSpec, String> {
-    let mut spec: HeartbeatSpec = toml::from_str(content).map_err(|e| {
-        format!("Error parsing TOML in heartbeat spec '{}': {}", filename, e)
-    })?;
+    let mut spec: HeartbeatSpec = toml::from_str(content)
+        .map_err(|e| format!("Error parsing TOML in heartbeat spec '{}': {}", filename, e))?;
 
     if spec.prompt.trim().is_empty() {
-        return Err(format!(
-            "Heartbeat spec '{}' has an empty prompt",
-            filename
-        ));
+        return Err(format!("Heartbeat spec '{}' has an empty prompt", filename));
     }
 
     if spec.session.trim().is_empty() {
@@ -270,9 +268,18 @@ pub fn migrate_legacy_heartbeat_files<R: Runtime>(app_handle: &AppHandle<R>) {
                     if new_path.exists() {
                         log::warn!("[Heartbeat] Conflict: cannot rename '{}' to '{}' (destination already exists)", stem, normalized);
                     } else if let Err(e) = fs::rename(&path, &new_path) {
-                        log::error!("[Heartbeat] Failed to rename legacy spec file '{}' to '{}': {}", path.display(), new_path.display(), e);
+                        log::error!(
+                            "[Heartbeat] Failed to rename legacy spec file '{}' to '{}': {}",
+                            path.display(),
+                            new_path.display(),
+                            e
+                        );
                     } else {
-                        log::info!("[Heartbeat] Successfully migrated legacy spec file '{}' to '{}'", stem, normalized);
+                        log::info!(
+                            "[Heartbeat] Successfully migrated legacy spec file '{}' to '{}'",
+                            stem,
+                            normalized
+                        );
                     }
                 }
             }
@@ -761,7 +768,8 @@ pub async fn process_heartbeat_turn<R: Runtime>(
                     serde_json::to_string_pretty(&args).unwrap_or_else(|_| tc.arguments.clone())
                 );
 
-                match create_draft_for_tool_call(app_handle, spec, &tc.name, &args, &justification) {
+                match create_draft_for_tool_call(app_handle, spec, &tc.name, &args, &justification)
+                {
                     Ok(msg_id) => {
                         log::info!(
                             "[Heartbeat] '{}': draft created for '{}' (msg_id: {})",
@@ -788,7 +796,9 @@ pub async fn process_heartbeat_turn<R: Runtime>(
                 draft_created = true;
             } else {
                 // Safe tool: execute immediately
-                let result = execute_safe_tool(app_handle, &http_client, &config, spec, &tc.name, &args).await;
+                let result =
+                    execute_safe_tool(app_handle, &http_client, &config, spec, &tc.name, &args)
+                        .await;
                 log::info!(
                     "[Heartbeat] '{}': executed tool '{}' -> {} chars",
                     spec.filename,
@@ -832,7 +842,10 @@ pub async fn process_heartbeat_turn<R: Runtime>(
 
     // 7. Determine output
     let trimmed = response_text.trim();
-    if trimmed == "HEARTBEAT_OK" || trimmed.is_empty() || trimmed == "Draft action queued for user approval." {
+    if trimmed == "HEARTBEAT_OK"
+        || trimmed.is_empty()
+        || trimmed == "Draft action queued for user approval."
+    {
         log::info!("[Heartbeat] '{}': nothing to report to user", spec.filename);
         Ok(None)
     } else {
@@ -1194,13 +1207,12 @@ fn load_session_history_context<R: Runtime>(
     let mut context = String::new();
     for (role, content) in rows.into_iter().rev() {
         // Try to parse as ChatMessage JSON, fall back to raw content
-        let display_content = if let Ok(msg) =
-            serde_json::from_str::<crate::agent::ChatMessage>(&content)
-        {
-            msg.content.unwrap_or_default()
-        } else {
-            content
-        };
+        let display_content =
+            if let Ok(msg) = serde_json::from_str::<crate::agent::ChatMessage>(&content) {
+                msg.content.unwrap_or_default()
+            } else {
+                content
+            };
 
         if !display_content.is_empty() {
             // Truncate long messages
@@ -1327,10 +1339,7 @@ pub fn start_heartbeat_engine<R: Runtime>(app_handle: AppHandle<R>) {
                             let limiter2 = limiter.clone();
                             let spec2 = spec_clone.clone();
                             Box::pin(async move {
-                                log::info!(
-                                    "[Heartbeat] Tick for spec '{}'",
-                                    spec2.filename
-                                );
+                                log::info!("[Heartbeat] Tick for spec '{}'", spec2.filename);
 
                                 // Rate limit check
                                 if limiter2.should_skip(&spec2) {
@@ -1346,7 +1355,10 @@ pub fn start_heartbeat_engine<R: Runtime>(app_handle: AppHandle<R>) {
                                         );
                                     }
                                     Err(e) => {
-                                        if e.contains("429") || e.contains("quota") || e.contains("rate") {
+                                        if e.contains("429")
+                                            || e.contains("quota")
+                                            || e.contains("rate")
+                                        {
                                             limiter2.record_quota_error(&spec2.session);
                                         }
                                         log::error!(
@@ -1451,16 +1463,14 @@ pub async fn execute_approved_draft<R: Runtime>(
     let draft: DraftPayload =
         serde_json::from_str(&draft_json).map_err(|e| format!("Invalid draft payload: {}", e))?;
 
-    log::info!(
-        "[DraftAct] Executing approved draft: {}",
-        draft.name
-    );
+    log::info!("[DraftAct] Executing approved draft: {}", draft.name);
 
     // 3. Execute the tool
     let result = execute_draft_gated_tool(app_handle, &draft.name, &draft.arguments).await?;
 
     // 4. Persist the execution & result to the session's chat history
-    let summary = format!("**Executed Draft Action:** `{}`\n```json\n{}\n```\n**Result:**\n{}",
+    let summary = format!(
+        "**Executed Draft Action:** `{}`\n```json\n{}\n```\n**Result:**\n{}",
         draft.name,
         serde_json::to_string_pretty(&draft.arguments).unwrap_or_default(),
         result
@@ -1474,7 +1484,10 @@ pub async fn execute_approved_draft<R: Runtime>(
         created_at: now,
     };
     if let Err(e) = crate::db::sessions::insert_message(&store, &msg) {
-        log::warn!("[DraftAct] Failed to save execution result to history: {}", e);
+        log::warn!(
+            "[DraftAct] Failed to save execution result to history: {}",
+            e
+        );
     }
 
     // 4. Mark as reviewed + approved
@@ -1496,18 +1509,14 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
         // not draft-gated and is dispatched via the normal Agent tool loop,
         // so it never reaches this function.
         "create_heartbeat" => {
-            let name = args["name"]
-                .as_str()
-                .ok_or("Missing 'name' argument")?;
+            let name = args["name"].as_str().ok_or("Missing 'name' argument")?;
             let schedule = args["schedule"]
                 .as_str()
                 .ok_or("Missing 'schedule' argument")?;
             let session = args["session"]
                 .as_str()
                 .ok_or("Missing 'session' argument")?;
-            let prompt = args["prompt"]
-                .as_str()
-                .ok_or("Missing 'prompt' argument")?;
+            let prompt = args["prompt"].as_str().ok_or("Missing 'prompt' argument")?;
             let persona = args["persona"].as_str();
             let max_tool_calls = args["max_tool_calls"].as_u64();
 
@@ -1520,10 +1529,8 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
                 return Err(format!("Heartbeat '{}' already exists", safe_name));
             }
 
-            let mut toml_content = format!(
-                "schedule = \"{}\"\nsession = \"{}\"\n",
-                schedule, session
-            );
+            let mut toml_content =
+                format!("schedule = \"{}\"\nsession = \"{}\"\n", schedule, session);
             if let Some(p) = persona {
                 toml_content.push_str(&format!("persona = \"{}\"\n", p));
             }
@@ -1538,12 +1545,13 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
             fs::write(&filepath, &toml_content)
                 .map_err(|e| format!("Failed to write heartbeat: {}", e))?;
 
-            Ok(format!("Created heartbeat '{}' (schedule: {})", safe_name, schedule))
+            Ok(format!(
+                "Created heartbeat '{}' (schedule: {})",
+                safe_name, schedule
+            ))
         }
         "delete_heartbeat" => {
-            let name = args["name"]
-                .as_str()
-                .ok_or("Missing 'name' argument")?;
+            let name = args["name"].as_str().ok_or("Missing 'name' argument")?;
 
             crate::self_files::validate_heartbeat_slug(name)?;
             let safe_name = name.to_string();
@@ -1554,15 +1562,12 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
                 return Err(format!("Heartbeat '{}' not found", safe_name));
             }
 
-            fs::remove_file(&filepath)
-                .map_err(|e| format!("Failed to delete heartbeat: {}", e))?;
+            fs::remove_file(&filepath).map_err(|e| format!("Failed to delete heartbeat: {}", e))?;
 
             Ok(format!("Deleted heartbeat '{}'", safe_name))
         }
         "edit_heartbeat" => {
-            let name = args["name"]
-                .as_str()
-                .ok_or("Missing 'name' argument")?;
+            let name = args["name"].as_str().ok_or("Missing 'name' argument")?;
 
             crate::self_files::validate_heartbeat_slug(name)?;
             let safe_name = name.to_string();
@@ -1586,7 +1591,11 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
                 spec.prompt = p.to_string();
             }
             if let Some(p) = args["persona"].as_str() {
-                spec.persona = if p.is_empty() { None } else { Some(p.to_string()) };
+                spec.persona = if p.is_empty() {
+                    None
+                } else {
+                    Some(p.to_string())
+                };
             }
             if let Some(m) = args["max_tool_calls"].as_u64() {
                 spec.max_tool_calls = m as u32;
@@ -1642,7 +1651,9 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
         "crystallize_sketch" => {
             if let Some(sketch_id) = args["sketch_id"].as_str() {
                 if sketch_id.is_empty() {
-                    return Err("Error: crystallize_sketch requires a non-empty sketch_id".to_string());
+                    return Err(
+                        "Error: crystallize_sketch requires a non-empty sketch_id".to_string()
+                    );
                 }
                 let config = crate::config::load_config(app_handle)?;
                 let store = crate::memories::get_vector_store(app_handle)?;
@@ -1695,7 +1706,9 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
 
                 Ok(format!(
                     "Crystallized sketch `{}` into draft persona `{}` ({} bytes written).",
-                    source_sketch_id, logical_path, outcome.after.len()
+                    source_sketch_id,
+                    logical_path,
+                    outcome.after.len()
                 ))
             }
         }
@@ -1706,7 +1719,11 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
             let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
             let outcome = crate::self_files::edit_allowed_file(
-                app_handle, path, old_str, new_str, replace_all,
+                app_handle,
+                path,
+                old_str,
+                new_str,
+                replace_all,
             )?;
 
             // Structured event for frontend diff viewer
@@ -1740,8 +1757,8 @@ pub fn create_draft_for_tool_call<R: Runtime>(
         heartbeat_session: spec.session.clone(),
     };
 
-    let draft_json = serde_json::to_string(&draft)
-        .map_err(|e| format!("Failed to serialize draft: {}", e))?;
+    let draft_json =
+        serde_json::to_string(&draft).map_err(|e| format!("Failed to serialize draft: {}", e))?;
 
     let content = format!(
         "**Heartbeat `{}` requests approval for `{}`:**\n\n{}",

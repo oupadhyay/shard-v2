@@ -28,7 +28,8 @@ mod tests {
 
     #[test]
     fn test_parse_step_delta_text() {
-        let sse = r#"data: {"event_type":"step.delta","index":1,"delta":{"type":"text","text":"Hello"}}"#;
+        let sse =
+            r#"data: {"event_type":"step.delta","index":1,"delta":{"type":"text","text":"Hello"}}"#;
         let event = parse_interactions_sse_line(sse).expect("should parse step.delta text");
         assert_eq!(event.event_type, "step.delta");
         assert_eq!(event.index, Some(1));
@@ -57,7 +58,10 @@ mod tests {
         let event = parse_interactions_sse_line(sse).expect("should parse thought_summary");
         assert_eq!(event.event_type, "step.delta");
         if let Some(InteractionDelta::ThoughtSummary { content }) = &event.delta {
-            assert_eq!(content.as_ref().unwrap().text.as_deref(), Some("User wants weather info."));
+            assert_eq!(
+                content.as_ref().unwrap().text.as_deref(),
+                Some("User wants weather info.")
+            );
         } else {
             panic!("Expected ThoughtSummary delta, got {:?}", event.delta);
         }
@@ -99,7 +103,8 @@ mod tests {
 
     #[test]
     fn test_parse_step_stop() {
-        let sse = r#"data: {"type":"step.stop","event_type":"step.stop","index":1,"status":"done"}"#;
+        let sse =
+            r#"data: {"type":"step.stop","event_type":"step.stop","index":1,"status":"done"}"#;
         let event = parse_interactions_sse_line(sse).expect("should parse step.stop");
         assert_eq!(event.event_type, "step.stop");
         assert_eq!(event.index, Some(1));
@@ -144,7 +149,8 @@ mod tests {
     #[test]
     fn test_parse_step_start_function_call() {
         let sse = r#"data: {"type":"step.start","event_type":"step.start","index":1,"step":{"type":"function_call","id":"fc_1","name":"get_weather"}}"#;
-        let event = parse_interactions_sse_line(sse).expect("should parse function_call step.start");
+        let event =
+            parse_interactions_sse_line(sse).expect("should parse function_call step.start");
         assert_eq!(event.event_type, "step.start");
         let step = event.step.expect("should have step payload");
         assert_eq!(step["type"], "function_call");
@@ -155,9 +161,15 @@ mod tests {
     #[test]
     fn test_parse_step_delta_function_call_complete() {
         let sse = r#"data: {"event_type":"step.delta","index":1,"delta":{"type":"function_call","id":"fc_1","name":"get_weather","arguments":{"location":"Boston, MA"}}}"#;
-        let event = parse_interactions_sse_line(sse).expect("should parse complete function_call delta");
+        let event =
+            parse_interactions_sse_line(sse).expect("should parse complete function_call delta");
         assert_eq!(event.event_type, "step.delta");
-        if let Some(InteractionDelta::FunctionCallDelta { id, name, arguments }) = &event.delta {
+        if let Some(InteractionDelta::FunctionCallDelta {
+            id,
+            name,
+            arguments,
+        }) = &event.delta
+        {
             assert_eq!(id, "fc_1");
             assert_eq!(name, "get_weather");
             assert_eq!(arguments["location"], "Boston, MA");
@@ -168,7 +180,8 @@ mod tests {
 
     #[test]
     fn test_parse_step_stop_function_call_waiting() {
-        let sse = r#"data: {"type":"step.stop","event_type":"step.stop","index":1,"status":"waiting"}"#;
+        let sse =
+            r#"data: {"type":"step.stop","event_type":"step.stop","index":1,"status":"waiting"}"#;
         let event = parse_interactions_sse_line(sse).expect("should parse waiting step.stop");
         assert_eq!(event.event_type, "step.stop");
     }
@@ -182,7 +195,9 @@ mod tests {
         let event = InteractionStreamEvent {
             event_type: "step.delta".to_string(),
             index: Some(1),
-            delta: Some(InteractionDelta::Text { text: "Hello world".to_string() }),
+            delta: Some(InteractionDelta::Text {
+                text: "Hello world".to_string(),
+            }),
             content: None,
             interaction: None,
             step: None,
@@ -203,7 +218,9 @@ mod tests {
         let event = InteractionStreamEvent {
             event_type: "step.delta".to_string(),
             index: Some(0),
-            delta: Some(InteractionDelta::Thought { thought: Some("Let me think...".to_string()) }),
+            delta: Some(InteractionDelta::Thought {
+                thought: Some("Let me think...".to_string()),
+            }),
             content: None,
             interaction: None,
             step: None,
@@ -239,7 +256,13 @@ mod tests {
         let events = process_interactions_event(&event, &mut full_text, &mut full_reasoning);
 
         assert_eq!(events.len(), 1);
-        if let AgentEvent::InteractionToolCall { id, name, arguments, signature } = &events[0] {
+        if let AgentEvent::InteractionToolCall {
+            id,
+            name,
+            arguments,
+            signature,
+        } = &events[0]
+        {
             assert_eq!(id, "fc_abc");
             assert_eq!(name, "search_wikipedia");
             assert_eq!(arguments["query"], "Rust programming");
@@ -254,7 +277,9 @@ mod tests {
         let event = InteractionStreamEvent {
             event_type: "step.delta".to_string(),
             index: Some(0),
-            delta: Some(InteractionDelta::ThoughtSignature { signature: "sig_xyz".to_string() }),
+            delta: Some(InteractionDelta::ThoughtSignature {
+                signature: "sig_xyz".to_string(),
+            }),
             content: None,
             interaction: None,
             step: None,
@@ -278,16 +303,26 @@ mod tests {
         let mut full_reasoning = String::new();
 
         let e1 = InteractionStreamEvent {
-            event_type: "step.delta".to_string(), index: Some(1),
-            delta: Some(InteractionDelta::Text { text: "Hello ".to_string() }),
-            content: None, interaction: None, step: None,
+            event_type: "step.delta".to_string(),
+            index: Some(1),
+            delta: Some(InteractionDelta::Text {
+                text: "Hello ".to_string(),
+            }),
+            content: None,
+            interaction: None,
+            step: None,
         };
         process_interactions_event(&e1, &mut full_text, &mut full_reasoning);
 
         let e2 = InteractionStreamEvent {
-            event_type: "step.delta".to_string(), index: Some(1),
-            delta: Some(InteractionDelta::Text { text: "world!".to_string() }),
-            content: None, interaction: None, step: None,
+            event_type: "step.delta".to_string(),
+            index: Some(1),
+            delta: Some(InteractionDelta::Text {
+                text: "world!".to_string(),
+            }),
+            content: None,
+            interaction: None,
+            step: None,
         };
         process_interactions_event(&e2, &mut full_text, &mut full_reasoning);
 
@@ -300,17 +335,27 @@ mod tests {
         let mut full_reasoning = String::new();
 
         let thought_event = InteractionStreamEvent {
-            event_type: "step.delta".to_string(), index: Some(0),
-            delta: Some(InteractionDelta::Thought { thought: Some("Planning response.".to_string()) }),
-            content: None, interaction: None, step: None,
+            event_type: "step.delta".to_string(),
+            index: Some(0),
+            delta: Some(InteractionDelta::Thought {
+                thought: Some("Planning response.".to_string()),
+            }),
+            content: None,
+            interaction: None,
+            step: None,
         };
         let r = process_interactions_event(&thought_event, &mut full_text, &mut full_reasoning);
         assert_eq!(r.len(), 1);
 
         let text_event = InteractionStreamEvent {
-            event_type: "step.delta".to_string(), index: Some(1),
-            delta: Some(InteractionDelta::Text { text: "Here is the answer.".to_string() }),
-            content: None, interaction: None, step: None,
+            event_type: "step.delta".to_string(),
+            index: Some(1),
+            delta: Some(InteractionDelta::Text {
+                text: "Here is the answer.".to_string(),
+            }),
+            content: None,
+            interaction: None,
+            step: None,
         };
         let r = process_interactions_event(&text_event, &mut full_text, &mut full_reasoning);
         assert_eq!(r.len(), 1);
@@ -323,7 +368,11 @@ mod tests {
     fn test_process_unknown_event_type_produces_no_events() {
         let event = InteractionStreamEvent {
             event_type: "interaction.created".to_string(),
-            index: None, delta: None, content: None, interaction: None, step: None,
+            index: None,
+            delta: None,
+            content: None,
+            interaction: None,
+            step: None,
         };
         let mut ft = String::new();
         let mut fr = String::new();
@@ -390,7 +439,10 @@ mod tests {
         let event = InteractionStreamEvent {
             event_type: "step.start".to_string(),
             index: Some(0),
-            delta: None, content: None, interaction: None, step: None,
+            delta: None,
+            content: None,
+            interaction: None,
+            step: None,
         };
 
         let mut ft = String::new();
@@ -418,7 +470,10 @@ mod tests {
         let steps = body["steps"].as_array().expect("steps should be array");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0]["type"], "model_output");
-        assert_eq!(steps[0]["content"][0]["text"], "Why did the chicken cross the road?");
+        assert_eq!(
+            steps[0]["content"][0]["text"],
+            "Why did the chicken cross the road?"
+        );
     }
 
     #[test]
@@ -438,7 +493,9 @@ mod tests {
         let steps = body["steps"].as_array().unwrap();
         assert_eq!(steps.len(), 2);
         // Thought summary is now an array, not a flat string
-        let summary = steps[0]["summary"].as_array().expect("summary should be array");
+        let summary = steps[0]["summary"]
+            .as_array()
+            .expect("summary should be array");
         assert_eq!(summary[0]["text"], "I need to check the weather...");
         assert_eq!(steps[1]["type"], "function_call");
     }
@@ -469,7 +526,10 @@ mod tests {
         });
         let steps = body["steps"].as_array().unwrap();
         assert_eq!(steps.len(), 3);
-        assert_eq!(steps[2]["content"][0]["annotations"][0]["type"], "url_citation");
+        assert_eq!(
+            steps[2]["content"][0]["annotations"][0]["type"],
+            "url_citation"
+        );
     }
 
     // ========================================================================
@@ -483,7 +543,10 @@ mod tests {
             "id": "int_1",
             "steps": [{ "type": "model_output", "content": [{ "type": "text", "text": "The answer is 42." }] }]
         });
-        assert_eq!(extract_model_text_from_steps(&body), Some("The answer is 42.".to_string()));
+        assert_eq!(
+            extract_model_text_from_steps(&body),
+            Some("The answer is 42.".to_string())
+        );
     }
 
     #[test]
@@ -495,7 +558,10 @@ mod tests {
                 { "type": "model_output", "content": [{ "type": "text", "text": "Final answer." }] }
             ]
         });
-        assert_eq!(extract_model_text_from_steps(&body), Some("Final answer.".to_string()));
+        assert_eq!(
+            extract_model_text_from_steps(&body),
+            Some("Final answer.".to_string())
+        );
     }
 
     #[test]
@@ -509,7 +575,10 @@ mod tests {
                 ]
             }]
         });
-        assert_eq!(extract_model_text_from_steps(&body), Some("Part one. Part two.".to_string()));
+        assert_eq!(
+            extract_model_text_from_steps(&body),
+            Some("Part one. Part two.".to_string())
+        );
     }
 
     #[test]
@@ -598,7 +667,13 @@ mod tests {
         // 1 reasoning + 1 tool call = 2 events
         assert_eq!(all_events.len(), 2);
         let tool_event = &all_events[1];
-        if let AgentEvent::InteractionToolCall { id, name, arguments, .. } = tool_event {
+        if let AgentEvent::InteractionToolCall {
+            id,
+            name,
+            arguments,
+            ..
+        } = tool_event
+        {
             assert_eq!(id, "fc_1");
             assert_eq!(name, "get_weather");
             assert_eq!(arguments["location"], "Boston, MA");

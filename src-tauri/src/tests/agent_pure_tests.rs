@@ -58,7 +58,11 @@ mod normalize_schema {
     #[test]
     fn b5_strips_additional_properties() {
         let out = norm(json!({"type": "object", "additionalProperties": false}));
-        assert!(out.as_object().unwrap().get("additionalProperties").is_none());
+        assert!(out
+            .as_object()
+            .unwrap()
+            .get("additionalProperties")
+            .is_none());
         assert_eq!(out["type"], "object");
     }
 

@@ -1,7 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use shard_lib::agent::{
-    construct_gemini_messages, ChatMessage, FunctionCall, ToolCall,
-};
+use shard_lib::agent::{construct_gemini_messages, ChatMessage, FunctionCall, ToolCall};
 
 /// Build a synthetic chat history with interleaved user, assistant (with tool
 /// calls), and tool-response messages.
@@ -76,7 +74,10 @@ fn bench_construct_gemini_messages(c: &mut Criterion) {
         let msg_count = history.len();
 
         group.bench_with_input(
-            BenchmarkId::new("hashmap_lookup", format!("{msg_count}_msgs_{tool_rounds}_tools")),
+            BenchmarkId::new(
+                "hashmap_lookup",
+                format!("{msg_count}_msgs_{tool_rounds}_tools"),
+            ),
             &history,
             |b, hist| {
                 b.iter(|| {

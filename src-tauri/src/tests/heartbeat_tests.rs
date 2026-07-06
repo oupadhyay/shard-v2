@@ -115,7 +115,6 @@ session = "agent:test"
     assert!(result.unwrap_err().contains("prompt"));
 }
 
-
 // ============================================================================
 // Rate Limiter Tests
 // ============================================================================
@@ -450,7 +449,7 @@ fn test_filename_sanitization() {
         .collect();
     assert_eq!(safe, "etcpasswd");
     assert!(!safe.contains('/'));
-    assert!(!safe.contains("..")); 
+    assert!(!safe.contains(".."));
 }
 
 #[test]
@@ -551,7 +550,10 @@ async fn test_execute_approved_draft_reviewed_check() {
     // Calling execute_approved_draft on an already reviewed message should return an error!
     let res = execute_approved_draft(handle, message_id).await;
     assert!(res.is_err());
-    assert_eq!(res.unwrap_err(), "Draft has already been reviewed or does not exist");
+    assert_eq!(
+        res.unwrap_err(),
+        "Draft has already been reviewed or does not exist"
+    );
 }
 
 #[tokio::test]
@@ -612,4 +614,3 @@ async fn test_crystallize_sketch_draft_gated() {
     // Clean up
     let _ = std::fs::remove_file(&path);
 }
-

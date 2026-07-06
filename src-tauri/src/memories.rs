@@ -265,7 +265,9 @@ pub fn get_topics_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, 
 }
 
 /// Get the path to the memory transcripts directory
-pub fn get_memory_transcripts_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
+pub fn get_memory_transcripts_dir<R: Runtime>(
+    app_handle: &AppHandle<R>,
+) -> Result<PathBuf, String> {
     let memories_dir = get_memories_dir(app_handle)?;
     let transcripts_dir = memories_dir.join("sessions");
 
@@ -1397,7 +1399,9 @@ pub fn read_memory_file_lines<R: Runtime>(
         .map_err(|_| format!("File not found: {}", relative_path))?;
 
     if !canonical_requested.starts_with(&canonical_memories) {
-        return Err("Path traversal denied: path must be within the memories directory".to_string());
+        return Err(
+            "Path traversal denied: path must be within the memories directory".to_string(),
+        );
     }
 
     let content = fs::read_to_string(&canonical_requested)
@@ -1425,7 +1429,9 @@ pub fn read_memory_file_lines<R: Runtime>(
 /// One-time migration: convert MEMORIES.json entries into Explicit observations.
 /// Deduplicates by content hash — safe to call multiple times.
 /// Returns the number of new observations created.
-pub fn migrate_memories_to_observations<R: Runtime>(app_handle: &AppHandle<R>) -> Result<usize, String> {
+pub fn migrate_memories_to_observations<R: Runtime>(
+    app_handle: &AppHandle<R>,
+) -> Result<usize, String> {
     let store_data = load_memories_from_disk(app_handle)?;
     if store_data.memories.is_empty() {
         return Ok(0);
@@ -1436,12 +1442,15 @@ pub fn migrate_memories_to_observations<R: Runtime>(app_handle: &AppHandle<R>) -
 
     for memory in &store_data.memories {
         let hash = crate::vector_store::compute_content_hash(&memory.content);
-        let exists: bool = vector_store.conn
+        let exists: bool = vector_store
+            .conn
             .query_row(
                 "SELECT COUNT(*) FROM observations WHERE content_hash = ? AND deleted_at IS NULL",
-                [&hash], |row| row.get::<_, i64>(0),
+                [&hash],
+                |row| row.get::<_, i64>(0),
             )
-            .unwrap_or(0) > 0;
+            .unwrap_or(0)
+            > 0;
 
         if exists {
             continue;
@@ -1456,7 +1465,10 @@ pub fn migrate_memories_to_observations<R: Runtime>(app_handle: &AppHandle<R>) -
 
         match crate::observations::insert_observation(&vector_store, &obs, None) {
             Ok(()) => {
-                log::info!("[Migration] Migrated memory to observation: {}", &memory.content);
+                log::info!(
+                    "[Migration] Migrated memory to observation: {}",
+                    &memory.content
+                );
                 created += 1;
             }
             Err(e) => {

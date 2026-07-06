@@ -10,9 +10,7 @@ use crate::config::AppConfig;
 const GROQ_VISION_MODEL: &str = "meta-llama/llama-4-scout-17b-16e-instruct";
 
 /// OpenRouter free vision models in priority order (fallback if Gemma 4 26B MoE fails)
-const OPENROUTER_VISION_MODELS: &[&str] = &[
-    "nvidia/nemotron-nano-12b-v2-vl:free",
-];
+const OPENROUTER_VISION_MODELS: &[&str] = &["nvidia/nemotron-nano-12b-v2-vl:free"];
 
 #[derive(Serialize, Debug)]
 struct OpenAIVisionRequest {

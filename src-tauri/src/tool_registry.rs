@@ -647,7 +647,8 @@ impl ToolRegistry {
             .flat_map(|p| crate::personas::get_persona_required_tools(p))
             .collect();
 
-        let mut defs: Vec<_> = self.tools
+        let mut defs: Vec<_> = self
+            .tools
             .values()
             .filter(|e| {
                 let is_global = GLOBAL_TOOLS.contains(&e.name);
@@ -669,7 +670,8 @@ impl ToolRegistry {
             .flat_map(|p| crate::personas::get_persona_required_tools(p))
             .collect();
 
-        let mut defs: Vec<_> = self.tools
+        let mut defs: Vec<_> = self
+            .tools
             .values()
             .filter(|e| {
                 let is_global = GLOBAL_TOOLS.contains(&e.name);
@@ -697,9 +699,7 @@ impl ToolRegistry {
     /// Check if a tool requires draft approval (heartbeat mode).
     /// Replaces `tools::is_draft_gated()`.
     pub fn is_draft_gated(&self, name: &str) -> bool {
-        self.tools
-            .get(name)
-            .is_some_and(|e| e.draft_gated)
+        self.tools.get(name).is_some_and(|e| e.draft_gated)
     }
 
     /// Hermes-style: can this batch of tool calls run in parallel?

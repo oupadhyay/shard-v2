@@ -222,8 +222,14 @@ mod tests {
         let models = get_vision_models();
         let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(models.len(), 2, "Should have exactly 2 vision models");
-        assert!(ids.contains(&"google/gemma-4-26b-a4b-it:free"), "Primary vision: Gemma 4 26B MoE");
-        assert!(ids.contains(&"nvidia/nemotron-nano-12b-v2-vl:free"), "Fallback vision: Nemotron Nano");
+        assert!(
+            ids.contains(&"google/gemma-4-26b-a4b-it:free"),
+            "Primary vision: Gemma 4 26B MoE"
+        );
+        assert!(
+            ids.contains(&"nvidia/nemotron-nano-12b-v2-vl:free"),
+            "Fallback vision: Nemotron Nano"
+        );
     }
 
     #[test]
@@ -231,7 +237,10 @@ mod tests {
         let models = get_background_models();
         assert_eq!(models.len(), 3, "Should have exactly 3 background models");
         let default = models.first().unwrap();
-        assert_eq!(default.id, "gemma-4-26b-a4b-it", "Default background should be 26B MoE");
+        assert_eq!(
+            default.id, "gemma-4-26b-a4b-it",
+            "Default background should be 26B MoE"
+        );
         assert_eq!(default.provider, Provider::Gemini);
     }
 
@@ -242,8 +251,14 @@ mod tests {
         let vision_primary = get_vision_models().first().unwrap().id.clone();
         let bg_default = get_background_models().first().unwrap().id.clone();
 
-        assert_ne!(chat_default, vision_primary, "Chat and vision should use different models");
-        assert_ne!(chat_default, bg_default, "Chat and background defaults should differ");
+        assert_ne!(
+            chat_default, vision_primary,
+            "Chat and vision should use different models"
+        );
+        assert_ne!(
+            chat_default, bg_default,
+            "Chat and background defaults should differ"
+        );
     }
 
     #[test]
@@ -266,11 +281,13 @@ mod tests {
         for model in &all_models {
             assert!(
                 !format!("{:?}", model.provider).contains("Cerebras"),
-                "Model {} should not use Cerebras provider", model.id
+                "Model {} should not use Cerebras provider",
+                model.id
             );
             assert!(
                 !model.id.contains("Cerebras"),
-                "Model ID {} should not reference Cerebras", model.id
+                "Model ID {} should not reference Cerebras",
+                model.id
             );
         }
     }

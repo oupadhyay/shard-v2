@@ -193,10 +193,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let scenarios_dir = std::env::var("SHARD_EVAL_SCENARIOS")
-        .unwrap_or_else(|_| "eval/scenarios".to_string());
-    let model = std::env::var("SHARD_EVAL_MODEL")
-        .unwrap_or_else(|_| "gemma-4-31b-it".to_string());
+    let scenarios_dir =
+        std::env::var("SHARD_EVAL_SCENARIOS").unwrap_or_else(|_| "eval/scenarios".to_string());
+    let model = std::env::var("SHARD_EVAL_MODEL").unwrap_or_else(|_| "gemma-4-31b-it".to_string());
     let api_key = std::env::var("GEMINI_API_KEY")
         .map_err(|_| "GEMINI_API_KEY env var is required (.env supported)")?;
 
@@ -222,7 +221,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
-    println!("Loaded {} scenario(s) from {}", scenarios.len(), scenarios_dir);
+    println!(
+        "Loaded {} scenario(s) from {}",
+        scenarios.len(),
+        scenarios_dir
+    );
 
     // CRITICAL: Redirect $HOME to a fresh tempdir so the agent's app_data_dir()
     // resolves into an isolated sandbox instead of the user's real
@@ -407,12 +410,9 @@ fn resolve_seed_target<R: tauri::Runtime>(
         return Ok(cfg_dir.join("config.toml"));
     }
     if let Some(rest) = logical.strip_prefix("personas/") {
-        let slug = rest.strip_suffix(".md").ok_or_else(|| {
-            format!(
-                "personas/* seed target must end in .md (got '{}')",
-                logical
-            )
-        })?;
+        let slug = rest
+            .strip_suffix(".md")
+            .ok_or_else(|| format!("personas/* seed target must end in .md (got '{}')", logical))?;
         shard_lib::self_files::validate_persona_slug(slug)
             .map_err(|e| format!("Invalid persona slug '{}': {}", slug, e))?;
         let personas_dir = shard_lib::personas::get_personas_dir()?;
@@ -561,14 +561,12 @@ fn evaluate_post_assertions<R: tauri::Runtime>(
 
     if pa.seeded_sketches_crystallized {
         if seeded_sketches.is_empty() {
-            report.push_str(
-                "- [ ] seeded_sketches_crystallized: no sketches were pre-seeded\n",
-            );
+            report.push_str("- [ ] seeded_sketches_crystallized: no sketches were pre-seeded\n");
             all_pass = false;
         } else {
             for id in seeded_sketches {
-                let crystallized = shard_lib::crystals::is_crystallized(&store, id)
-                    .unwrap_or(false);
+                let crystallized =
+                    shard_lib::crystals::is_crystallized(&store, id).unwrap_or(false);
                 report.push_str(&format!(
                     "- [{}] actions.crystallized_at set for sketch `{}`\n",
                     if crystallized { "x" } else { " " },
@@ -617,8 +615,7 @@ fn evaluate_post_assertions<R: tauri::Runtime>(
     }
 
     for logical in &pa.file_events_edit_for {
-        let events =
-            shard_lib::file_history::get_events(&store, logical, 50).unwrap_or_default();
+        let events = shard_lib::file_history::get_events(&store, logical, 50).unwrap_or_default();
         let count = events
             .iter()
             .filter(|e| matches!(e.event_kind, shard_lib::file_history::FileEventKind::Edit))
@@ -704,10 +701,7 @@ fn register_listeners<R: tauri::Runtime>(handle: &tauri::AppHandle<R>, cap: Capt
                     .and_then(|n| n.as_str())
                     .unwrap_or("?")
                     .to_string();
-                let result = v
-                    .get("result")
-                    .map(|r| r.to_string())
-                    .unwrap_or_default();
+                let result = v.get("result").map(|r| r.to_string()).unwrap_or_default();
                 cap.lock().unwrap().tool_results.push((name, result));
             }
         });
@@ -868,7 +862,10 @@ fn evaluate_objective(
         report.push_str(&format!(
             "- [{}] no_errors (got {} error event(s))\n",
             if !any_errors { "x" } else { " " },
-            transcript.iter().map(|(_, t)| t.errors.len()).sum::<usize>()
+            transcript
+                .iter()
+                .map(|(_, t)| t.errors.len())
+                .sum::<usize>()
         ));
         if any_errors {
             all_pass = false;
@@ -894,7 +891,11 @@ fn write_scenario_md(
     md.push_str(&format!("**Description:** {}\n\n", scenario.description));
     md.push_str(&format!(
         "**Objective verdict:** {}\n\n",
-        if objective_pass { "PASS ✓" } else { "FAIL ✗" }
+        if objective_pass {
+            "PASS ✓"
+        } else {
+            "FAIL ✗"
+        }
     ));
 
     md.push_str("## Transcript\n\n");
@@ -918,11 +919,7 @@ fn write_scenario_md(
         if !t.tool_results.is_empty() {
             md.push_str("**Tool results:**\n\n");
             for (name, result) in &t.tool_results {
-                md.push_str(&format!(
-                    "- `{}` → `{}`\n",
-                    name,
-                    truncate(result, 200)
-                ));
+                md.push_str(&format!("- `{}` → `{}`\n", name, truncate(result, 200)));
             }
             md.push('\n');
         }
@@ -988,7 +985,10 @@ fn write_summary_md(
     md.push_str("| Scenario | Objective | Subjective (judge) |\n");
     md.push_str("|----------|-----------|---------------------|\n");
     for (id, _pass, marker) in rows {
-        let name = by_id.get(id.as_str()).map(|s| s.name.as_str()).unwrap_or(id);
+        let name = by_id
+            .get(id.as_str())
+            .map(|s| s.name.as_str())
+            .unwrap_or(id);
         md.push_str(&format!("| {} ({}) | {} | _pending_ |\n", name, id, marker));
     }
     md.push_str(

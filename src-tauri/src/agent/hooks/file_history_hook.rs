@@ -17,12 +17,7 @@ use crate::vector_store::VectorStore;
 /// Tools whose errors are considered diagnostic feedback for prior edits.
 /// Keep this conservative — adding `web_search` here would mis-attribute
 /// network blips to file edits.
-const SELF_EDIT_FEEDBACK_TOOLS: &[&str] = &[
-    "run_python",
-    "read_file",
-    "edit_file",
-    "file_history",
-];
+const SELF_EDIT_FEEDBACK_TOOLS: &[&str] = &["run_python", "read_file", "edit_file", "file_history"];
 
 pub struct FileHistoryHook<R: tauri::Runtime> {
     app_handle: tauri::AppHandle<R>,

@@ -284,7 +284,11 @@ mod personas {
         let path = dir.join(format!("{name}.md"));
         std::fs::write(&path, body).unwrap();
         // Sanity check: the path must live inside our sandbox.
-        assert!(path.starts_with(env._tempdir.path()), "persona escaped sandbox: {:?}", path);
+        assert!(
+            path.starts_with(env._tempdir.path()),
+            "persona escaped sandbox: {:?}",
+            path
+        );
     }
 
     #[tokio::test]
@@ -560,7 +564,10 @@ mod self_files_dispatch {
         assert!(r.contains("Edited"));
         assert!(r.contains("```diff"));
         // File on disk reflects the new content.
-        assert_eq!(read_config_toml(&env), "selected_model = \"gpt-oss-120b\"\n");
+        assert_eq!(
+            read_config_toml(&env),
+            "selected_model = \"gpt-oss-120b\"\n"
+        );
     }
 
     #[tokio::test]
