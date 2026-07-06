@@ -319,7 +319,13 @@ pub async fn call_llm_oneshot(
         }
 
         match call_llm_oneshot_inner(
-            http_client, config, model, system_prompt, user_message, max_tokens, temperature,
+            http_client,
+            config,
+            model,
+            system_prompt,
+            user_message,
+            max_tokens,
+            temperature,
         )
         .await
         {
@@ -450,10 +456,7 @@ async fn call_gemini_oneshot(
     let payload = serde_json::json!({
         "model": model,
         "system_instruction": system_prompt,
-        "input": [{
-            "role": "user",
-            "content": [{ "type": "text", "text": user_message }]
-        }],
+        "input": user_message,
         "stream": false,
         "store": false
     });
@@ -537,13 +540,35 @@ pub async fn call_llm_with_tools(
 
     for attempt in 0..=RATE_LIMIT_MAX_RETRIES {
         if attempt > 0 {
-            log::info!("[LLM] Tool call retry attempt {}/{}", attempt, RATE_LIMIT_MAX_RETRIES);
+            log::info!(
+                "[LLM] Tool call retry attempt {}/{}",
+                attempt,
+                RATE_LIMIT_MAX_RETRIES
+            );
         }
 
         let result = if crate::models::is_gemini_model(model) {
-            call_gemini_with_tools(http_client, config, model, messages, tools, max_tokens, temperature).await
+            call_gemini_with_tools(
+                http_client,
+                config,
+                model,
+                messages,
+                tools,
+                max_tokens,
+                temperature,
+            )
+            .await
         } else {
-            call_openai_with_tools(http_client, config, model, messages, tools, max_tokens, temperature).await
+            call_openai_with_tools(
+                http_client,
+                config,
+                model,
+                messages,
+                tools,
+                max_tokens,
+                temperature,
+            )
+            .await
         };
 
         match result {
@@ -735,7 +760,11 @@ async fn call_gemini_with_tools(
         for part in parts {
             if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                 // Skip thinking/thought parts
-                if part.get("thought").and_then(|t| t.as_bool()).unwrap_or(false) {
+                if part
+                    .get("thought")
+                    .and_then(|t| t.as_bool())
+                    .unwrap_or(false)
+                {
                     continue;
                 }
                 content = Some(text.to_string());
@@ -753,7 +782,12 @@ async fn call_gemini_with_tools(
         }
     }
 
-    let finish_reason = if tool_calls.is_empty() { "stop" } else { "tool_calls" }.to_string();
+    let finish_reason = if tool_calls.is_empty() {
+        "stop"
+    } else {
+        "tool_calls"
+    }
+    .to_string();
 
     Ok(LlmToolResponse {
         content,
@@ -958,7 +992,8 @@ pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                             log::info!(
                                 "[Background] Topics/insights changed, rebuilding chunk index..."
                             );
-                            if let Ok(config) = crate::config::load_config(&summary_cleanup_handle) {
+                            if let Ok(config) = crate::config::load_config(&summary_cleanup_handle)
+                            {
                                 if let Some(api_key) = config.gemini_api_key {
                                     let http_client = reqwest::Client::new();
                                     match crate::memories::rebuild_chunk_index(
@@ -1040,7 +1075,10 @@ pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                         let should_dream = observations_created >= 5
                             || !should_skip_job(last_run_info.dream_last_run.as_deref());
                         if should_dream && observations_created > 0 {
-                            log::debug!("[Background] Triggering dream phase ({} new observations)...", observations_created);
+                            log::debug!(
+                                "[Background] Triggering dream phase ({} new observations)...",
+                                observations_created
+                            );
                             match run_dream_job(&summary_cleanup_handle).await {
                                 Ok(dream) => {
                                     log::info!(
@@ -1049,7 +1087,8 @@ pub fn start_maintenance_jobs<R: Runtime>(app_handle: AppHandle<R>) {
                                         dream.contradictions_found, dream.peer_card_updated
                                     );
                                     if dream.llm_reasoning.is_some() {
-                                        last_run_info.dream_last_run = Some(Utc::now().to_rfc3339());
+                                        last_run_info.dream_last_run =
+                                            Some(Utc::now().to_rfc3339());
                                         save_last_run_info(&summary_cleanup_handle, &last_run_info);
                                     }
                                 }
@@ -1336,7 +1375,9 @@ Return at most 5 topics and 5 insights. Ignore generic greetings/one-off queries
                                     &handle,
                                     &update.topic,
                                     &update.summary,
-                                ).is_ok() {
+                                )
+                                .is_ok()
+                                {
                                     topics.push(update.topic);
                                 }
                             }
@@ -1446,7 +1487,10 @@ async fn run_cleanup_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Cleanu
         .map_err(|e| format!("Database error: {}", e));
 
         match prune_result {
-            Ok(n) if n > 0 => log::info!("[Cleanup] Pruned {} stale sessions (<= 1 user message, > 1 day old)", n),
+            Ok(n) if n > 0 => log::info!(
+                "[Cleanup] Pruned {} stale sessions (<= 1 user message, > 1 day old)",
+                n
+            ),
             Ok(_) => {}
             Err(e) => log::warn!("[Cleanup] Failed to prune stale sessions: {}", e),
         }
@@ -1627,7 +1671,9 @@ Interaction Entries:
 
 /// Extract explicit observations from recent session transcripts.
 /// Processes sessions updated since the last deriver run.
-async fn run_deriver_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<ExtractionResult, String> {
+async fn run_deriver_job<R: Runtime>(
+    app_handle: &AppHandle<R>,
+) -> Result<ExtractionResult, String> {
     let config = crate::config::load_config(app_handle)?;
     let background_model = config
         .background_model
@@ -1635,9 +1681,7 @@ async fn run_deriver_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Extrac
         .unwrap_or(DEFAULT_BACKGROUND_MODEL);
     let _ = config.get_model_provider_config(background_model, "deriver")?;
 
-    let gemini_key = config
-        .gemini_api_key
-        .clone();
+    let gemini_key = config.gemini_api_key.clone();
 
     // Determine cutoff: sessions updated since last deriver run (or last 12h)
     let last_run_info = load_last_run_info(app_handle);
@@ -1665,10 +1709,7 @@ async fn run_deriver_job<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Extrac
 
         let session_ids: Vec<(String, String)> = stmt
             .query_map([&cutoff_str_clone], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                ))
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(|e| e.to_string())?
             .filter_map(|r| r.ok())
@@ -1765,8 +1806,7 @@ Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
                 // Doing this BEFORE the embedding API calls avoids wasting Gemini quota
                 // (and rate-limit budget) on duplicates that would later be skipped anyway.
                 let dedup_handle = app_handle.clone();
-                let fact_strings: Vec<String> =
-                    facts.iter().map(|f| f.fact.clone()).collect();
+                let fact_strings: Vec<String> = facts.iter().map(|f| f.fact.clone()).collect();
                 let novel_indices: Vec<usize> = tokio::task::spawn_blocking(move || {
                     match crate::memories::get_vector_store(&dedup_handle) {
                         Ok(store) => fact_strings
@@ -1803,8 +1843,7 @@ Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
                     // instead of duplicating the secret string per fact.
                     use futures::StreamExt;
                     use std::sync::Arc;
-                    let key_arc: Option<Arc<str>> =
-                        gemini_key.as_deref().map(Arc::from);
+                    let key_arc: Option<Arc<str>> = gemini_key.as_deref().map(Arc::from);
                     let novel_facts: Vec<(usize, String)> = novel_indices
                         .iter()
                         .map(|&i| (i, facts[i].fact.clone()))
@@ -2232,7 +2271,9 @@ pub async fn force_cleanup<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Clea
 }
 
 /// Force-trigger the deriver job (observation extraction)
-pub async fn force_deriver<R: Runtime>(app_handle: &AppHandle<R>) -> Result<ExtractionResult, String> {
+pub async fn force_deriver<R: Runtime>(
+    app_handle: &AppHandle<R>,
+) -> Result<ExtractionResult, String> {
     log::info!("[Background] Force-triggered deriver job");
     let result = run_deriver_job(app_handle).await?;
 

@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Amp runs this from the repository root before starting work in a fresh orb.
+# Keep it idempotent: fresh orbs should become ready for Shard's TypeScript and
+# Tauri/Rust test/build commands without agents rediscovering system packages.
+
+if [[ ! -f package.json || ! -d src-tauri ]]; then
+  echo "error: .agents/setup must run from the shard-v2 repository root" >&2
+  exit 1
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+
+apt_packages=(
+  build-essential
+  ca-certificates
+  curl
+  cmake
+  file
+  libayatana-appindicator3-dev
+  libclang-dev
+  libgtk-3-dev
+  librsvg2-dev
+  libssl-dev
+  libwebkit2gtk-4.1-dev
+  libxdo-dev
+  patchelf
+  pkg-config
+  wget
+)
+
+missing_packages=()
+for pkg in "${apt_packages[@]}"; do
+  if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed"; then
+    missing_packages+=("$pkg")
+  fi
+done
+
+if (( ${#missing_packages[@]} > 0 )); then
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends "${missing_packages[@]}"
+fi
+
+# Debian 12's apt cargo is too old for this repo's Cargo.lock format. Use
+# rustup's current stable toolchain and include rustfmt for targeted checks.
+if ! command -v rustup >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --profile minimal --component rustfmt
+fi
+
+# shellcheck source=/dev/null
+. "$HOME/.cargo/env"
+rustup toolchain install stable --profile minimal --component rustfmt --no-self-update
+rustup default stable
+
+npm ci
+
+(
+  cd src-tauri
+  cargo fetch
+)
+
+# Leave repo-specific operational notes for future agents in this orb without
+# overwriting any user/global guidance that may already exist.
+amp_config_dir="$HOME/.config/amp"
+mkdir -p "$amp_config_dir"
+agents_file="$amp_config_dir/AGENTS.md"
+if ! grep -q "# shard-v2 Orb Setup" "$agents_file" 2>/dev/null; then
+  cat >> "$agents_file" <<'EOF'
+
+# shard-v2 Orb Setup
+
+- This orb uses rustup for Rust because Debian 12's apt cargo is too old for this repository's lockfile.
+- If `cargo`, `rustc`, or `rustfmt` are not found in a shell, run `. "$HOME/.cargo/env"` first.
+- Rust crate commands live under `src-tauri`; useful checks include `cargo test` and targeted `rustfmt --edition 2021 --check <files>`.
+- Avoid crate-wide `cargo fmt` for small fixes unless the user asks for a formatting sweep; it can create large unrelated diffs.
+EOF
+fi
+
+echo "shard-v2 orb setup complete"

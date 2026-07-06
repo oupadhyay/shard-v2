@@ -2,8 +2,8 @@
 mod tests {
     use crate::agent::{
         construct_gemini_messages, construct_interactions_input, parse_interactions_sse_line,
-        process_interactions_event, ChatMessage, FunctionCall, GeminiPart, ImageAttachment,
-        InteractionDelta, InteractionOutput, InteractionStreamEvent, ToolCall, AgentEvent,
+        process_interactions_event, AgentEvent, ChatMessage, FunctionCall, GeminiPart,
+        ImageAttachment, InteractionDelta, InteractionOutput, InteractionStreamEvent, ToolCall,
     };
     use serde_json::json;
 
@@ -470,16 +470,16 @@ mod tests {
         ];
 
         let input = construct_interactions_input(&history);
-        let turns = input.as_array().expect("Expected array");
+        let steps = input.as_array().expect("Expected array");
 
-        assert_eq!(turns.len(), 2);
-        assert_eq!(turns[0]["role"], "user");
-        assert_eq!(turns[0]["content"][0]["type"], "text");
-        assert_eq!(turns[0]["content"][0]["text"], "Hello");
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0]["type"], "user_input");
+        assert_eq!(steps[0]["content"][0]["type"], "text");
+        assert_eq!(steps[0]["content"][0]["text"], "Hello");
 
-        assert_eq!(turns[1]["role"], "model");
-        assert_eq!(turns[1]["content"][0]["type"], "text");
-        assert_eq!(turns[1]["content"][0]["text"], "Hi there!");
+        assert_eq!(steps[1]["type"], "model_output");
+        assert_eq!(steps[1]["content"][0]["type"], "text");
+        assert_eq!(steps[1]["content"][0]["text"], "Hi there!");
     }
 
     #[test]
@@ -499,10 +499,11 @@ mod tests {
         }];
 
         let input = construct_interactions_input(&history);
-        let turns = input.as_array().expect("Expected array");
+        let steps = input.as_array().expect("Expected array");
 
-        assert_eq!(turns.len(), 1);
-        let content = turns[0]["content"].as_array().unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0]["type"], "user_input");
+        let content = steps[0]["content"].as_array().unwrap();
         assert_eq!(content.len(), 2);
 
         // Text part
@@ -532,8 +533,8 @@ mod tests {
         }];
 
         let input = construct_interactions_input(&history);
-        let turns = input.as_array().expect("Expected array");
-        let content = turns[0]["content"].as_array().unwrap();
+        let steps = input.as_array().expect("Expected array");
+        let content = steps[0]["content"].as_array().unwrap();
 
         assert_eq!(content[1]["type"], "image");
         assert_eq!(content[1]["data"], "iVBORw0KGgo=");
@@ -562,18 +563,20 @@ mod tests {
         }];
 
         let input = construct_interactions_input(&history);
-        let turns = input.as_array().expect("Expected array");
+        let steps = input.as_array().expect("Expected array");
 
-        assert_eq!(turns.len(), 1);
-        assert_eq!(turns[0]["role"], "model");
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0]["type"], "model_output");
 
-        let content = turns[0]["content"].as_array().unwrap();
-        assert_eq!(content.len(), 2); // text + function_call
+        let content = steps[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "Let me check.");
 
-        assert_eq!(content[1]["type"], "function_call");
-        assert_eq!(content[1]["id"], "call_weather_0");
-        assert_eq!(content[1]["name"], "get_weather");
-        assert_eq!(content[1]["arguments"]["location"], "London");
+        assert_eq!(steps[1]["type"], "function_call");
+        assert_eq!(steps[1]["id"], "call_weather_0");
+        assert_eq!(steps[1]["name"], "get_weather");
+        assert_eq!(steps[1]["arguments"]["location"], "London");
     }
 
     #[test]
@@ -608,19 +611,17 @@ mod tests {
         ];
 
         let input = construct_interactions_input(&history);
-        let turns = input.as_array().expect("Expected array");
+        let steps = input.as_array().expect("Expected array");
 
-        assert_eq!(turns.len(), 2);
+        assert_eq!(steps.len(), 2);
 
-        // Tool response turn
-        let tool_turn = &turns[1];
-        assert_eq!(tool_turn["role"], "user");
+        // Tool response step
+        let tool_step = &steps[1];
 
-        let content = tool_turn["content"].as_array().unwrap();
-        assert_eq!(content[0]["type"], "function_result");
-        assert_eq!(content[0]["name"], "get_weather");
-        assert_eq!(content[0]["call_id"], "call_1");
-        assert_eq!(content[0]["result"][0]["text"], "Sunny, 25C");
+        assert_eq!(tool_step["type"], "function_result");
+        assert_eq!(tool_step["name"], "get_weather");
+        assert_eq!(tool_step["call_id"], "call_1");
+        assert_eq!(tool_step["result"][0]["text"], "Sunny, 25C");
     }
 
     #[test]
@@ -636,15 +637,14 @@ mod tests {
         }];
 
         let input = construct_interactions_input(&history);
-        let turns = input.as_array().expect("Expected array");
+        let steps = input.as_array().expect("Expected array");
 
-        assert_eq!(turns.len(), 1);
-        let content = turns[0]["content"].as_array().unwrap();
+        assert_eq!(steps.len(), 1);
 
-        assert_eq!(content[0]["type"], "function_result");
-        assert_eq!(content[0]["name"], "unknown"); // Resolves correctly via default
-        assert_eq!(content[0]["call_id"], "orphan_call");
-        assert_eq!(content[0]["result"][0]["text"], "Missing earlier context");
+        assert_eq!(steps[0]["type"], "function_result");
+        assert_eq!(steps[0]["name"], "unknown"); // Resolves correctly via default
+        assert_eq!(steps[0]["call_id"], "orphan_call");
+        assert_eq!(steps[0]["result"][0]["text"], "Missing earlier context");
     }
 
     // ========================================================================
@@ -890,8 +890,14 @@ mod tests {
         assert_eq!(json["model"], "gemini-3.1-flash-lite-preview");
         assert_eq!(json["stream"], true);
         assert_eq!(json["store"], false);
-        assert!(json["input"].is_array(), "input should be an array of turns");
-        assert!(!json["input"].as_array().unwrap().is_empty(), "input should not be empty");
+        assert!(
+            json["input"].is_array(),
+            "input should be an array of steps"
+        );
+        assert!(
+            !json["input"].as_array().unwrap().is_empty(),
+            "input should not be empty"
+        );
         assert_eq!(json["system_instruction"], "test mode");
         assert!(json["tools"].is_array(), "tools should be an array");
         assert_eq!(json["generation_config"]["thinking_level"], "low");

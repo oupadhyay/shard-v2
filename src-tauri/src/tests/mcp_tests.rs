@@ -18,7 +18,7 @@
 use crate::mcp::{
     handle_action_next, handle_action_plan, handle_edit_file, handle_file_history,
     handle_memory_search, handle_read_file, handle_save_memory, resolve_allowed_path_no_tauri,
-    shard_data_dir, shard_db_path, ShardMcpServer, CURATED_TOOL_NAMES,
+    shard_config_dir, shard_data_dir, shard_db_path, ShardMcpServer, CURATED_TOOL_NAMES,
 };
 use serde_json::json;
 use std::time::Duration;
@@ -157,7 +157,7 @@ fn edit_file_via_mcp_writes_through_self_files() {
     let _jail = HomeJail::new();
 
     // Pre-seed config.toml with some content.
-    let cfg = shard_data_dir().unwrap().join("config.toml");
+    let cfg = shard_config_dir().unwrap().join("config.toml");
     std::fs::write(&cfg, "selected_model = \"original\"\n").unwrap();
 
     let result = handle_edit_file(&json!({
@@ -238,7 +238,7 @@ fn edit_file_refuses_api_key_in_config() {
     let _lock = mcp_test_lock();
     let _jail = HomeJail::new();
     // Pre-seed so apply_edit has something to match on.
-    let cfg = shard_data_dir().unwrap().join("config.toml");
+    let cfg = shard_config_dir().unwrap().join("config.toml");
     std::fs::write(&cfg, "selected_model = \"x\"\n").unwrap();
     let err = handle_edit_file(&json!({
         "path": "config.toml",
@@ -273,9 +273,7 @@ async fn concurrent_clients_serialized() {
         handles.push(tokio::spawn(async move {
             // Each task writes to its own persona slug — no content
             // contention, so a working mutex must still let all N land.
-            let body = format!(
-                "---\ndescription: concurrent-{i}\n---\n\n# body {i}\n"
-            );
+            let body = format!("---\ndescription: concurrent-{i}\n---\n\n# body {i}\n");
             // The dispatch_for_test guard mirrors production dispatch:
             // it holds write_lock for the whole critical section.
             let lock = server.write_lock_for_test();
@@ -336,7 +334,10 @@ fn action_plan_then_action_next_round_trip() {
     assert_eq!(plan_json["count"].as_u64(), Some(3));
 
     let next = handle_action_next(&json!({})).unwrap();
-    assert!(next != "null", "frontier should not be empty after action_plan");
+    assert!(
+        next != "null",
+        "frontier should not be empty after action_plan"
+    );
     let next_json: serde_json::Value = serde_json::from_str(&next).unwrap();
     // The parent action has the highest priority (0) by default; children
     // are inserted with negative priorities (-0, -1, …) so the parent

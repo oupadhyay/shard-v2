@@ -8,18 +8,18 @@ use tauri_plugin_global_shortcut::{self as tauri_gs, GlobalShortcutExt, Shortcut
 static CURRENT_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 static CANCELLED_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 
+pub mod actions;
 pub mod agent;
 mod background;
 mod cache;
-pub mod actions;
-pub mod crystals;
-pub mod dedup;
-pub mod file_history;
 pub mod compaction;
 pub mod config;
 pub mod context;
+pub mod crystals;
 pub mod db;
+pub mod dedup;
 pub mod endpoints;
+pub mod file_history;
 mod gemini_files;
 pub mod heartbeat;
 mod integrations;
@@ -174,6 +174,7 @@ async fn perform_ocr_capture_macos() -> Result<OcrResult, String> {
 /// Interactive region selection is not supported; the full screen is captured instead.
 #[cfg(not(target_os = "macos"))]
 fn perform_ocr_capture_blocking() -> Result<OcrResult, String> {
+    use image::ImageEncoder;
     use std::io::Cursor;
 
     let screens =

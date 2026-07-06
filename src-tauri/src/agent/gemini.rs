@@ -211,10 +211,16 @@ pub fn parse_gemini_chunk(
 // Interactions API utilities
 // ============================================================================
 
-/// Convert chat history to Interactions API stateless input format (array of Turn objects)
+/// Convert chat history to Interactions API stateless input format (array of Step objects).
+///
+/// The steps-based Interactions API rejects legacy turn-list entries (`role` +
+/// `content`) when `Api-Revision: 2026-05-20` is active. For stateless history,
+/// send the chronological step timeline instead: user messages become
+/// `user_input`, assistant text becomes `model_output`, assistant function calls
+/// become `function_call`, and tool messages become `function_result`.
 pub fn construct_interactions_input(history: &[ChatMessage]) -> Value {
     use std::collections::HashMap;
-    let mut turns: Vec<Value> = Vec::new();
+    let mut steps: Vec<Value> = Vec::new();
 
     // Pre-index: map tool_call_id → function name for O(1) lookup
     let mut call_id_to_name: HashMap<String, String> = HashMap::new();
@@ -244,28 +250,20 @@ pub fn construct_interactions_input(history: &[ChatMessage]) -> Value {
 
             let result_text = msg.content.clone().unwrap_or_default();
             let result_val = json!([{"type": "text", "text": result_text}]);
-            turns.push(json!({
-                "role": "user",
-                "content": [{
-                    "type": "function_result",
-                    "name": func_name,
-                    "call_id": call_id,
-                    "result": result_val,
-                }]
+            steps.push(json!({
+                "type": "function_result",
+                "name": func_name,
+                "call_id": call_id,
+                "result": result_val,
             }));
         } else {
-            let role = if msg.role == "assistant" {
-                "model"
-            } else {
-                "user"
-            };
             let mut content_parts: Vec<Value> = Vec::new();
 
             // Thought Signature (Required for tool calling)
             if let Some(tool_calls) = &msg.tool_calls {
                 if let Some(first_tc) = tool_calls.first() {
                     if let Some(sig) = &first_tc.thought_signature {
-                        content_parts.push(json!({
+                        steps.push(json!({
                             "type": "thought",
                             "signature": sig
                         }));
@@ -318,12 +316,24 @@ pub fn construct_interactions_input(history: &[ChatMessage]) -> Value {
                 }
             }
 
-            // Tool calls from assistant messages become function_call outputs
+            if !content_parts.is_empty() {
+                let step_type = if msg.role == "assistant" {
+                    "model_output"
+                } else {
+                    "user_input"
+                };
+                steps.push(json!({
+                    "type": step_type,
+                    "content": content_parts
+                }));
+            }
+
+            // Tool calls from assistant messages become function_call steps.
             if let Some(tool_calls) = &msg.tool_calls {
                 for tc in tool_calls {
                     let args_val: Value =
                         serde_json::from_str(&tc.function.arguments).unwrap_or(json!({}));
-                    content_parts.push(json!({
+                    steps.push(json!({
                         "type": "function_call",
                         "id": tc.id,
                         "name": tc.function.name,
@@ -331,17 +341,10 @@ pub fn construct_interactions_input(history: &[ChatMessage]) -> Value {
                     }));
                 }
             }
-
-            if !content_parts.is_empty() {
-                turns.push(json!({
-                    "role": role,
-                    "content": content_parts
-                }));
-            }
         }
     }
 
-    Value::Array(turns)
+    Value::Array(steps)
 }
 
 /// Parse a single SSE line from the Interactions API streaming response.
