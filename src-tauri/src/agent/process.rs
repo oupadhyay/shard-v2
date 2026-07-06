@@ -135,16 +135,16 @@ impl<R: tauri::Runtime> Agent<R> {
         };
 
         // For non-vision models, prepend contextual image analysis to the message
-        let augmented_message = if !is_gemini && !has_native_vision && !image_descriptions.is_empty()
-        {
-            let analysis = image_descriptions.join("\n\n");
-            format!(
-                "[Visual Analysis]\n{}\n\n[User Message]\n{}",
-                analysis, message
-            )
-        } else {
-            message.clone()
-        };
+        let augmented_message =
+            if !is_gemini && !has_native_vision && !image_descriptions.is_empty() {
+                let analysis = image_descriptions.join("\n\n");
+                format!(
+                    "[Visual Analysis]\n{}\n\n[User Message]\n{}",
+                    analysis, message
+                )
+            } else {
+                message.clone()
+            };
 
         let msg = ChatMessage {
             role: "user".to_string(),
@@ -193,13 +193,9 @@ impl<R: tauri::Runtime> Agent<R> {
                         .ok()
                     }
                 } else {
-                    crate::interactions::generate_embedding(
-                        &self.http_client,
-                        &message,
-                        api_key,
-                    )
-                    .await
-                    .ok()
+                    crate::interactions::generate_embedding(&self.http_client, &message, api_key)
+                        .await
+                        .ok()
                 }
             } else {
                 None
@@ -436,24 +432,12 @@ impl<R: tauri::Runtime> Agent<R> {
                 is_cron,
             };
             let continue_turn = if is_gemini {
-                self.process_gemini_turn(
-                    app_handle,
-                    config,
-                    &mut history,
-                    stream_id,
-                    &turn_ctx,
-                )
-                .await?
+                self.process_gemini_turn(app_handle, config, &mut history, stream_id, &turn_ctx)
+                    .await?
             } else {
                 // OpenRouter and Groq use OpenAI-compatible API
-                self.process_openrouter_turn(
-                    app_handle,
-                    config,
-                    &mut history,
-                    stream_id,
-                    &turn_ctx,
-                )
-                .await?
+                self.process_openrouter_turn(app_handle, config, &mut history, stream_id, &turn_ctx)
+                    .await?
             };
 
             // Check if we need to retry (empty response with reasoning)

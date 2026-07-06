@@ -64,18 +64,26 @@ impl<R: tauri::Runtime> Agent<R> {
         };
 
         let available_skills = crate::personas::list_available_personas();
-        let available_skills_str = if available_skills.is_empty() { None } else { Some(available_skills.join("\n")) };
+        let available_skills_str = if available_skills.is_empty() {
+            None
+        } else {
+            Some(available_skills.join("\n"))
+        };
         let available_skills_opt = available_skills_str.as_deref();
 
         let session_id = self.session_id.lock().await.clone();
         let mut active_skills_opt: Option<String> = None;
         if let Ok(store) = crate::memories::get_vector_store(app_handle) {
-            if let Ok(active_personas) = crate::db::sessions::get_active_skills(&store, &session_id) {
+            if let Ok(active_personas) = crate::db::sessions::get_active_skills(&store, &session_id)
+            {
                 if !active_personas.is_empty() {
                     let mut active_skills_content = String::new();
                     for persona in active_personas {
                         if let Some(content) = crate::personas::resolve_persona_content(&persona) {
-                            active_skills_content.push_str(&format!("--- PERSONA: {} ---\n{}\n\n", persona, content));
+                            active_skills_content.push_str(&format!(
+                                "--- PERSONA: {} ---\n{}\n\n",
+                                persona, content
+                            ));
                         }
                     }
                     if !active_skills_content.is_empty() {
@@ -86,9 +94,19 @@ impl<R: tauri::Runtime> Agent<R> {
         }
 
         let system_prompt_content = if incognito_mode {
-            crate::prompts::get_default_system_prompt(None, None, None, None, available_skills_opt, active_skills_opt.as_deref())
+            crate::prompts::get_default_system_prompt(
+                None,
+                None,
+                None,
+                None,
+                available_skills_opt,
+                active_skills_opt.as_deref(),
+            )
         } else if is_research_mode {
-            crate::prompts::get_research_system_prompt(available_skills_opt, active_skills_opt.as_deref())
+            crate::prompts::get_research_system_prompt(
+                available_skills_opt,
+                active_skills_opt.as_deref(),
+            )
         } else {
             config.system_prompt.clone().unwrap_or_else(|| {
                 crate::prompts::get_default_system_prompt(
@@ -195,11 +213,7 @@ impl<R: tauri::Runtime> Agent<R> {
                     },
                     reasoning_effort,
                     reasoning: None,
-                    include_reasoning: if is_groq {
-                        None
-                    } else {
-                        Some(true)
-                    },
+                    include_reasoning: if is_groq { None } else { Some(true) },
                     stream: true,
                 };
 
@@ -224,7 +238,8 @@ impl<R: tauri::Runtime> Agent<R> {
 
         let current_tools = if enable_tools && !is_olmo_think {
             Some(
-                crate::tool_registry::global().get_definitions(&active_skills_list)
+                crate::tool_registry::global()
+                    .get_definitions(&active_skills_list)
                     .iter()
                     .map(|t| ToolDefinition {
                         tool_type: t.tool_type.clone(),
@@ -232,7 +247,11 @@ impl<R: tauri::Runtime> Agent<R> {
                             name: t.function.name.clone(),
                             description: t.function.description.clone(),
                             parameters: t.function.parameters.clone(),
-                            strict: if is_strict_blacklisted { None } else { t.function.strict },
+                            strict: if is_strict_blacklisted {
+                                None
+                            } else {
+                                t.function.strict
+                            },
                         },
                     })
                     .collect(),
@@ -393,55 +412,66 @@ impl<R: tauri::Runtime> Agent<R> {
                                         app_handle.emit("agent-response-chunk", content).ok();
                                     }
 
-                                                if let Some(delta_tool_calls) =
-                                                    choice["delta"].get("tool_calls")
-                                                {
-                                                    if let Some(tool_calls_arr) = delta_tool_calls.as_array() {
-                                                        for tool_call_json in tool_calls_arr {
-                                                            let index =
-                                                                tool_call_json["index"].as_u64().unwrap_or(0)
-                                                                    as usize;
-                                                            if index >= tool_calls_buffer.len() {
-                                                                tool_calls_buffer.resize(
-                                                                    index + 1,
-                                                                    ToolCall {
-                                                                        id: String::new(),
-                                                                        tool_type: "function".to_string(),
-                                                                        function: FunctionCall {
-                                                                            name: String::new(),
-                                                                            arguments: String::new(),
-                                                                        },
-                                                                        thought_signature: None,
-                                                                    },
-                                                                );
-                                                            }
-                                                            let target = &mut tool_calls_buffer[index];
-                                                            if let Some(id) = tool_call_json["id"].as_str() {
-                                                                target.id = id.to_string();
-                                                            }
-                                                            if let Some(func) = tool_call_json.get("function") {
-                                                                if let Some(name) = func["name"].as_str() {
-                                                                    target.function.name.push_str(name);
-                                                                }
-                                                                if let Some(args) = func["arguments"].as_str() {
-                                                                    target.function.arguments.push_str(args);
-                                                                }
-                                                            }
-
-                                                            // Emit tool call update for real-time UI mapping
-                                                            if !target.function.name.is_empty() {
-                                                                let args_json: serde_json::Value = serde_json::from_str(&target.function.arguments).unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-                                                                let event_payload = serde_json::json!({
-                                                                    "name": target.function.name,
-                                                                    "args": args_json,
-                                                                    "rawArgs": target.function.arguments,
-                                                                    "id": target.id
-                                                                });
-                                                                app_handle.emit("agent-tool-call", event_payload.to_string()).ok();
-                                                            }
-                                                        }
+                                    if let Some(delta_tool_calls) =
+                                        choice["delta"].get("tool_calls")
+                                    {
+                                        if let Some(tool_calls_arr) = delta_tool_calls.as_array() {
+                                            for tool_call_json in tool_calls_arr {
+                                                let index =
+                                                    tool_call_json["index"].as_u64().unwrap_or(0)
+                                                        as usize;
+                                                if index >= tool_calls_buffer.len() {
+                                                    tool_calls_buffer.resize(
+                                                        index + 1,
+                                                        ToolCall {
+                                                            id: String::new(),
+                                                            tool_type: "function".to_string(),
+                                                            function: FunctionCall {
+                                                                name: String::new(),
+                                                                arguments: String::new(),
+                                                            },
+                                                            thought_signature: None,
+                                                        },
+                                                    );
+                                                }
+                                                let target = &mut tool_calls_buffer[index];
+                                                if let Some(id) = tool_call_json["id"].as_str() {
+                                                    target.id = id.to_string();
+                                                }
+                                                if let Some(func) = tool_call_json.get("function") {
+                                                    if let Some(name) = func["name"].as_str() {
+                                                        target.function.name.push_str(name);
+                                                    }
+                                                    if let Some(args) = func["arguments"].as_str() {
+                                                        target.function.arguments.push_str(args);
                                                     }
                                                 }
+
+                                                // Emit tool call update for real-time UI mapping
+                                                if !target.function.name.is_empty() {
+                                                    let args_json: serde_json::Value =
+                                                        serde_json::from_str(
+                                                            &target.function.arguments,
+                                                        )
+                                                        .unwrap_or(serde_json::Value::Object(
+                                                            serde_json::Map::new(),
+                                                        ));
+                                                    let event_payload = serde_json::json!({
+                                                        "name": target.function.name,
+                                                        "args": args_json,
+                                                        "rawArgs": target.function.arguments,
+                                                        "id": target.id
+                                                    });
+                                                    app_handle
+                                                        .emit(
+                                                            "agent-tool-call",
+                                                            event_payload.to_string(),
+                                                        )
+                                                        .ok();
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

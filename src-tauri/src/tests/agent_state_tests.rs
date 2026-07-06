@@ -410,7 +410,10 @@ mod load_session {
         // Build a fresh agent to prove load_session_from_db works against a
         // pre-existing session it did not write itself.
         let agent2 = Agent::new(env.handle.clone());
-        agent2.load_session_from_db(&env.handle, &sid).await.unwrap();
+        agent2
+            .load_session_from_db(&env.handle, &sid)
+            .await
+            .unwrap();
         let h = agent2.get_history().await;
         assert_eq!(h.len(), 4);
         assert_eq!(h[0].content.as_deref(), Some("u1"));
@@ -484,7 +487,10 @@ mod persist {
         // Drop in-memory state and reload from DB.
         let sid = agent.session_id.lock().await.clone();
         let agent2 = Agent::new(env.handle.clone());
-        agent2.load_session_from_db(&env.handle, &sid).await.unwrap();
+        agent2
+            .load_session_from_db(&env.handle, &sid)
+            .await
+            .unwrap();
         let h = agent2.get_history().await;
         assert_eq!(h.len(), 3);
         assert_eq!(h[1].tool_calls.as_ref().unwrap()[0].id, "call_x");
@@ -588,7 +594,10 @@ mod images_persist {
 
         let sid = agent.session_id.lock().await.clone();
         let agent2 = Agent::new(env.handle.clone());
-        agent2.load_session_from_db(&env.handle, &sid).await.unwrap();
+        agent2
+            .load_session_from_db(&env.handle, &sid)
+            .await
+            .unwrap();
         let h = agent2.get_history().await;
         assert_eq!(h.len(), 1);
         let img = &h[0].images.as_ref().unwrap()[0];

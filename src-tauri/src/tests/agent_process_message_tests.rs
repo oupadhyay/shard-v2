@@ -29,7 +29,9 @@
 #![cfg(test)]
 
 use crate::agent::Agent;
-use crate::tests::agent_helpers::{agent_test_lock, captured, gemini_sse, register_listeners, TestEnv};
+use crate::tests::agent_helpers::{
+    agent_test_lock, captured, gemini_sse, register_listeners, TestEnv,
+};
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -126,7 +128,10 @@ async fn b10_cron_message_does_not_emit_user_message_event() {
     );
     // The cron flag should be persisted on the user message in history.
     let h = agent.get_history().await;
-    let user_msg = h.iter().find(|m| m.role == "user").expect("user message present");
+    let user_msg = h
+        .iter()
+        .find(|m| m.role == "user")
+        .expect("user message present");
     assert_eq!(user_msg.is_cron, Some(true));
 }
 
@@ -157,7 +162,10 @@ async fn single_turn_text_response_completes_with_two_messages() {
     assert_eq!(h.len(), 2);
     assert_eq!(h[0].role, "user");
     assert_eq!(h[0].content.as_deref(), Some("ping"));
-    assert!(h[0].images.is_none(), "no images supplied → uploaded_images=None");
+    assert!(
+        h[0].images.is_none(),
+        "no images supplied → uploaded_images=None"
+    );
     assert_eq!(h[1].role, "assistant");
     assert_eq!(h[1].content.as_deref(), Some("the answer"));
 }

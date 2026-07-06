@@ -94,9 +94,7 @@ pub fn should_crystallize_sketch(_parent: &Action, children: &[Action]) -> Cryst
     if non_cancelled < MIN_TOOL_CALLS {
         return CrystallizeDecision::Skip(format!(
             "only {}/{} tool calls (need ≥{})",
-            non_cancelled,
-            MIN_TOOL_CALLS,
-            MIN_TOOL_CALLS
+            non_cancelled, MIN_TOOL_CALLS, MIN_TOOL_CALLS
         ));
     }
     let rate = done as f32 / non_cancelled as f32;
@@ -181,16 +179,23 @@ pub fn pick_unique_slug(base: &str, existing: &[String]) -> Result<String, Strin
 pub fn build_prompt(parent_title: &str, children: &[Action]) -> String {
     let mut prompt = String::new();
     prompt.push_str("You are a procedural-memory crystalliser. ");
-    prompt.push_str("Given a completed action sketch (a parent task and its child steps with outcomes), ");
-    prompt.push_str("produce a reusable Markdown persona that captures the recipe so a future agent ");
+    prompt.push_str(
+        "Given a completed action sketch (a parent task and its child steps with outcomes), ",
+    );
+    prompt.push_str(
+        "produce a reusable Markdown persona that captures the recipe so a future agent ",
+    );
     prompt.push_str("can replay it.\n\n");
-    prompt.push_str("Return ONLY valid Markdown beginning with a YAML frontmatter block of the form:\n\n");
+    prompt.push_str(
+        "Return ONLY valid Markdown beginning with a YAML frontmatter block of the form:\n\n",
+    );
     prompt.push_str("```\n---\n");
     prompt.push_str("description: <one sentence, ≤120 chars>\n");
     prompt.push_str("category: crystal\n");
     prompt.push_str("required_tools:\n  - <tool_name>\n  - ...\n");
     prompt.push_str("---\n```\n\n");
-    prompt.push_str("Followed by a numbered list of the steps, each annotated with what worked.\n\n");
+    prompt
+        .push_str("Followed by a numbered list of the steps, each annotated with what worked.\n\n");
     prompt.push_str("## Sketch\n\n");
     prompt.push_str(&format!("Title: {}\n\n", parent_title));
     prompt.push_str("## Steps\n\n");
@@ -251,10 +256,7 @@ pub fn stamp_source_sketch_id(markdown: &str, sketch_id: &str) -> String {
 /// Collect the sketch parent + its children from the store. Synchronous
 /// wrapper around two queries — kept separate from [`crystallize`] so the
 /// LLM-calling step never holds a non-`Send` `VectorStore` across an await.
-pub fn load_sketch(
-    store: &VectorStore,
-    sketch_id: &str,
-) -> Result<(Action, Vec<Action>), String> {
+pub fn load_sketch(store: &VectorStore, sketch_id: &str) -> Result<(Action, Vec<Action>), String> {
     let parent = crate::actions::get(store, sketch_id)?
         .ok_or_else(|| format!("sketch {} not found", sketch_id))?;
     if parent.parent_id.is_some() {
@@ -383,8 +385,9 @@ pub fn find_completed_sketches(store: &VectorStore) -> Result<Vec<String>, Strin
         if children.is_empty() {
             continue;
         }
-        let all_terminal = children.iter().all(|c| c.status.is_terminal()
-            || matches!(c.status, ActionStatus::Blocked));
+        let all_terminal = children
+            .iter()
+            .all(|c| c.status.is_terminal() || matches!(c.status, ActionStatus::Blocked));
         if all_terminal {
             completed.push(root);
         }

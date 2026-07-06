@@ -32,7 +32,10 @@ fn populate_store(store: &VectorStore, count: usize) -> Vec<String> {
     let mut ids = Vec::with_capacity(count);
     for i in 0..count {
         let obs = make_observation(
-            &format!("Observation fact number {} about the user preferences and behavior patterns", i),
+            &format!(
+                "Observation fact number {} about the user preferences and behavior patterns",
+                i
+            ),
             ObservationLevel::Explicit,
             vec![],
             None,
@@ -96,8 +99,7 @@ fn bench_retrieval_functions(c: &mut Criterion) {
             &store,
             |b, store| {
                 b.iter(|| {
-                    let res =
-                        get_top_derived_observations(black_box(store), "user", 50).unwrap();
+                    let res = get_top_derived_observations(black_box(store), "user", 50).unwrap();
                     black_box(res);
                 });
             },

@@ -22,8 +22,8 @@ use tauri::{AppHandle, Manager, Runtime};
 
 #[derive(Debug, Serialize, Clone)]
 pub struct EditOutcome {
-    pub path: String,        // logical (LLM-facing) path
-    pub abs_path: String,    // absolute resolved path
+    pub path: String,     // logical (LLM-facing) path
+    pub abs_path: String, // absolute resolved path
     pub before: String,
     pub after: String,
     pub unified_diff: String, // human/diff-viewer friendly
@@ -39,10 +39,14 @@ pub enum AllowedPath {
     ConfigToml,
     /// `personas/<slug>.md` — `slug` is the validated bare slug, without the
     /// `.md` suffix.
-    Persona { slug: String },
+    Persona {
+        slug: String,
+    },
     /// `heartbeats/<name>.toml` — `name` is the validated bare slug, without the
     /// `.toml` suffix.
-    HeartbeatSpec { name: String },
+    HeartbeatSpec {
+        name: String,
+    },
 }
 
 /// Pure allow-list validator. Returns the canonical logical name on success
@@ -745,8 +749,9 @@ mod tests {
             "heartbeats/daily-review.toml",
             "",
             "invalid = toml [ [",
-            false
-        ).unwrap_err();
+            false,
+        )
+        .unwrap_err();
 
         assert!(err.contains("compile check failed"), "got: {err}");
         assert!(err.contains("parsing TOML") || err.contains("Error parsing TOML"));
@@ -760,8 +765,14 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
 
-        let err = edit_at_abs_path(&path, "config.toml", "", "this is = not valid = toml [[", false)
-            .unwrap_err();
+        let err = edit_at_abs_path(
+            &path,
+            "config.toml",
+            "",
+            "this is = not valid = toml [[",
+            false,
+        )
+        .unwrap_err();
 
         assert!(err.contains("compile check failed"), "got: {err}");
         // Failing the compile check must not persist anything.
@@ -775,8 +786,8 @@ mod tests {
 
         // Valid TOML, but `enable_tools` must be a bool — the AppConfig compile
         // check catches this where a plain TOML syntax check would not.
-        let err = edit_at_abs_path(&path, "config.toml", "", "enable_tools = 123\n", false)
-            .unwrap_err();
+        let err =
+            edit_at_abs_path(&path, "config.toml", "", "enable_tools = 123\n", false).unwrap_err();
 
         assert!(err.contains("compile check failed"), "got: {err}");
         assert!(!path.exists());
@@ -798,7 +809,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.replacements, 1);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "enable_tools = false\n");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "enable_tools = false\n"
+        );
     }
 
     // Persona compile-check tests — edits that smuggle in prompt-injection or

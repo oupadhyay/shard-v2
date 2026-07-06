@@ -2,17 +2,24 @@ use crate::sessions::{parse_llm_response, sanitize_slug};
 
 #[test]
 fn test_sanitize_slug() {
-    assert_eq!(sanitize_slug("  API Design Discussion! "), "api-design-discussion");
+    assert_eq!(
+        sanitize_slug("  API Design Discussion! "),
+        "api-design-discussion"
+    );
     assert_eq!(sanitize_slug("rust-tauri-sqlite"), "rust-tauri-sqlite");
     assert_eq!(sanitize_slug("  just a slug..."), "just-a-slug");
 }
 
 #[test]
 fn test_parse_llm_response() {
-    let response = "SLUG: ui-redesign-chat\nSUMMARY: Discussed the new dark mode theme.\nAnd also buttons.";
+    let response =
+        "SLUG: ui-redesign-chat\nSUMMARY: Discussed the new dark mode theme.\nAnd also buttons.";
     let (slug, summary) = parse_llm_response(response);
     assert_eq!(slug, "ui-redesign-chat");
-    assert_eq!(summary, "Discussed the new dark mode theme. And also buttons.");
+    assert_eq!(
+        summary,
+        "Discussed the new dark mode theme. And also buttons."
+    );
 
     // Edge case: missing everything
     let response_bad = "I'm not sure what you want.";

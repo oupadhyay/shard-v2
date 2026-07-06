@@ -84,13 +84,7 @@ fn failed_sketch_skipped() {
 fn pending_children_block_decision() {
     let (store, _g) = open();
     // Default plan() leaves children pending.
-    let ids = plan(
-        &store,
-        "Half done",
-        &["a", "b", "c", "d", "e", "f"],
-        None,
-    )
-    .unwrap();
+    let ids = plan(&store, "Half done", &["a", "b", "c", "d", "e", "f"], None).unwrap();
     let parent = crate::actions::get(&store, &ids[0]).unwrap().unwrap();
     let kids = sketch_children(&store, &ids[0]).unwrap();
     match should_crystallize_sketch(&parent, &kids) {
@@ -153,9 +147,18 @@ fn slug_collision_truncates_to_fit_regex() {
 
 #[test]
 fn slugify_handles_punctuation_and_case() {
-    assert_eq!(slugify("Multi-File Refactor!").as_deref(), Some("multi-file-refactor"));
-    assert_eq!(slugify("Rename `analyst` everywhere").as_deref(), Some("rename-analyst-everywhere"));
-    assert_eq!(slugify("   trim   spaces   ").as_deref(), Some("trim-spaces"));
+    assert_eq!(
+        slugify("Multi-File Refactor!").as_deref(),
+        Some("multi-file-refactor")
+    );
+    assert_eq!(
+        slugify("Rename `analyst` everywhere").as_deref(),
+        Some("rename-analyst-everywhere")
+    );
+    assert_eq!(
+        slugify("   trim   spaces   ").as_deref(),
+        Some("trim-spaces")
+    );
     // All-symbol input → None (no usable chars).
     assert_eq!(slugify("💎💎💎"), None);
     // Leading digits stripped so the slug regex still matches.
@@ -166,7 +169,10 @@ fn slugify_handles_punctuation_and_case() {
 #[test]
 fn strip_markdown_fences_unwraps_common_shapes() {
     assert_eq!(strip_markdown_fences("plain\n"), "plain");
-    assert_eq!(strip_markdown_fences("```markdown\n---\nfoo\n---\n```"), "---\nfoo\n---");
+    assert_eq!(
+        strip_markdown_fences("```markdown\n---\nfoo\n---\n```"),
+        "---\nfoo\n---"
+    );
     assert_eq!(strip_markdown_fences("```\nhello\n```"), "hello");
 }
 
@@ -280,7 +286,8 @@ fn parse_meta_inline(content: &str) -> InlineMeta {
             for line in fm.lines() {
                 let t = line.trim();
                 if let Some(v) = t.strip_prefix("description:") {
-                    description = Some(v.trim().trim_matches(|c| c == '"' || c == '\'').to_string());
+                    description =
+                        Some(v.trim().trim_matches(|c| c == '"' || c == '\'').to_string());
                     in_rt = false;
                 } else if let Some(v) = t.strip_prefix("category:") {
                     category = Some(v.trim().trim_matches(|c| c == '"' || c == '\'').to_string());
@@ -289,7 +296,10 @@ fn parse_meta_inline(content: &str) -> InlineMeta {
                     in_rt = true;
                 } else if in_rt {
                     if let Some(item) = t.strip_prefix('-') {
-                        let v = item.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
+                        let v = item
+                            .trim()
+                            .trim_matches(|c| c == '"' || c == '\'')
+                            .to_string();
                         if !v.is_empty() {
                             required_tools.push(v);
                         }
@@ -388,7 +398,10 @@ async fn load_sketch_round_trip() {
 
 /// Sanity check that `crystallize`'s signature accepts what `load_sketch`
 /// returns — caught a refactor regression early in development.
-fn crystallize_uses_loaded_data(parent: &crate::actions::Action, kids: &[crate::actions::Action]) -> bool {
+fn crystallize_uses_loaded_data(
+    parent: &crate::actions::Action,
+    kids: &[crate::actions::Action],
+) -> bool {
     // We don't actually invoke the LLM — just exercise the synchronous
     // setup that runs before `call_background_llm`.
     let base = slugify(&parent.title).unwrap();

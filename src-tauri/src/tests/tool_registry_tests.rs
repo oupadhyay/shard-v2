@@ -212,6 +212,9 @@ mod tests {
         let params = &entry.schema.function.parameters;
         assert_eq!(params["type"], "object");
         assert!(params["properties"].get("query").is_some());
-        assert!(params["required"].as_array().unwrap().contains(&serde_json::json!("query")));
+        assert!(params["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("query")));
     }
 }

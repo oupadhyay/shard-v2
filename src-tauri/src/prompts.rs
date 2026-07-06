@@ -67,7 +67,13 @@ Active Workspace Personas:
 {}
 
 "#,
-        date, peer_card_section, peer_representation_section, memories_section, rag_section, available_skills_section, active_skills_section
+        date,
+        peer_card_section,
+        peer_representation_section,
+        memories_section,
+        rag_section,
+        available_skills_section,
+        active_skills_section
     )
 }
 

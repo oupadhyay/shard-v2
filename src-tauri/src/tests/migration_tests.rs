@@ -39,10 +39,7 @@ fn test_sessions_table_has_active_skills() {
     let (store, _dir) = open_test_store();
 
     let mut found = false;
-    let mut stmt = store
-        .conn
-        .prepare("PRAGMA table_info(sessions)")
-        .unwrap();
+    let mut stmt = store.conn.prepare("PRAGMA table_info(sessions)").unwrap();
     let rows = stmt
         .query_map([], |row| {
             let name: String = row.get(1)?;

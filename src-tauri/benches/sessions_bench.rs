@@ -1,16 +1,20 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use shard_lib::sessions::{format_transcript, parse_llm_response, sanitize_slug};
 use shard_lib::agent::ChatMessage;
+use shard_lib::sessions::{format_transcript, parse_llm_response, sanitize_slug};
 
 fn bench_sanitize_slug(c: &mut Criterion) {
     let mut group = c.benchmark_group("sessions_sanitize_slug");
     group.noise_threshold(0.15); // Adjust noise threshold for nanosecond string operations
 
     let text_clean = "simple slug without symbols";
-    group.bench_function("clean_text", |b| b.iter(|| sanitize_slug(black_box(text_clean))));
+    group.bench_function("clean_text", |b| {
+        b.iter(|| sanitize_slug(black_box(text_clean)))
+    });
 
     let text_dirty = "A Very, VERY!! Dirty ~Slug~ With @Symbols & Stuff 123";
-    group.bench_function("dirty_text", |b| b.iter(|| sanitize_slug(black_box(text_dirty))));
+    group.bench_function("dirty_text", |b| {
+        b.iter(|| sanitize_slug(black_box(text_dirty)))
+    });
 
     group.finish();
 }
@@ -48,7 +52,10 @@ fn bench_format_transcript(c: &mut Criterion) {
         },
         ChatMessage {
             role: "model".to_string(),
-            content: Some("Sure! Let's talk about Criterion and how to structure your benchmark loops.".to_string()),
+            content: Some(
+                "Sure! Let's talk about Criterion and how to structure your benchmark loops."
+                    .to_string(),
+            ),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
@@ -66,10 +73,17 @@ fn bench_format_transcript(c: &mut Criterion) {
         },
     ];
 
-    group.bench_function("short_conversation", |b| b.iter(|| format_transcript(black_box(&history))));
+    group.bench_function("short_conversation", |b| {
+        b.iter(|| format_transcript(black_box(&history)))
+    });
 
     group.finish();
 }
 
-criterion_group!(benches, bench_sanitize_slug, bench_parse_llm_response, bench_format_transcript);
+criterion_group!(
+    benches,
+    bench_sanitize_slug,
+    bench_parse_llm_response,
+    bench_format_transcript
+);
 criterion_main!(benches);

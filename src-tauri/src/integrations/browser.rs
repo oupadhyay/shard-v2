@@ -1,7 +1,7 @@
-use reqwest::{header, Client};
-use reqwest::Url;
-use std::time::Duration;
 use log;
+use reqwest::Url;
+use reqwest::{header, Client};
+use std::time::Duration;
 
 /// Fetch a URL, simulate a real browser to avoid 403s, and use Jina Reader API to extract
 /// clean Markdown, which natively handles headless JS rendering for dynamic sites.
@@ -53,7 +53,11 @@ mod tests {
     async fn test_read_url_wikipedia() {
         let client = Client::new();
         let result = read_url(&client, "https://en.wikipedia.org/wiki/Tauri").await;
-        assert!(result.is_ok(), "Failed to read Wikipedia: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to read Wikipedia: {:?}",
+            result.err()
+        );
         let md = result.unwrap();
         assert!(md.contains("Tauri"));
     }

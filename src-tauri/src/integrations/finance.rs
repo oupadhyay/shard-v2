@@ -41,12 +41,15 @@ pub async fn perform_finance_lookup(ticker: &str) -> Result<String, String> {
         0.0
     };
 
-    let history: Vec<serde_json::Value> = quotes.iter().map(|q| {
-        serde_json::json!({
-            "timestamp": q.timestamp,
-            "close": q.close
+    let history: Vec<serde_json::Value> = quotes
+        .iter()
+        .map(|q| {
+            serde_json::json!({
+                "timestamp": q.timestamp,
+                "close": q.close
+            })
         })
-    }).collect();
+        .collect();
 
     let result_json = serde_json::json!({
         "symbol": ticker.to_uppercase(),

@@ -37,7 +37,11 @@ fn bench_session_transcript_formatting(c: &mut Criterion) {
     let mut history = Vec::new();
     for i in 0..100 {
         history.push(ChatMessage {
-            role: if i % 2 == 0 { "user".to_string() } else { "model".to_string() },
+            role: if i % 2 == 0 {
+                "user".to_string()
+            } else {
+                "model".to_string()
+            },
             content: Some(format!("Message content with some normal text {}", i)),
             reasoning: None,
             tool_calls: None,
@@ -58,5 +62,9 @@ fn bench_session_transcript_formatting(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_history_serialization, bench_session_transcript_formatting);
+criterion_group!(
+    benches,
+    bench_history_serialization,
+    bench_session_transcript_formatting
+);
 criterion_main!(benches);

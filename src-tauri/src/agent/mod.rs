@@ -44,9 +44,9 @@ pub use types::*;
 // Phase 6 refactor — re-export the pure helpers so existing callers and
 // tests reach them under the same `crate::agent::xxx` paths they used
 // before the split.
-pub(crate) use schema::normalize_gemini_schema;
 #[cfg(test)]
 pub(crate) use hash::calculate_history_hash;
+pub(crate) use schema::normalize_gemini_schema;
 #[cfg(test)]
 pub(crate) use youtube_summary::split_transcript_chunks;
 

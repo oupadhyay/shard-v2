@@ -173,10 +173,9 @@ impl<R: tauri::Runtime> Agent<R> {
             "web_search" => {
                 let query = args["query"].as_str().unwrap_or_default();
                 match perform_web_search(query, config.brave_api_key.as_deref()).await {
-                    Ok(results) => {
-                        serde_json::to_string(&results)
-                            .unwrap_or_else(|_| "Failed to serialize search results to JSON".to_string())
-                    }
+                    Ok(results) => serde_json::to_string(&results).unwrap_or_else(|_| {
+                        "Failed to serialize search results to JSON".to_string()
+                    }),
                     Err(e) => format!("Error: {}", e),
                 }
             }
@@ -193,9 +192,16 @@ impl<R: tauri::Runtime> Agent<R> {
                 let video = args["video"].as_str().unwrap_or_default();
                 let video_id = match crate::integrations::youtube::extract_video_id(video) {
                     Some(id) => id,
-                    None => return format!("Error: Could not extract a YouTube video ID from '{}'", video),
+                    None => {
+                        return format!(
+                            "Error: Could not extract a YouTube video ID from '{}'",
+                            video
+                        )
+                    }
                 };
-                match crate::integrations::youtube::fetch_transcript(&self.http_client, &video_id).await {
+                match crate::integrations::youtube::fetch_transcript(&self.http_client, &video_id)
+                    .await
+                {
                     Ok(result) => {
                         let formatted = crate::integrations::youtube::format_transcript(
                             &result.segments,
@@ -216,7 +222,9 @@ impl<R: tauri::Runtime> Agent<R> {
                                 .unwrap_or(formatted.len());
 
                             // Summarize the full transcript via background LLM (chunked for long transcripts)
-                            let summary = self.summarize_long_transcript(config, &formatted, title_label).await;
+                            let summary = self
+                                .summarize_long_transcript(config, &formatted, title_label)
+                                .await;
 
                             let summary_section = match &summary {
                                 Ok(s) => format!(
@@ -467,11 +475,18 @@ impl<R: tauri::Runtime> Agent<R> {
                 if let Some(_content) = crate::personas::resolve_persona_content(name) {
                     let session_id = self.session_id.lock().await.clone();
                     if let Ok(store) = crate::memories::get_vector_store(app_handle) {
-                        if let Ok(mut active_personas) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                        if let Ok(mut active_personas) =
+                            crate::db::sessions::get_active_skills(&store, &session_id)
+                        {
                             if !active_personas.contains(&name.to_string()) {
                                 active_personas.push(name.to_string());
-                                let skills_json = serde_json::to_string(&active_personas).unwrap_or_else(|_| "[]".to_string());
-                                let _ = crate::db::sessions::update_active_skills(&store, &session_id, &skills_json);
+                                let skills_json = serde_json::to_string(&active_personas)
+                                    .unwrap_or_else(|_| "[]".to_string());
+                                let _ = crate::db::sessions::update_active_skills(
+                                    &store,
+                                    &session_id,
+                                    &skills_json,
+                                );
                                 format!("Successfully loaded persona '{}'. The instructions will be active for the rest of this session.", name)
                             } else {
                                 format!("Persona '{}' is already active.", name)
@@ -483,18 +498,28 @@ impl<R: tauri::Runtime> Agent<R> {
                         "Failed to access database.".to_string()
                     }
                 } else {
-                    format!("Persona '{}' not found. Use `list_personas` to see what is available.", name)
+                    format!(
+                        "Persona '{}' not found. Use `list_personas` to see what is available.",
+                        name
+                    )
                 }
             }
             "unload_persona" => {
                 let name = args["name"].as_str().unwrap_or_default();
                 let session_id = self.session_id.lock().await.clone();
                 if let Ok(store) = crate::memories::get_vector_store(app_handle) {
-                    if let Ok(mut active_personas) = crate::db::sessions::get_active_skills(&store, &session_id) {
+                    if let Ok(mut active_personas) =
+                        crate::db::sessions::get_active_skills(&store, &session_id)
+                    {
                         if active_personas.contains(&name.to_string()) {
                             active_personas.retain(|s| s != name);
-                            let skills_json = serde_json::to_string(&active_personas).unwrap_or_else(|_| "[]".to_string());
-                            let _ = crate::db::sessions::update_active_skills(&store, &session_id, &skills_json);
+                            let skills_json = serde_json::to_string(&active_personas)
+                                .unwrap_or_else(|_| "[]".to_string());
+                            let _ = crate::db::sessions::update_active_skills(
+                                &store,
+                                &session_id,
+                                &skills_json,
+                            );
                             format!("Successfully unloaded persona '{}'.", name)
                         } else {
                             format!("Persona '{}' is not currently active.", name)
@@ -512,10 +537,7 @@ impl<R: tauri::Runtime> Agent<R> {
                     return "Error: No code provided.".to_string();
                 }
 
-                let resource_dir = app_handle
-                    .path()
-                    .resource_dir()
-                    .unwrap_or_default();
+                let resource_dir = app_handle.path().resource_dir().unwrap_or_default();
 
                 match crate::sandbox::execute_python(code, resource_dir, 30).await {
                     Ok(result) => {
@@ -562,7 +584,8 @@ impl<R: tauri::Runtime> Agent<R> {
                 let context = args["context"].as_str().unwrap_or_default().to_string();
 
                 if duration_minutes == 0 || duration_minutes > 1440 {
-                    return "Error: duration_minutes must be between 1 and 1440 (24 hours).".to_string();
+                    return "Error: duration_minutes must be between 1 and 1440 (24 hours)."
+                        .to_string();
                 }
 
                 if context.trim().is_empty() {
@@ -576,7 +599,10 @@ impl<R: tauri::Runtime> Agent<R> {
 
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(duration).await;
-                    log::info!("[WakeMeUp] Timer fired after {} min for alarm session", duration_minutes);
+                    log::info!(
+                        "[WakeMeUp] Timer fired after {} min for alarm session",
+                        duration_minutes
+                    );
 
                     let spec = crate::heartbeat::HeartbeatSpec {
                         schedule: String::new(), // One-shot, not cron-scheduled
@@ -623,7 +649,11 @@ impl<R: tauri::Runtime> Agent<R> {
                 let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
                 match crate::self_files::edit_allowed_file(
-                    app_handle, path, old_str, new_str, replace_all,
+                    app_handle,
+                    path,
+                    old_str,
+                    new_str,
+                    replace_all,
                 ) {
                     Ok(outcome) => {
                         log::info!(
@@ -697,14 +727,12 @@ impl<R: tauri::Runtime> Agent<R> {
                     };
                     let session_id = self.session_id.lock().await.clone();
                     match crate::actions::plan(&store, title, &steps, Some(&session_id)) {
-                        Ok(ids) => {
-                            serde_json::json!({
-                                "sketch_id": ids[0],
-                                "step_ids": &ids[1..],
-                                "count": steps.len(),
-                            })
-                            .to_string()
-                        }
+                        Ok(ids) => serde_json::json!({
+                            "sketch_id": ids[0],
+                            "step_ids": &ids[1..],
+                            "count": steps.len(),
+                        })
+                        .to_string(),
                         Err(e) => format!("Error: {}", e),
                     }
                 }
@@ -788,18 +816,17 @@ impl<R: tauri::Runtime> Agent<R> {
                             )
                             .await
                             {
-                                Ok(draft) => match crate::crystals::write_persona_draft(
-                                    app_handle, &draft,
-                                ) {
-                                    Ok(outcome) => {
-                                        if let Ok(store) =
-                                            crate::memories::get_vector_store(app_handle)
-                                        {
-                                            let _ = crate::crystals::mark_crystallized(
-                                                &store, sketch_id,
-                                            );
-                                        }
-                                        format!(
+                                Ok(draft) => {
+                                    match crate::crystals::write_persona_draft(app_handle, &draft) {
+                                        Ok(outcome) => {
+                                            if let Ok(store) =
+                                                crate::memories::get_vector_store(app_handle)
+                                            {
+                                                let _ = crate::crystals::mark_crystallized(
+                                                    &store, sketch_id,
+                                                );
+                                            }
+                                            format!(
                                             "Crystallised sketch `{}` into persona `{}` ({} bytes written to {}).\n\n```diff\n{}\n```",
                                             sketch_id,
                                             draft.slug,
@@ -807,9 +834,10 @@ impl<R: tauri::Runtime> Agent<R> {
                                             outcome.abs_path,
                                             outcome.unified_diff
                                         )
+                                        }
+                                        Err(e) => format!("Error writing persona draft: {}", e),
                                     }
-                                    Err(e) => format!("Error writing persona draft: {}", e),
-                                },
+                                }
                                 Err(e) => format!("Error: {}", e),
                             }
                         }

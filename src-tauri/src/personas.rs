@@ -151,7 +151,11 @@ pub fn list_available_personas_v2() -> Vec<String> {
 }
 
 /// Recursively scan for flat `.md` files and `SKILL.md` directory-based personas.
-fn collect_personas_recursive(base: &std::path::Path, current: &std::path::Path, out: &mut Vec<String>) {
+fn collect_personas_recursive(
+    base: &std::path::Path,
+    current: &std::path::Path,
+    out: &mut Vec<String>,
+) {
     let entries = match fs::read_dir(current) {
         Ok(e) => e,
         Err(_) => return,
@@ -271,8 +275,7 @@ fn parse_frontmatter_fields(content: &str) -> (Option<String>, Vec<String>, Opti
 /// Extract metadata from a persona's YAML frontmatter without loading full content.
 /// Parses: `description`, `required_tools`, `category` from the YAML block.
 pub fn get_persona_metadata(name: &str) -> Option<PersonaMetadata> {
-    let content = resolve_persona_content(name)
-        .or_else(|| get_persona_content(name))?;
+    let content = resolve_persona_content(name).or_else(|| get_persona_content(name))?;
 
     let (description, required_tools, category) = parse_frontmatter_fields(&content);
 
@@ -299,7 +302,10 @@ pub fn scan_persona_content(content: &str) -> Vec<String> {
 
     // Check for invisible Unicode characters (zero-width spaces, etc.)
     for (i, c) in content.char_indices() {
-        if matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{2060}' | '\u{00AD}') {
+        if matches!(
+            c,
+            '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{2060}' | '\u{00AD}'
+        ) {
             warnings.push(format!(
                 "Invisible Unicode character U+{:04X} at byte offset {}",
                 c as u32, i

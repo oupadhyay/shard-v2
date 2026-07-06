@@ -113,9 +113,7 @@ fn save_all_keys(keys: &ApiKeysStore) -> Result<(), String> {
 ///
 /// Use this in batch operations (like migration or save_config) to avoid
 /// multiple OS-level password prompts.
-pub fn store_secrets_batch(
-    updates: HashMap<ApiKeyType, Option<String>>,
-) -> Result<(), String> {
+pub fn store_secrets_batch(updates: HashMap<ApiKeyType, Option<String>>) -> Result<(), String> {
     let mut keys = load_all_keys()?;
     let mut changed = false;
 

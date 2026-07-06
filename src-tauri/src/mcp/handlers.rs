@@ -43,8 +43,7 @@ pub fn open_store() -> Result<Arc<VectorStore>, String> {
     let path = shard_db_path()?;
     if let Some(parent) = path.parent() {
         if !parent.exists() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create memories dir: {}", e))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("create memories dir: {}", e))?;
         }
     }
     let store = VectorStore::open(&path)
@@ -128,8 +127,8 @@ pub fn handle_save_memory(args: &Value) -> Result<String, String> {
 
     let path = shard_data_dir()?.join("MEMORIES.json");
     let mut existing: Value = if path.exists() {
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|e| format!("read MEMORIES.json: {}", e))?;
+        let raw =
+            std::fs::read_to_string(&path).map_err(|e| format!("read MEMORIES.json: {}", e))?;
         serde_json::from_str(&raw).unwrap_or_else(|_| json!({ "entries": [] }))
     } else {
         json!({ "entries": [] })
@@ -144,10 +143,7 @@ pub fn handle_save_memory(args: &Value) -> Result<String, String> {
         "source": "mcp",
     });
 
-    if let Some(arr) = existing
-        .get_mut("entries")
-        .and_then(|v| v.as_array_mut())
-    {
+    if let Some(arr) = existing.get_mut("entries").and_then(|v| v.as_array_mut()) {
         arr.push(entry.clone());
     } else {
         existing = json!({ "entries": [entry.clone()] });
@@ -157,8 +153,7 @@ pub fn handle_save_memory(args: &Value) -> Result<String, String> {
         .map_err(|e| format!("serialize MEMORIES.json: {}", e))?;
     if let Some(parent) = path.parent() {
         if !parent.exists() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create data dir: {}", e))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("create data dir: {}", e))?;
         }
     }
     std::fs::write(&path, serialized).map_err(|e| format!("write MEMORIES.json: {}", e))?;

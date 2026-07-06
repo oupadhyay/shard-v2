@@ -58,7 +58,11 @@ fn edit_event_logs_diff_and_hashes() {
     assert!(ev.before_hash.is_some());
     assert!(ev.after_hash.is_some());
     assert_ne!(ev.before_hash, ev.after_hash);
-    assert!(ev.unified_diff.as_deref().unwrap().contains("+selected_model"));
+    assert!(ev
+        .unified_diff
+        .as_deref()
+        .unwrap()
+        .contains("+selected_model"));
 }
 
 #[test]

@@ -63,16 +63,8 @@ fn bench_pending_sketch_summary(c: &mut Criterion) {
     // root sketches active simultaneously. 50 roots × 5 children = 250 rows.
     let (store, _dir) = open_store();
     for i in 0..50 {
-        let parent = insert_action(
-            &store,
-            None,
-            &format!("sketch-{}", i),
-            &[],
-            0,
-            None,
-            None,
-        )
-        .unwrap();
+        let parent =
+            insert_action(&store, None, &format!("sketch-{}", i), &[], 0, None, None).unwrap();
         let mut prev: Option<String> = None;
         for level in 0..5 {
             let deps = prev.as_ref().map(|p| vec![p.clone()]).unwrap_or_default();

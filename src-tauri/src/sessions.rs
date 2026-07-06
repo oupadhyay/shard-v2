@@ -88,17 +88,21 @@ pub async fn archive_session_transcript<R: Runtime>(
         let now = chrono::Utc::now().to_rfc3339();
 
         // Try to preserve original created_at and active_personas if modifying an existing session
-        let existing = store.conn.query_row(
-            "SELECT created_at, active_skills FROM sessions WHERE id = ?1",
-            rusqlite::params![session_id],
-            |row| Ok((row.get::<_, String>(0).ok(), row.get::<_, String>(1).ok())),
-        ).or_else(|_| {
-            store.conn.query_row(
-                "SELECT created_at FROM sessions WHERE id = ?1",
+        let existing = store
+            .conn
+            .query_row(
+                "SELECT created_at, active_skills FROM sessions WHERE id = ?1",
                 rusqlite::params![session_id],
-                |row| Ok((row.get::<_, String>(0).ok(), None)),
+                |row| Ok((row.get::<_, String>(0).ok(), row.get::<_, String>(1).ok())),
             )
-        }).unwrap_or((None, None));
+            .or_else(|_| {
+                store.conn.query_row(
+                    "SELECT created_at FROM sessions WHERE id = ?1",
+                    rusqlite::params![session_id],
+                    |row| Ok((row.get::<_, String>(0).ok(), None)),
+                )
+            })
+            .unwrap_or((None, None));
 
         let session_row = crate::db::sessions::SessionRow {
             id: session_id.to_string(),
@@ -112,7 +116,11 @@ pub async fn archive_session_transcript<R: Runtime>(
         if let Err(e) = crate::db::sessions::insert_session(&store, &session_row) {
             log::warn!("[Sessions] Failed to update session metadata: {}", e);
         } else {
-            log::info!("[Sessions] Saved session metadata to SQLite DB (Title: {}, Summary: {})", safe_slug, summary);
+            log::info!(
+                "[Sessions] Saved session metadata to SQLite DB (Title: {}, Summary: {})",
+                safe_slug,
+                summary
+            );
             // Notify frontend that sessions have been updated so it can refresh the sidebar/modal
             app_handle.emit("sessions-updated", ()).ok();
         }

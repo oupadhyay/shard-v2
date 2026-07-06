@@ -12,8 +12,8 @@ use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 
 use shard_lib::actions::{complete, plan, sketch_children};
 use shard_lib::crystals::{
-    build_prompt, find_completed_sketches, pick_unique_slug, should_crystallize_sketch,
-    slugify, stamp_source_sketch_id, strip_markdown_fences,
+    build_prompt, find_completed_sketches, pick_unique_slug, should_crystallize_sketch, slugify,
+    stamp_source_sketch_id, strip_markdown_fences,
 };
 use shard_lib::vector_store::VectorStore;
 
@@ -88,8 +88,7 @@ fn bench_full_pipeline_ex_llm(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let dir = tempfile::tempdir().unwrap();
-                let store =
-                    VectorStore::open(&dir.path().join("pipeline.sqlite")).unwrap();
+                let store = VectorStore::open(&dir.path().join("pipeline.sqlite")).unwrap();
                 let ids = seed_sketch(&store, "Demo full sketch", 20);
                 (dir, store, ids[0].clone())
             },

@@ -25,7 +25,11 @@ fn benchmark_search(c: &mut Criterion) {
     // Pre-generate data
     for i in 0..count {
         let embedding = generate_random_embedding(dim);
-        let source_type = if i % 2 == 0 { SourceType::Topic } else { SourceType::Session };
+        let source_type = if i % 2 == 0 {
+            SourceType::Topic
+        } else {
+            SourceType::Session
+        };
         chunks.push(Chunk {
             id: format!("bench::vector::{}", i),
             source_type, // Mixed Topic and Session memory chunks

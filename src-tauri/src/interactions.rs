@@ -45,12 +45,8 @@ struct EmbeddingContent {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 enum EmbeddingPart {
-    Text {
-        text: String,
-    },
-    InlineData {
-        inline_data: InlineData,
-    },
+    Text { text: String },
+    InlineData { inline_data: InlineData },
 }
 
 #[derive(Serialize, Deserialize, Debug)]

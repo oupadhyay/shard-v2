@@ -94,16 +94,7 @@ pub fn insert_action(
              (id, parent_id, title, status, priority, deps, payload, session_id, \
               created_at, updated_at, block_reason, outcome) \
              VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8, ?8, NULL, NULL)",
-            params![
-                id,
-                parent_id,
-                title,
-                priority,
-                deps_json,
-                payload,
-                session_id,
-                now
-            ],
+            params![id, parent_id, title, priority, deps_json, payload, session_id, now],
         )
         .map_err(|e| format!("insert_action failed: {}", e))?;
     Ok(id)

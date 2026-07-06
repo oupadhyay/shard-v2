@@ -63,7 +63,11 @@ pub fn get_active_skills(store: &VectorStore, session_id: &str) -> Result<Vec<St
 }
 
 /// Update active personas for a session (expects a JSON array string)
-pub fn update_active_skills(store: &VectorStore, session_id: &str, skills_json: &str) -> Result<(), String> {
+pub fn update_active_skills(
+    store: &VectorStore,
+    session_id: &str,
+    skills_json: &str,
+) -> Result<(), String> {
     store
         .conn
         .execute(
@@ -109,19 +113,26 @@ pub fn search_sessions_by_time(
             let start = now - chrono::Duration::days(1);
             let end = now;
             conditions.push("s.updated_at >= ? AND s.updated_at < ?".to_string());
-            params.push(rusqlite::types::Value::Text(start.format("%Y-%m-%d").to_string()));
-            params.push(rusqlite::types::Value::Text(end.format("%Y-%m-%d").to_string()));
+            params.push(rusqlite::types::Value::Text(
+                start.format("%Y-%m-%d").to_string(),
+            ));
+            params.push(rusqlite::types::Value::Text(
+                end.format("%Y-%m-%d").to_string(),
+            ));
         }
         "last_week" => {
             let start = now - chrono::Duration::days(7);
             conditions.push("s.updated_at >= ?".to_string());
-            params.push(rusqlite::types::Value::Text(start.format("%Y-%m-%d").to_string()));
+            params.push(rusqlite::types::Value::Text(
+                start.format("%Y-%m-%d").to_string(),
+            ));
         }
         "last_conversation" => {
             // order by handled by main query
         }
         specific_date => {
-            if specific_date.len() == 10 && specific_date.chars().filter(|c| *c == '-').count() == 2 {
+            if specific_date.len() == 10 && specific_date.chars().filter(|c| *c == '-').count() == 2
+            {
                 conditions.push("s.updated_at LIKE ?".to_string());
                 params.push(rusqlite::types::Value::Text(format!("{}%", specific_date)));
             }
@@ -203,9 +214,21 @@ pub fn parse_legacy_markdown_transcript(content: &str) -> Vec<ChatMessage> {
             if !current_role.is_empty() {
                 messages.push(ChatMessage {
                     role: current_role.clone(),
-                    content: if current_text.trim().is_empty() { None } else { Some(current_text.trim().to_string()) },
-                    reasoning: if current_reasoning.trim().is_empty() { None } else { Some(current_reasoning.trim().to_string()) },
-                    tool_calls: if current_tool_calls.is_empty() { None } else { Some(current_tool_calls.clone()) },
+                    content: if current_text.trim().is_empty() {
+                        None
+                    } else {
+                        Some(current_text.trim().to_string())
+                    },
+                    reasoning: if current_reasoning.trim().is_empty() {
+                        None
+                    } else {
+                        Some(current_reasoning.trim().to_string())
+                    },
+                    tool_calls: if current_tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(current_tool_calls.clone())
+                    },
                     tool_call_id: None,
                     is_cron: None,
                     images: None,
@@ -222,7 +245,9 @@ pub fn parse_legacy_markdown_transcript(content: &str) -> Vec<ChatMessage> {
             } else {
                 current_role = "tool".to_string();
             }
-        } else if line.starts_with("<details class=\"thinking-accordion\">") || line.starts_with("<details><summary>Thought Process") {
+        } else if line.starts_with("<details class=\"thinking-accordion\">")
+            || line.starts_with("<details><summary>Thought Process")
+        {
             in_thought_details = true;
         } else if line.starts_with("*Thought process:*") || line.starts_with("_Thought process:_") {
             in_thought_blockquote = true;
@@ -245,15 +270,18 @@ pub fn parse_legacy_markdown_transcript(content: &str) -> Vec<ChatMessage> {
                 },
                 thought_signature: Some("".to_string()),
             });
-        } else if line.starts_with("<details class=\"tool-accordion\">") || line.starts_with("<details><summary>🛠️ Tool Call: ") {
+        } else if line.starts_with("<details class=\"tool-accordion\">")
+            || line.starts_with("<details><summary>🛠️ Tool Call: ")
+        {
             in_tool_call = true;
             // Extract tool name if possible
             if let Some(idx) = line.find("🛠️ Tool Call: ") {
                 let start = idx + 15; // length of "🛠️ Tool Call: " is 16 chars visually, byte len is ~18. Wait, just split.
                 if let Some(end) = line[start..].find("</summary>") {
-                    current_tool_name = line[start..start+end].trim().to_string();
-                } else if let Some(end) = line[start..].find("`") { // fallback for `tool`
-                    current_tool_name = line[start..start+end].trim().to_string();
+                    current_tool_name = line[start..start + end].trim().to_string();
+                } else if let Some(end) = line[start..].find("`") {
+                    // fallback for `tool`
+                    current_tool_name = line[start..start + end].trim().to_string();
                 }
             } else {
                 current_tool_name = "unknown_tool".to_string();
@@ -268,7 +296,11 @@ pub fn parse_legacy_markdown_transcript(content: &str) -> Vec<ChatMessage> {
                     id: uuid::Uuid::new_v4().to_string(), // Fake ID
                     tool_type: "function".to_string(),
                     function: crate::agent::FunctionCall {
-                        name: if current_tool_name.is_empty() { "tool".to_string() } else { current_tool_name.clone() },
+                        name: if current_tool_name.is_empty() {
+                            "tool".to_string()
+                        } else {
+                            current_tool_name.clone()
+                        },
                         arguments: "{}".to_string(), // We don't have the explicit args cleanly, just the block text
                     },
                     thought_signature: Some("".to_string()),
@@ -309,12 +341,28 @@ pub fn parse_legacy_markdown_transcript(content: &str) -> Vec<ChatMessage> {
         }
     }
 
-    if !current_role.is_empty() && (!current_text.trim().is_empty() || !current_reasoning.is_empty() || !current_tool_calls.is_empty()) {
+    if !current_role.is_empty()
+        && (!current_text.trim().is_empty()
+            || !current_reasoning.is_empty()
+            || !current_tool_calls.is_empty())
+    {
         messages.push(ChatMessage {
             role: current_role,
-            content: if current_text.trim().is_empty() { None } else { Some(current_text.trim().to_string()) },
-            reasoning: if current_reasoning.trim().is_empty() { None } else { Some(current_reasoning.trim().to_string()) },
-            tool_calls: if current_tool_calls.is_empty() { None } else { Some(current_tool_calls) },
+            content: if current_text.trim().is_empty() {
+                None
+            } else {
+                Some(current_text.trim().to_string())
+            },
+            reasoning: if current_reasoning.trim().is_empty() {
+                None
+            } else {
+                Some(current_reasoning.trim().to_string())
+            },
+            tool_calls: if current_tool_calls.is_empty() {
+                None
+            } else {
+                Some(current_tool_calls)
+            },
             tool_call_id: None,
             is_cron: None,
             images: None,
@@ -325,7 +373,10 @@ pub fn parse_legacy_markdown_transcript(content: &str) -> Vec<ChatMessage> {
 }
 
 pub fn get_session_transcript(store: &VectorStore, session_id: &str) -> Result<String, String> {
-    let mut stmt = store.conn.prepare("SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at ASC").map_err(|e| e.to_string())?;
+    let mut stmt = store
+        .conn
+        .prepare("SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at ASC")
+        .map_err(|e| e.to_string())?;
     let mut rows = stmt.query([session_id]).map_err(|e| e.to_string())?;
 
     let mut transcript = String::new();
@@ -345,7 +396,10 @@ pub fn get_session_transcript(store: &VectorStore, session_id: &str) -> Result<S
     }
 
     if transcript.is_empty() {
-        return Err(format!("Session {} not found or has no messages.", session_id));
+        return Err(format!(
+            "Session {} not found or has no messages.",
+            session_id
+        ));
     }
 
     Ok(transcript.trim().to_string())
@@ -361,9 +415,15 @@ mod tests {
         let messages = parse_legacy_markdown_transcript(content);
         let msg = &messages[0];
         assert_eq!(msg.content.as_deref().unwrap(), "Hello.\n\nNormal text.");
-        assert_eq!(msg.reasoning.as_deref().unwrap(), "This is a test.\nSecond line.");
+        assert_eq!(
+            msg.reasoning.as_deref().unwrap(),
+            "This is a test.\nSecond line."
+        );
         assert_eq!(msg.tool_calls.as_ref().unwrap().len(), 1);
-        assert_eq!(msg.tool_calls.as_ref().unwrap()[0].function.name, "web_search");
+        assert_eq!(
+            msg.tool_calls.as_ref().unwrap()[0].function.name,
+            "web_search"
+        );
     }
 
     #[test]

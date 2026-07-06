@@ -13,11 +13,7 @@
 use super::Agent;
 
 impl<R: tauri::Runtime> Agent<R> {
-    pub(crate) async fn classify_intent(
-        &self,
-        query: &str,
-        api_key: &str,
-    ) -> Result<bool, String> {
+    pub(crate) async fn classify_intent(&self, query: &str, api_key: &str) -> Result<bool, String> {
         let url = crate::endpoints::gemini_classify();
 
         let payload = serde_json::json!({

@@ -136,11 +136,8 @@ impl<R: tauri::Runtime> Agent<R> {
             if let Some(key) = api_key {
                 for uri in uris_to_delete.iter() {
                     if let Some(file_name) = uri.rsplit('/').next() {
-                        let delete_url = format!(
-                            "{}/{}",
-                            crate::endpoints::gemini_files_base(),
-                            file_name
-                        );
+                        let delete_url =
+                            format!("{}/{}", crate::endpoints::gemini_files_base(), file_name);
                         let _ = self
                             .http_client
                             .delete(&delete_url)
@@ -305,5 +302,3 @@ impl<R: tauri::Runtime> Agent<R> {
         }
     }
 }
-
-

@@ -42,7 +42,10 @@ mod tests {
         let topic_pos = result.find("Topic: SHARD").unwrap();
 
         assert!(card_pos < rep_pos, "Card should come before representation");
-        assert!(rep_pos < int_pos, "Representation should come before interactions");
+        assert!(
+            rep_pos < int_pos,
+            "Representation should come before interactions"
+        );
         assert!(int_pos < topic_pos, "Interactions should come before topic");
     }
 

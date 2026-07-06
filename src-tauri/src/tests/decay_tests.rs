@@ -2,8 +2,8 @@
 
 use crate::observations::{
     count_observations, decay_score, decay_sweep, hard_delete_expired, insert_observation,
-    make_observation, recompute_decay, touch_observation, ObservationLevel,
-    DECAY_HALF_LIFE_DAYS, DEFAULT_EVICT_THRESHOLD,
+    make_observation, recompute_decay, touch_observation, ObservationLevel, DECAY_HALF_LIFE_DAYS,
+    DEFAULT_EVICT_THRESHOLD,
 };
 use crate::vector_store::VectorStore;
 use rusqlite::params;

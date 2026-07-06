@@ -16,8 +16,8 @@ use super::super::gemini::{
 };
 use super::super::schema::normalize_gemini_schema;
 use super::super::types::{
-    ChatMessage, FunctionCall, InteractionsGenerationConfig, InteractionsRequest,
-    InteractionsTool, ToolCall,
+    ChatMessage, FunctionCall, InteractionsGenerationConfig, InteractionsRequest, InteractionsTool,
+    ToolCall,
 };
 use super::super::{Agent, TurnContext};
 
@@ -54,18 +54,26 @@ impl<R: tauri::Runtime> Agent<R> {
         };
 
         let available_skills = crate::personas::list_available_personas();
-        let available_skills_str = if available_skills.is_empty() { None } else { Some(available_skills.join("\n")) };
+        let available_skills_str = if available_skills.is_empty() {
+            None
+        } else {
+            Some(available_skills.join("\n"))
+        };
         let available_skills_opt = available_skills_str.as_deref();
 
         let session_id = self.session_id.lock().await.clone();
         let mut active_skills_opt: Option<String> = None;
         if let Ok(store) = crate::memories::get_vector_store(app_handle) {
-            if let Ok(active_personas) = crate::db::sessions::get_active_skills(&store, &session_id) {
+            if let Ok(active_personas) = crate::db::sessions::get_active_skills(&store, &session_id)
+            {
                 if !active_personas.is_empty() {
                     let mut active_skills_content = String::new();
                     for persona in active_personas {
                         if let Some(content) = crate::personas::resolve_persona_content(&persona) {
-                            active_skills_content.push_str(&format!("--- PERSONA: {} ---\n{}\n\n", persona, content));
+                            active_skills_content.push_str(&format!(
+                                "--- PERSONA: {} ---\n{}\n\n",
+                                persona, content
+                            ));
                         }
                     }
                     if !active_skills_content.is_empty() {
@@ -76,9 +84,19 @@ impl<R: tauri::Runtime> Agent<R> {
         }
 
         let system_prompt_content = if incognito_mode {
-            crate::prompts::get_default_system_prompt(None, None, None, None, available_skills_opt, active_skills_opt.as_deref())
+            crate::prompts::get_default_system_prompt(
+                None,
+                None,
+                None,
+                None,
+                available_skills_opt,
+                active_skills_opt.as_deref(),
+            )
         } else if is_research_mode {
-            crate::prompts::get_research_system_prompt(available_skills_opt, active_skills_opt.as_deref())
+            crate::prompts::get_research_system_prompt(
+                available_skills_opt,
+                active_skills_opt.as_deref(),
+            )
         } else {
             config.system_prompt.clone().unwrap_or_else(|| {
                 crate::prompts::get_default_system_prompt(
@@ -103,7 +121,8 @@ impl<R: tauri::Runtime> Agent<R> {
         // Interactions API uses flat tool definitions: { type: "function", name, description, parameters }
         let interactions_tools: Option<Vec<InteractionsTool>> = if enable_tools {
             Some(
-                crate::tool_registry::global().get_definitions(&active_skills_list)
+                crate::tool_registry::global()
+                    .get_definitions(&active_skills_list)
                     .iter()
                     .map(|t| {
                         let mut params = t.function.parameters.clone();
@@ -146,7 +165,10 @@ impl<R: tauri::Runtime> Agent<R> {
         // DEBUG: Output the raw REST JSON to terminal so we can see what's being rejected
         if cfg!(debug_assertions) {
             if let Ok(json) = serde_json::to_string_pretty(&request_body) {
-                println!("--- GEMINI REQUEST PAYLOAD ---\n{}\n------------------------------", json);
+                println!(
+                    "--- GEMINI REQUEST PAYLOAD ---\n{}\n------------------------------",
+                    json
+                );
             }
         }
 
@@ -204,24 +226,22 @@ impl<R: tauri::Runtime> Agent<R> {
                 }
 
                 if let Some(event) = parse_interactions_sse_line(&line) {
-                    let events = process_interactions_event(
-                        &event,
-                        &mut full_text,
-                        &mut full_reasoning,
-                    );
+                    let events =
+                        process_interactions_event(&event, &mut full_text, &mut full_reasoning);
                     for agent_event in events {
                         match agent_event {
                             AgentEvent::ResponseChunk(text) => {
-                                app_handle
-                                    .emit("agent-response-chunk", text)
-                                    .ok();
+                                app_handle.emit("agent-response-chunk", text).ok();
                             }
                             AgentEvent::ReasoningChunk(text) => {
-                                app_handle
-                                    .emit("agent-reasoning-chunk", text)
-                                    .ok();
+                                app_handle.emit("agent-reasoning-chunk", text).ok();
                             }
-                            AgentEvent::InteractionToolCall { id, name, arguments, signature } => {
+                            AgentEvent::InteractionToolCall {
+                                id,
+                                name,
+                                arguments,
+                                signature,
+                            } => {
                                 if let Some(sig) = signature {
                                     // Try to attach signature to an existing tool call by id
                                     if let Some(entry) = tool_calls.iter_mut().find(|e| e.0 == id) {
@@ -235,7 +255,12 @@ impl<R: tauri::Runtime> Agent<R> {
                                         entry.1 = name.clone();
                                         entry.2 = arguments.clone();
                                     } else {
-                                        tool_calls.push((id.clone(), name.clone(), arguments.clone(), current_signature.take()));
+                                        tool_calls.push((
+                                            id.clone(),
+                                            name.clone(),
+                                            arguments.clone(),
+                                            current_signature.take(),
+                                        ));
                                     }
                                     let tool_call_event = serde_json::json!({
                                         "name": name,
@@ -287,8 +312,7 @@ impl<R: tauri::Runtime> Agent<R> {
                             tool_type: "function".to_string(),
                             function: FunctionCall {
                                 name: name.clone(),
-                                arguments: serde_json::to_string(args)
-                                    .unwrap_or_default(),
+                                arguments: serde_json::to_string(args).unwrap_or_default(),
                             },
                             thought_signature: signature.clone(),
                         })
@@ -302,9 +326,7 @@ impl<R: tauri::Runtime> Agent<R> {
             self.insert_single_message_to_db(app_handle, &msg).await;
 
             for (id, name, args, _) in tool_calls.iter() {
-                let tool_result = self
-                    .execute_tool(app_handle, name, args, config)
-                    .await;
+                let tool_result = self.execute_tool(app_handle, name, args, config).await;
 
                 let result_payload = serde_json::json!({
                     "name": name,

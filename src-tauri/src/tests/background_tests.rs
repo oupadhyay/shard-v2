@@ -6,8 +6,8 @@
  */
 use crate::background::{
     analyze_interactions_in_dir, cleanup_interactions_in_dir, parse_cleanup_decision,
-    parse_deriver_response, parse_dream_response, parse_rate_limit_wait,
-    parse_topic_updates, LOG_RETENTION_DAYS, LOOKBACK_HOURS,
+    parse_deriver_response, parse_dream_response, parse_rate_limit_wait, parse_topic_updates,
+    LOG_RETENTION_DAYS, LOOKBACK_HOURS,
 };
 use chrono::{Duration as ChronoDuration, Utc};
 use std::fs;
@@ -313,7 +313,10 @@ fn test_cleanup_ignores_sessions() {
 
     // Cleanup interactions only targets .jsonl files, so .md files should be ignored completely
     assert_eq!(result.deleted_count, 0, "Should not delete .md files");
-    assert!(session_path.exists(), "Session file should remain untouched");
+    assert!(
+        session_path.exists(),
+        "Session file should remain untouched"
+    );
 }
 
 // ============================================================================
@@ -384,7 +387,8 @@ fn test_parse_dream_response_empty() {
 
 #[test]
 fn test_parse_dream_response_no_peer_card() {
-    let response = r#"{"observations": [{"content": "Test", "source_ids": [], "level": "deductive"}]}"#;
+    let response =
+        r#"{"observations": [{"content": "Test", "source_ids": [], "level": "deductive"}]}"#;
     let dream = parse_dream_response(response);
     assert_eq!(dream.observations.len(), 1);
     assert!(dream.peer_card_facts.is_empty()); // serde default
