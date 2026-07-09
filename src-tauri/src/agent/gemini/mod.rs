@@ -1,12 +1,11 @@
-/**
- * Gemini provider protocol helpers.
- *
- * This module is intentionally host-light: it owns Gemini / Interactions wire
- * types, request-shaping helpers, and stream parsing. The Tauri `Agent` host
- * still owns prompt assembly, memory/persona lookup, DB persistence, tool
- * execution, and frontend events. Keeping that boundary visible here makes a
- * future `shard-llm-providers` crate split mostly mechanical.
- */
+//! Gemini provider protocol helpers.
+//!
+//! This module is intentionally host-light: it owns Gemini / Interactions wire
+//! types, request-shaping helpers, and stream parsing. The Tauri `Agent` host
+//! still owns prompt assembly, memory/persona lookup, DB persistence, tool
+//! execution, and frontend events. Keeping that boundary visible here makes a
+//! future `shard-llm-providers` crate split mostly mechanical.
+
 mod message;
 mod stream;
 mod types;
