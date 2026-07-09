@@ -12,13 +12,11 @@ use tauri::{AppHandle, Emitter};
 
 use super::super::gemini::{
     construct_interactions_input, parse_interactions_sse_line, process_interactions_event,
-    AgentEvent,
+    AgentEvent, InteractionsGenerationConfig, InteractionsRequest, InteractionsTool,
+    GEMINI_API_REVISION,
 };
 use super::super::schema::normalize_gemini_schema;
-use super::super::types::{
-    ChatMessage, FunctionCall, InteractionsGenerationConfig, InteractionsRequest, InteractionsTool,
-    ToolCall,
-};
+use super::super::types::{ChatMessage, FunctionCall, ToolCall};
 use super::super::{Agent, TurnContext};
 
 impl<R: tauri::Runtime> Agent<R> {
@@ -180,7 +178,7 @@ impl<R: tauri::Runtime> Agent<R> {
             .header("Content-Type", "application/json")
             // Opt into the new steps schema (May 2026 breaking change).
             // Becomes default May 26; legacy removed June 8.
-            .header("Api-Revision", super::super::gemini::GEMINI_API_REVISION)
+            .header("Api-Revision", GEMINI_API_REVISION)
             .json(&request_body)
             .send()
             .await

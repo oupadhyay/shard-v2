@@ -42,7 +42,7 @@ unicode-segmentation = "1.12.0"
 rust-stemmers = "1.2.0"
 stop-words = "0.8.0"
 dirs = "5"
-ocr-rs = "2.0.2"
+ocr-rs = "2.3.1"
 futures = "0.3.31"
 rusqlite = { version = "0.31", features = ["bundled"] }
 sqlite-vec = "0.1"
