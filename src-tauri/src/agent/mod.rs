@@ -12,7 +12,7 @@
  *                        shaping, and stream parsers.
  *   - [`host`]         — `Agent`, `TurnContext`, and `Agent::new`.
  *   - [`openrouter`]   — OpenAI-compatible request helpers + `to_multimodal_messages`.
- *   - [`schema`]       — `normalize_gemini_schema` (proto-friendly JSON Schema).
+ *   - [`provider`]     — Provider-neutral DTOs used at extraction seams.
  *   - [`hash`]         — `calculate_history_hash`.
  *   - [`state`]        — history mutators + SQLite session persistence.
  *   - [`retry`]        — frontend-triggered KaTeX retry path.
@@ -22,15 +22,16 @@
  *   - [`turns`]        — per-turn streaming handlers (Gemini + OpenRouter).
  *   - [`process`]      — `process_message` orchestrator.
  */
+mod adapters;
 mod gemini;
 mod hash;
 pub mod hooks;
 mod host;
 pub(crate) mod openrouter;
 mod process;
+mod provider;
 mod research;
 mod retry;
-mod schema;
 mod state;
 mod tools;
 mod turns;
@@ -50,17 +51,25 @@ pub use gemini::{
 };
 pub use host::Agent;
 pub(crate) use host::TurnContext;
-pub use openrouter::{has_images, supports_tools, to_multimodal_messages};
+pub use openrouter::{
+    has_images, process_chat_completion_sse_line, send_chat_completion_request, supports_tools,
+    to_multimodal_messages, ChatCompletionRequest, OpenAiChatStreamEvent, OpenAiChatStreamState,
+    OpenAiChatTransportConfig, ReasoningConfig,
+};
+pub use provider::{
+    ProviderFunctionCall, ProviderFunctionDefinition, ProviderImage, ProviderMessage,
+    ProviderToolCall, ProviderToolDefinition,
+};
 pub use types::{
-    ChatCompletionRequest, ChatMessage, FunctionCall, FunctionDefinition, ImageAttachment,
-    PersistedChatState, ReasoningConfig, RetryReason, ToolCall, ToolDefinition,
+    ChatMessage, FunctionCall, FunctionDefinition, ImageAttachment, PersistedChatState,
+    RetryReason, ToolCall, ToolDefinition,
 };
 
 // Phase 6 refactor — re-export the pure helpers so existing callers and
 // tests reach them under the same `crate::agent::xxx` paths they used
 // before the split.
+pub(crate) use gemini::normalize_gemini_schema;
 #[cfg(test)]
 pub(crate) use hash::calculate_history_hash;
-pub(crate) use schema::normalize_gemini_schema;
 #[cfg(test)]
 pub(crate) use youtube_summary::split_transcript_chunks;

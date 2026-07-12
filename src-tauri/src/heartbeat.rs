@@ -994,7 +994,18 @@ async fn execute_safe_tool<R: Runtime>(
                 Some(k) if !k.is_empty() => k,
                 _ => return "Error: Gemini API key required for memory search.".to_string(),
             };
-            let query_embedding = match crate::interactions::generate_embedding(http_client, query, gemini_key).await {
+            let embedding_config = crate::gemini_embedding::GeminiEmbeddingConfig {
+                endpoint_url: crate::endpoints::gemini_embedding(),
+                auth_token: gemini_key.to_string(),
+                output_dimensionality: Some(768),
+            };
+            let query_embedding = match crate::gemini_embedding::generate_embedding(
+                http_client,
+                query,
+                &embedding_config,
+            )
+            .await
+            {
                 Ok(emb) => emb,
                 Err(e) => return format!("Error computing embedding: {}", e),
             };

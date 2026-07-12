@@ -372,11 +372,16 @@ impl<R: tauri::Runtime> Agent<R> {
                     Some(key) => key.clone(),
                     None => return "Error: memory_search requires a Gemini API key for embedding generation".to_string(),
                 };
+                let embedding_config = crate::gemini_embedding::GeminiEmbeddingConfig {
+                    endpoint_url: crate::endpoints::gemini_embedding(),
+                    auth_token: api_key,
+                    output_dimensionality: Some(768),
+                };
 
-                let embedding = match crate::interactions::generate_embedding(
+                let embedding = match crate::gemini_embedding::generate_embedding(
                     &self.http_client,
                     query,
-                    &api_key,
+                    &embedding_config,
                 )
                 .await
                 {

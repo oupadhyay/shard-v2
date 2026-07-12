@@ -18,10 +18,15 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 
-use super::super::openrouter::to_multimodal_messages;
-use super::super::types::{
-    ChatCompletionRequest, ChatMessage, FunctionCall, FunctionDefinition, ToolCall, ToolDefinition,
+use super::super::adapters::{
+    chat_messages_to_provider, provider_tool_call_to_host, provider_tool_definition_from_host,
 };
+use super::super::openrouter::{
+    process_chat_completion_sse_line, send_chat_completion_request, to_multimodal_messages,
+    ChatCompletionRequest, OpenAiChatStreamEvent, OpenAiChatStreamState, OpenAiChatTransportConfig,
+};
+use super::super::provider::ProviderToolDefinition;
+use super::super::types::ChatMessage;
 use super::super::{Agent, TurnContext};
 
 impl<R: tauri::Runtime> Agent<R> {
@@ -51,7 +56,11 @@ impl<R: tauri::Runtime> Agent<R> {
         let model = provider_config.model_id.clone();
         let reasoning_effort = provider_config.reasoning_effort.clone();
         let provider_name = provider_config.provider_name.clone();
-        let url = provider_config.full_url();
+        let url = if provider_name == "Groq" {
+            crate::endpoints::groq_chat()
+        } else {
+            crate::endpoints::openrouter_chat()
+        };
 
         // Load memories for injection into system prompt (skip in incognito mode)
         let incognito_mode = config.incognito_mode.unwrap_or(false);
@@ -169,29 +178,29 @@ impl<R: tauri::Runtime> Agent<R> {
         messages_with_system.extend(visible_history);
 
         let last_idx = messages_with_system.len().saturating_sub(1);
-        let multimodal_messages = to_multimodal_messages(
-            &messages_with_system
-                .into_iter()
-                .enumerate()
-                .map(|(i, mut msg)| {
-                    // If this is a cron job, structurally isolate the current cron prompt from the "chat history"
-                    if is_cron && i == last_idx {
-                        if let Some(ref mut c) = msg.content {
-                            let sanitized = c
-                                .replace("<system_directive>", "&lt;system_directive&gt;")
-                                .replace("</system_directive>", "&lt;/system_directive&gt;");
-                            *c = format!("<system_directive>\nYou are executing a scheduled background task. Please evaluate the user's task instruction strictly against the conversation history preceding this message. Do not consider this directive itself as part of the chat history or summarize it.\nTask: {}\n</system_directive>", sanitized);
-                        }
+        let prepared_messages = messages_with_system
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut msg)| {
+                // If this is a cron job, structurally isolate the current cron prompt from the "chat history"
+                if is_cron && i == last_idx {
+                    if let Some(ref mut c) = msg.content {
+                        let sanitized = c
+                            .replace("<system_directive>", "&lt;system_directive&gt;")
+                            .replace("</system_directive>", "&lt;/system_directive&gt;");
+                        *c = format!("<system_directive>\nYou are executing a scheduled background task. Please evaluate the user's task instruction strictly against the conversation history preceding this message. Do not consider this directive itself as part of the chat history or summarize it.\nTask: {}\n</system_directive>", sanitized);
                     }
-                    msg
-                })
-                .collect::<Vec<ChatMessage>>(),
-        );
+                }
+                msg
+            })
+            .collect::<Vec<ChatMessage>>();
+        let provider_messages = chat_messages_to_provider(&prepared_messages);
+        let multimodal_messages = to_multimodal_messages(&provider_messages);
 
         // Note: multimodal_messages is no longer cloned per request attempt because
         // ChatCompletionRequest is now generic over the messages type, allowing us to borrow.
         // This avoids deep cloning large base64 image data on retry/fallback paths.
-        let make_request = |tools_opt: Option<Vec<ToolDefinition>>| {
+        let make_request = |tools_opt: Option<Vec<ProviderToolDefinition>>| {
             let model = model.clone();
             // Borrow messages to avoid cloning
             let messages = multimodal_messages.as_slice();
@@ -217,14 +226,11 @@ impl<R: tauri::Runtime> Agent<R> {
                     stream: true,
                 };
 
-                client
-                    .post(&url)
-                    .header("Authorization", format!("Bearer {}", api_key))
-                    .header("Content-Type", "application/json")
-                    .header("User-Agent", "rust-reqwest/0.12")
-                    .json(&request_body)
-                    .send()
-                    .await
+                let transport_config = OpenAiChatTransportConfig {
+                    endpoint_url: url,
+                    auth_token: api_key,
+                };
+                send_chat_completion_request(&client, &transport_config, &request_body).await
             }
         };
 
@@ -241,18 +247,12 @@ impl<R: tauri::Runtime> Agent<R> {
                 crate::tool_registry::global()
                     .get_definitions(&active_skills_list)
                     .iter()
-                    .map(|t| ToolDefinition {
-                        tool_type: t.tool_type.clone(),
-                        function: FunctionDefinition {
-                            name: t.function.name.clone(),
-                            description: t.function.description.clone(),
-                            parameters: t.function.parameters.clone(),
-                            strict: if is_strict_blacklisted {
-                                None
-                            } else {
-                                t.function.strict
-                            },
-                        },
+                    .map(|t| {
+                        let mut provider_tool = provider_tool_definition_from_host(t);
+                        if is_strict_blacklisted {
+                            provider_tool.function.strict = None;
+                        }
+                        provider_tool
                     })
                     .collect(),
             )
@@ -318,16 +318,18 @@ impl<R: tauri::Runtime> Agent<R> {
                         stream: true,
                     };
 
-                    response = self
-                        .http_client
-                        .post(openrouter_url)
-                        .header("Authorization", format!("Bearer {}", openrouter_key))
-                        .header("Content-Type", "application/json")
-                        .header("User-Agent", "rust-reqwest/0.12")
-                        .json(&fallback_body)
-                        .send()
-                        .await
-                        .map_err(|e| format!("OpenRouter fallback network error: {}", e))?;
+                    let fallback_transport_config = OpenAiChatTransportConfig {
+                        endpoint_url: openrouter_url,
+                        auth_token: openrouter_key.clone(),
+                    };
+
+                    response = send_chat_completion_request(
+                        &self.http_client,
+                        &fallback_transport_config,
+                        &fallback_body,
+                    )
+                    .await
+                    .map_err(|e| format!("OpenRouter fallback network error: {}", e))?;
 
                     // Check if fallback succeeded
                     if !response.status().is_success() {
@@ -363,9 +365,7 @@ impl<R: tauri::Runtime> Agent<R> {
             }
         }
 
-        let mut full_content = String::new();
-        let mut full_reasoning = String::new();
-        let mut tool_calls_buffer: Vec<ToolCall> = Vec::new();
+        let mut stream_state = OpenAiChatStreamState::default();
         use futures_util::StreamExt;
 
         let mut stream = response.bytes_stream();
@@ -392,86 +392,30 @@ impl<R: tauri::Runtime> Agent<R> {
                             continue;
                         }
 
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
-                            if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
-                                if let Some(choice) = choices.first() {
-                                    if let Some(reasoning) = choice["delta"].get("reasoning") {
-                                        if !reasoning.is_null() && reasoning.as_str().is_some() {
-                                            let reasoning_str = reasoning.as_str().unwrap();
-                                            full_reasoning.push_str(reasoning_str);
-                                            app_handle
-                                                .emit("agent-reasoning-chunk", reasoning_str)
-                                                .ok();
-                                        }
-                                    }
-
-                                    if let Some(content) =
-                                        choice["delta"].get("content").and_then(|c| c.as_str())
-                                    {
-                                        full_content.push_str(content);
-                                        app_handle.emit("agent-response-chunk", content).ok();
-                                    }
-
-                                    if let Some(delta_tool_calls) =
-                                        choice["delta"].get("tool_calls")
-                                    {
-                                        if let Some(tool_calls_arr) = delta_tool_calls.as_array() {
-                                            for tool_call_json in tool_calls_arr {
-                                                let index =
-                                                    tool_call_json["index"].as_u64().unwrap_or(0)
-                                                        as usize;
-                                                if index >= tool_calls_buffer.len() {
-                                                    tool_calls_buffer.resize(
-                                                        index + 1,
-                                                        ToolCall {
-                                                            id: String::new(),
-                                                            tool_type: "function".to_string(),
-                                                            function: FunctionCall {
-                                                                name: String::new(),
-                                                                arguments: String::new(),
-                                                            },
-                                                            thought_signature: None,
-                                                        },
-                                                    );
-                                                }
-                                                let target = &mut tool_calls_buffer[index];
-                                                if let Some(id) = tool_call_json["id"].as_str() {
-                                                    target.id = id.to_string();
-                                                }
-                                                if let Some(func) = tool_call_json.get("function") {
-                                                    if let Some(name) = func["name"].as_str() {
-                                                        target.function.name.push_str(name);
-                                                    }
-                                                    if let Some(args) = func["arguments"].as_str() {
-                                                        target.function.arguments.push_str(args);
-                                                    }
-                                                }
-
-                                                // Emit tool call update for real-time UI mapping
-                                                if !target.function.name.is_empty() {
-                                                    let args_json: serde_json::Value =
-                                                        serde_json::from_str(
-                                                            &target.function.arguments,
-                                                        )
-                                                        .unwrap_or(serde_json::Value::Object(
-                                                            serde_json::Map::new(),
-                                                        ));
-                                                    let event_payload = serde_json::json!({
-                                                        "name": target.function.name,
-                                                        "args": args_json,
-                                                        "rawArgs": target.function.arguments,
-                                                        "id": target.id
-                                                    });
-                                                    app_handle
-                                                        .emit(
-                                                            "agent-tool-call",
-                                                            event_payload.to_string(),
-                                                        )
-                                                        .ok();
-                                                }
-                                            }
-                                        }
-                                    }
+                        for event in process_chat_completion_sse_line(line, &mut stream_state) {
+                            match event {
+                                OpenAiChatStreamEvent::ReasoningDelta(reasoning) => {
+                                    app_handle.emit("agent-reasoning-chunk", reasoning).ok();
+                                }
+                                OpenAiChatStreamEvent::ContentDelta(content) => {
+                                    app_handle.emit("agent-response-chunk", content).ok();
+                                }
+                                OpenAiChatStreamEvent::ToolCallDelta(tool_call) => {
+                                    // Emit tool call update for real-time UI mapping
+                                    let args_json: serde_json::Value =
+                                        serde_json::from_str(&tool_call.function.arguments)
+                                            .unwrap_or(serde_json::Value::Object(
+                                                serde_json::Map::new(),
+                                            ));
+                                    let event_payload = serde_json::json!({
+                                        "name": tool_call.function.name,
+                                        "args": args_json,
+                                        "rawArgs": tool_call.function.arguments,
+                                        "id": tool_call.id
+                                    });
+                                    app_handle
+                                        .emit("agent-tool-call", event_payload.to_string())
+                                        .ok();
                                 }
                             }
                         }
@@ -484,6 +428,14 @@ impl<R: tauri::Runtime> Agent<R> {
                 buffer.drain(0..consumed);
             }
         }
+
+        let full_content = stream_state.content;
+        let full_reasoning = stream_state.reasoning;
+        let tool_calls_buffer: Vec<_> = stream_state
+            .tool_calls
+            .iter()
+            .map(provider_tool_call_to_host)
+            .collect();
 
         if !full_content.is_empty() || !tool_calls_buffer.is_empty() || !full_reasoning.is_empty() {
             let msg = ChatMessage {

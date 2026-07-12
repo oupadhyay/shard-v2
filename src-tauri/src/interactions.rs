@@ -7,8 +7,8 @@ use crate::retrieval::{
  *
  * Implements Tier 3 of the memory system:
  * - Logs every turn to daily JSONL files
- * - Generates embeddings using gemini-embedding-2-preview (multimodal)
- * - Performs semantic search for context retrieval
+ * - Stores provider-generated embeddings alongside interaction entries
+ * - Performs hybrid semantic/BM25 search for context retrieval
  */
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -28,123 +28,6 @@ pub struct InteractionEntry {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding: Option<Vec<f32>>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct EmbeddingRequest {
-    content: EmbeddingContent,
-    #[serde(rename = "outputDimensionality")]
-    output_dimensionality: Option<u32>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct EmbeddingContent {
-    parts: Vec<EmbeddingPart>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(untagged)]
-enum EmbeddingPart {
-    Text { text: String },
-    InlineData { inline_data: InlineData },
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct InlineData {
-    mime_type: String,
-    data: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct EmbeddingResponse {
-    embedding: EmbeddingValues,
-}
-
-#[derive(Deserialize, Debug)]
-struct EmbeddingValues {
-    values: Vec<f32>,
-}
-
-// ============================================================================
-// Embedding API
-// ============================================================================
-
-// Default lives in `crate::endpoints::gemini_embedding`. Tests override via
-// `crate::endpoints::set_overrides`.
-
-pub async fn generate_embedding(
-    client: &reqwest::Client,
-    text: &str,
-    api_key: &str,
-) -> Result<Vec<f32>, String> {
-    let payload = EmbeddingRequest {
-        content: EmbeddingContent {
-            parts: vec![EmbeddingPart::Text {
-                text: text.to_string(),
-            }],
-        },
-        output_dimensionality: Some(768),
-    };
-
-    send_embedding_request(client, api_key, &payload).await
-}
-
-/// Generate a multimodal embedding from text + images using gemini-embedding-2-preview.
-/// Images are passed as base64-encoded inline data alongside the text.
-pub async fn generate_multimodal_embedding(
-    client: &reqwest::Client,
-    text: &str,
-    images_base64: &[String],
-    images_mime_types: &[String],
-    api_key: &str,
-) -> Result<Vec<f32>, String> {
-    let mut parts = Vec::with_capacity(1 + images_base64.len());
-
-    parts.push(EmbeddingPart::Text {
-        text: text.to_string(),
-    });
-
-    for (data, mime) in images_base64.iter().zip(images_mime_types.iter()) {
-        parts.push(EmbeddingPart::InlineData {
-            inline_data: InlineData {
-                mime_type: mime.clone(),
-                data: data.clone(),
-            },
-        });
-    }
-
-    let payload = EmbeddingRequest {
-        content: EmbeddingContent { parts },
-        output_dimensionality: Some(768),
-    };
-
-    send_embedding_request(client, api_key, &payload).await
-}
-
-async fn send_embedding_request(
-    client: &reqwest::Client,
-    api_key: &str,
-    payload: &EmbeddingRequest,
-) -> Result<Vec<f32>, String> {
-    let res = client
-        .post(crate::endpoints::gemini_embedding())
-        .header("X-Goog-Api-Key", api_key)
-        .json(payload)
-        .send()
-        .await
-        .map_err(|e| format!("Embedding API network error: {}", e))?;
-
-    if !res.status().is_success() {
-        let error_text = res.text().await.unwrap_or_default();
-        return Err(format!("Embedding API error: {}", error_text));
-    }
-
-    let body: EmbeddingResponse = res
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse embedding response: {}", e))?;
-
-    Ok(body.embedding.values)
 }
 
 // ============================================================================

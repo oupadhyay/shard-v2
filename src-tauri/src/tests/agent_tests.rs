@@ -150,25 +150,23 @@ mod tests {
 
     #[test]
     fn test_construct_gemini_messages() {
-        use crate::agent::{construct_gemini_messages, GeminiPart};
+        use crate::agent::{construct_gemini_messages, GeminiPart, ProviderMessage};
 
         let history = vec![
-            ChatMessage {
+            ProviderMessage {
                 role: "user".to_string(),
                 content: Some("Hello".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                is_cron: None,
                 images: None,
             },
-            ChatMessage {
+            ProviderMessage {
                 role: "assistant".to_string(),
                 content: Some("Hi there".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                is_cron: None,
                 images: None,
             },
         ];

@@ -1204,7 +1204,11 @@ pub async fn rebuild_chunk_index<R: Runtime>(
     let generated_chunks: Vec<Option<Chunk>> = futures::stream::iter(chunks_to_embed.into_iter())
         .map(|(s_type, s_name, idx, raw)| {
             let client = http_client.clone();
-            let key = api_key.to_string();
+            let embedding_config = crate::gemini_embedding::GeminiEmbeddingConfig {
+                endpoint_url: crate::endpoints::gemini_embedding(),
+                auth_token: api_key.to_string(),
+                output_dimensionality: Some(768),
+            };
             let embedding_text = format!(
                 "{}: {}\n{}",
                 if s_type == SourceType::Topic {
@@ -1217,7 +1221,12 @@ pub async fn rebuild_chunk_index<R: Runtime>(
             );
 
             async move {
-                match crate::interactions::generate_embedding(&client, &embedding_text, &key).await
+                match crate::gemini_embedding::generate_embedding(
+                    &client,
+                    &embedding_text,
+                    &embedding_config,
+                )
+                .await
                 {
                     Ok(embedding) => {
                         let type_str = if s_type == SourceType::Topic {

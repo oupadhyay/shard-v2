@@ -2,20 +2,20 @@
 //!
 //! Builds an `InteractionsRequest` from the current chat history, system
 //! prompt (with optional research-mode override and persona injection), and
-//! the registered tool list (filtered through [`super::super::schema::normalize_gemini_schema`]
-//! to keep Gemini's proto-backed schema validator happy). Streams the
+//! the registered tool list. Streams the
 //! response via SSE, accumulates text + reasoning + tool calls, executes any
 //! requested tools, and appends the resulting messages onto `history`.
 
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 
+use super::super::adapters::{chat_messages_to_provider, provider_tool_definition_from_host};
 use super::super::gemini::{
-    construct_interactions_input, parse_interactions_sse_line, process_interactions_event,
-    AgentEvent, InteractionsGenerationConfig, InteractionsRequest, InteractionsTool,
-    GEMINI_API_REVISION,
+    construct_interactions_input, construct_interactions_tools, parse_interactions_sse_line,
+    process_interactions_event, send_interactions_stream, AgentEvent,
+    GeminiInteractionsTransportConfig, InteractionsGenerationConfig, InteractionsRequest,
+    InteractionsTool, GEMINI_API_REVISION,
 };
-use super::super::schema::normalize_gemini_schema;
 use super::super::types::{ChatMessage, FunctionCall, ToolCall};
 use super::super::{Agent, TurnContext};
 
@@ -38,8 +38,11 @@ impl<R: tauri::Runtime> Agent<R> {
             .unwrap_or("gemini-3.1-flash-lite-preview".to_string());
         let api_key = config.gemini_api_key.as_ref().ok_or("No Gemini API key")?;
         let enable_tools = config.enable_tools.unwrap_or(true);
-        // Interactions API: flat endpoint, model specified in request body
-        let url = crate::endpoints::gemini_interactions();
+        let transport_config = GeminiInteractionsTransportConfig {
+            endpoint_url: crate::endpoints::gemini_interactions(),
+            auth_token: api_key.to_string(),
+            api_revision: GEMINI_API_REVISION,
+        };
 
         // Load memories for injection into system prompt (skip in incognito mode)
         let incognito_mode = config.incognito_mode.unwrap_or(false);
@@ -109,7 +112,8 @@ impl<R: tauri::Runtime> Agent<R> {
         };
 
         // Build stateless input from history
-        let input = construct_interactions_input(history);
+        let provider_history = chat_messages_to_provider(history);
+        let input = construct_interactions_input(&provider_history);
 
         let session_id_str = self.session_id.lock().await.clone();
         let active_skills_list = crate::memories::get_vector_store(app_handle)
@@ -118,21 +122,12 @@ impl<R: tauri::Runtime> Agent<R> {
 
         // Interactions API uses flat tool definitions: { type: "function", name, description, parameters }
         let interactions_tools: Option<Vec<InteractionsTool>> = if enable_tools {
-            Some(
-                crate::tool_registry::global()
-                    .get_definitions(&active_skills_list)
-                    .iter()
-                    .map(|t| {
-                        let mut params = t.function.parameters.clone();
-                        normalize_gemini_schema(&mut params);
-                        InteractionsTool::Function {
-                            name: t.function.name.clone(),
-                            description: t.function.description.clone(),
-                            parameters: params,
-                        }
-                    })
-                    .collect(),
-            )
+            let provider_tools: Vec<_> = crate::tool_registry::global()
+                .get_definitions(&active_skills_list)
+                .iter()
+                .map(provider_tool_definition_from_host)
+                .collect();
+            Some(construct_interactions_tools(&provider_tools))
         } else {
             None
         };
@@ -170,19 +165,8 @@ impl<R: tauri::Runtime> Agent<R> {
             }
         }
 
-        // Streaming via SSE: append ?alt=sse
-        let response = self
-            .http_client
-            .post(format!("{}?alt=sse", url))
-            .header("x-goog-api-key", api_key)
-            .header("Content-Type", "application/json")
-            // Opt into the new steps schema (May 2026 breaking change).
-            // Becomes default May 26; legacy removed June 8.
-            .header("Api-Revision", GEMINI_API_REVISION)
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| format!("API network error: {}", e))?;
+        let response =
+            send_interactions_stream(&self.http_client, &transport_config, &request_body).await?;
 
         if !response.status().is_success() {
             let status = response.status();

@@ -4,13 +4,24 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::config::AppConfig;
-
 /// Groq Vision model (Llama 4 Scout with vision capabilities)
 const GROQ_VISION_MODEL: &str = "meta-llama/llama-4-scout-17b-16e-instruct";
 
 /// OpenRouter free vision models in priority order (fallback if Gemma 4 26B MoE fails)
 const OPENROUTER_VISION_MODELS: &[&str] = &["nvidia/nemotron-nano-12b-v2-vl:free"];
+
+#[derive(Debug, Clone)]
+pub struct VisionLlmEndpoints {
+    pub openrouter_chat_url: String,
+    pub groq_chat_url: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct VisionLlmConfig {
+    pub openrouter_auth_token: Option<String>,
+    pub groq_auth_token: Option<String>,
+    pub endpoints: VisionLlmEndpoints,
+}
 
 #[derive(Serialize, Debug)]
 struct OpenAIVisionRequest {
@@ -69,7 +80,7 @@ pub async fn process_image_with_context(
     image_base64: &str,
     mime_type: &str,
     user_question: &str,
-    config: &AppConfig,
+    config: &VisionLlmConfig,
 ) -> Result<String, String> {
     // Primary model: Gemma 4 26B-A4B MoE — role-separated from chat's 31B dense
     const CONTEXT_VISION_MODEL: &str = "google/gemma-4-26b-a4b-it:free";
@@ -87,7 +98,7 @@ Please analyze the image carefully and provide a helpful response that directly 
     let data_uri = format!("data:{};base64,{}", mime_type, image_base64);
 
     // Try OpenRouter with Gemma 4 31B
-    if let Some(openrouter_key) = &config.openrouter_api_key {
+    if let Some(openrouter_key) = &config.openrouter_auth_token {
         log::info!(
             "[VisionLLM] Processing image with context using {}",
             CONTEXT_VISION_MODEL
@@ -114,7 +125,7 @@ Please analyze the image carefully and provide a helpful response that directly 
         };
 
         let response = http_client
-            .post(crate::endpoints::openrouter_chat())
+            .post(&config.endpoints.openrouter_chat_url)
             .header("Authorization", format!("Bearer {}", openrouter_key))
             .header("Content-Type", "application/json")
             .timeout(std::time::Duration::from_secs(45)) // Longer timeout for contextual response
@@ -175,7 +186,7 @@ Please analyze the image carefully and provide a helpful response that directly 
             log::info!("[VisionLLM] Trying fallback vision model: {}", model);
 
             let response = http_client
-                .post(crate::endpoints::openrouter_chat())
+                .post(&config.endpoints.openrouter_chat_url)
                 .header("Authorization", format!("Bearer {}", openrouter_key))
                 .header("Content-Type", "application/json")
                 .timeout(std::time::Duration::from_secs(45))
@@ -201,7 +212,7 @@ Please analyze the image carefully and provide a helpful response that directly 
     }
 
     // Final fallback to Groq if OpenRouter unavailable
-    if let Some(groq_key) = &config.groq_api_key {
+    if let Some(groq_key) = &config.groq_auth_token {
         log::info!("[VisionLLM] Trying Groq for contextual vision...");
 
         let request = OpenAIVisionRequest {
@@ -223,7 +234,7 @@ Please analyze the image carefully and provide a helpful response that directly 
         };
 
         let response = http_client
-            .post(crate::endpoints::groq_chat())
+            .post(&config.endpoints.groq_chat_url)
             .header("Authorization", format!("Bearer {}", groq_key))
             .header("Content-Type", "application/json")
             .timeout(std::time::Duration::from_secs(45))
