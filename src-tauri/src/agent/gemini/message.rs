@@ -1,4 +1,4 @@
-use crate::agent::types::ChatMessage;
+use crate::agent::provider::{ProviderMessage, ProviderToolDefinition};
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -28,13 +28,8 @@ pub fn extract_model_text_from_steps(body: &Value) -> Option<String> {
     None
 }
 
-/// Convert chat history to Gemini API format.
-///
-/// The host-owned [`ChatMessage`] is accepted here for compatibility, but all
-/// provider wire structs live in this module. A future split can replace this
-/// function's input with a provider-neutral message DTO without moving the
-/// Gemini wire code again.
-pub fn construct_gemini_messages(history: &[ChatMessage]) -> Vec<GeminiContent> {
+/// Convert provider-neutral chat history to Gemini API format.
+pub fn construct_gemini_messages(history: &[ProviderMessage]) -> Vec<GeminiContent> {
     // Build a map of tool call IDs to function names for O(1) lookup
     let mut tool_call_names = HashMap::new();
     for msg in history {
@@ -122,14 +117,15 @@ pub fn construct_gemini_messages(history: &[ChatMessage]) -> Vec<GeminiContent> 
     contents
 }
 
-/// Convert chat history to Interactions API stateless input format (array of Step objects).
+/// Convert provider-neutral chat history to Interactions API stateless input
+/// format (array of Step objects).
 ///
 /// The steps-based Interactions API rejects legacy turn-list entries (`role` +
 /// `content`) when `Api-Revision: 2026-05-20` is active. For stateless history,
 /// send the chronological step timeline instead: user messages become
 /// `user_input`, assistant text becomes `model_output`, assistant function calls
 /// become `function_call`, and tool messages become `function_result`.
-pub fn construct_interactions_input(history: &[ChatMessage]) -> Value {
+pub fn construct_interactions_input(history: &[ProviderMessage]) -> Value {
     let mut steps: Vec<Value> = Vec::new();
 
     // Pre-index: map tool_call_id → function name for O(1) lookup
@@ -236,6 +232,21 @@ pub fn construct_interactions_input(history: &[ChatMessage]) -> Value {
     }
 
     Value::Array(steps)
+}
+
+pub fn construct_interactions_tools(tools: &[ProviderToolDefinition]) -> Vec<InteractionsTool> {
+    tools
+        .iter()
+        .map(|tool| {
+            let mut parameters = tool.function.parameters.clone();
+            super::schema::normalize_gemini_schema(&mut parameters);
+            InteractionsTool::Function {
+                name: tool.function.name.clone(),
+                description: tool.function.description.clone(),
+                parameters,
+            }
+        })
+        .collect()
 }
 
 fn clean_legacy_file_data_text(text: &str) -> String {

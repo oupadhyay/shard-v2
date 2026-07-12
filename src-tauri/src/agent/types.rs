@@ -154,31 +154,3 @@ impl RetryReason {
         }
     }
 }
-
-// ============================================================================
-// OpenRouter/OpenAI API Types
-// ============================================================================
-
-#[derive(Serialize, Debug)]
-pub struct ChatCompletionRequest<M: serde::Serialize> {
-    pub model: String,
-    pub messages: M,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<ToolDefinition>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<ReasoningConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub include_reasoning: Option<bool>,
-    pub stream: bool,
-}
-
-#[derive(Serialize, Debug, Clone)]
-pub struct ReasoningConfig {
-    pub enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
-}

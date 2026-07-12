@@ -134,17 +134,17 @@ impl<R: tauri::Runtime> Agent<R> {
 
         if !uris_to_delete.is_empty() {
             if let Some(key) = api_key {
+                let delete_config = crate::gemini_files::GeminiFilesDeleteConfig {
+                    files_base_url: crate::endpoints::gemini_files_base(),
+                    auth_token: key,
+                };
                 for uri in uris_to_delete.iter() {
-                    if let Some(file_name) = uri.rsplit('/').next() {
-                        let delete_url =
-                            format!("{}/{}", crate::endpoints::gemini_files_base(), file_name);
-                        let _ = self
-                            .http_client
-                            .delete(&delete_url)
-                            .header("X-Goog-Api-Key", key.as_str())
-                            .send()
-                            .await;
-                    }
+                    let _ = crate::gemini_files::delete_uploaded_gemini_file(
+                        &self.http_client,
+                        uri,
+                        &delete_config,
+                    )
+                    .await;
                 }
             }
         }

@@ -57,16 +57,12 @@ pub struct ModelProviderConfig {
 }
 
 impl ModelProviderConfig {
-    /// Get the full URL for chat completions.
-    ///
-    /// Reads through `crate::endpoints` so test code can override the
-    /// destination via `endpoints::set_overrides`. In production both
-    /// branches return the same URLs as the historic `format!("{}chat/completions", self.base_url)`.
+    /// Get the production full URL for chat completions from this provider
+    /// mapping alone. Runtime call sites that need test overrides should read
+    /// `crate::endpoints` in the host layer and pass that URL into provider
+    /// request code explicitly.
     pub fn full_url(&self) -> String {
-        match self.provider_name.as_str() {
-            "Groq" => crate::endpoints::groq_chat(),
-            _ => crate::endpoints::openrouter_chat(),
-        }
+        format!("{}chat/completions", self.base_url)
     }
 }
 

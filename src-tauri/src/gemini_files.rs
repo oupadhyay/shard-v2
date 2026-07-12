@@ -9,6 +9,18 @@ pub struct GeminiFileUri {
     pub file_uri: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct GeminiFilesUploadConfig {
+    pub upload_url: String,
+    pub auth_token: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GeminiFilesDeleteConfig {
+    pub files_base_url: String,
+    pub auth_token: String,
+}
+
 /// Uploads an image to the Gemini Files API using the resumable upload protocol.
 ///
 /// Protocol steps:
@@ -20,7 +32,7 @@ pub async fn upload_image_to_gemini_files_api(
     client: &reqwest::Client,
     image_base64: &str,
     mime_type: &str,
-    api_key: &str,
+    config: &GeminiFilesUploadConfig,
 ) -> Result<GeminiFileUri, String> {
     use base64::{engine::general_purpose, Engine as _};
 
@@ -44,10 +56,9 @@ pub async fn upload_image_to_gemini_files_api(
         file: FileMetadata,
     }
 
-    let init_url = crate::endpoints::gemini_files_upload();
     let init_response = client
-        .post(init_url)
-        .header("X-Goog-Api-Key", api_key)
+        .post(&config.upload_url)
+        .header("X-Goog-Api-Key", &config.auth_token)
         .header("X-Goog-Upload-Protocol", "resumable")
         .header("X-Goog-Upload-Command", "start")
         .header("X-Goog-Upload-Header-Content-Length", num_bytes.to_string())
@@ -116,4 +127,33 @@ pub async fn upload_image_to_gemini_files_api(
         mime_type: response_data.file.mime_type,
         file_uri: response_data.file.uri,
     })
+}
+
+pub async fn delete_uploaded_gemini_file(
+    client: &reqwest::Client,
+    file_uri: &str,
+    config: &GeminiFilesDeleteConfig,
+) -> Result<(), String> {
+    let file_name = file_uri
+        .rsplit('/')
+        .next()
+        .ok_or_else(|| "Gemini file URI did not contain a file name".to_string())?;
+    let delete_url = format!("{}/{}", config.files_base_url, file_name);
+    let response = client
+        .delete(delete_url)
+        .header("X-Goog-Api-Key", &config.auth_token)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to delete Gemini file: {}", e))?;
+
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        Err(format!(
+            "Failed to delete Gemini file (HTTP {}): {}",
+            status, error_text
+        ))
+    }
 }

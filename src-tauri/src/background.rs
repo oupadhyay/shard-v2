@@ -377,6 +377,11 @@ async fn call_llm_oneshot_inner(
     }
 
     let (provider_config, api_key) = config.get_model_provider_config(model, "background jobs")?;
+    let provider_url = if provider_config.provider_name == "Groq" {
+        crate::endpoints::groq_chat()
+    } else {
+        crate::endpoints::openrouter_chat()
+    };
 
     let payload = serde_json::json!({
         "model": provider_config.model_id,
@@ -395,7 +400,7 @@ async fn call_llm_oneshot_inner(
     });
 
     let res = http_client
-        .post(provider_config.full_url())
+        .post(provider_url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&payload)
@@ -807,6 +812,11 @@ async fn call_openai_with_tools(
     temperature: f64,
 ) -> Result<LlmToolResponse, String> {
     let (provider_config, api_key) = config.get_model_provider_config(model, "heartbeat")?;
+    let provider_url = if provider_config.provider_name == "Groq" {
+        crate::endpoints::groq_chat()
+    } else {
+        crate::endpoints::openrouter_chat()
+    };
 
     let tools_json: Vec<serde_json::Value> = tools
         .iter()
@@ -822,7 +832,7 @@ async fn call_openai_with_tools(
     });
 
     let res = http_client
-        .post(provider_config.full_url())
+        .post(provider_url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&payload)
@@ -1856,8 +1866,15 @@ Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
                                 let key_opt = key_arc.clone();
                                 async move {
                                     let emb = if let Some(key) = key_opt {
-                                        match crate::interactions::generate_embedding(
-                                            &client, &fact_text, &key,
+                                        let embedding_config = crate::gemini_embedding::GeminiEmbeddingConfig {
+                                            endpoint_url: crate::endpoints::gemini_embedding(),
+                                            auth_token: key.to_string(),
+                                            output_dimensionality: Some(768),
+                                        };
+                                        match crate::gemini_embedding::generate_embedding(
+                                            &client,
+                                            &fact_text,
+                                            &embedding_config,
                                         )
                                         .await
                                         {

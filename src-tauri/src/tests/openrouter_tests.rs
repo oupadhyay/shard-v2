@@ -1,19 +1,18 @@
 #[cfg(test)]
 mod tests {
     use crate::agent::{
-        has_images, supports_tools, to_multimodal_messages, ChatMessage, FunctionCall,
-        ImageAttachment, ToolCall,
+        has_images, supports_tools, to_multimodal_messages, ProviderFunctionCall, ProviderImage,
+        ProviderMessage, ProviderToolCall,
     };
 
     #[test]
     fn test_to_multimodal_messages_text_only() {
-        let messages = vec![ChatMessage {
+        let messages = vec![ProviderMessage {
             role: "user".to_string(),
             content: Some("Hello".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
             images: None,
         }];
 
@@ -24,16 +23,40 @@ mod tests {
     }
 
     #[test]
+    fn test_to_multimodal_messages_provider_message() {
+        let messages = vec![ProviderMessage {
+            role: "user".to_string(),
+            content: Some("What is this?".to_string()),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            images: Some(vec![ProviderImage {
+                base64: "img".to_string(),
+                mime_type: "image/png".to_string(),
+                file_uri: None,
+            }]),
+        }];
+
+        let result = to_multimodal_messages(&messages);
+
+        assert_eq!(result[0]["role"], "user");
+        assert_eq!(result[0]["content"][0]["text"], "What is this?");
+        assert_eq!(
+            result[0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,img"
+        );
+    }
+
+    #[test]
     fn test_to_multimodal_messages_single_image() {
         let messages = vec![
-            ChatMessage {
+            ProviderMessage {
                 role: "user".to_string(),
                 content: Some("What is this?".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                is_cron: None,
-                images: Some(vec![ImageAttachment {
+                images: Some(vec![ProviderImage {
                     base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".to_string(),
                     mime_type: "image/png".to_string(),
                     file_uri: None,
@@ -59,20 +82,19 @@ mod tests {
 
     #[test]
     fn test_to_multimodal_messages_multiple_images() {
-        let messages = vec![ChatMessage {
+        let messages = vec![ProviderMessage {
             role: "user".to_string(),
             content: Some("Compare these".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
             images: Some(vec![
-                ImageAttachment {
+                ProviderImage {
                     base64: "img1".to_string(),
                     mime_type: "image/jpeg".to_string(),
                     file_uri: None,
                 },
-                ImageAttachment {
+                ProviderImage {
                     base64: "img2".to_string(),
                     mime_type: "image/png".to_string(),
                     file_uri: None,
@@ -96,14 +118,13 @@ mod tests {
 
     #[test]
     fn test_to_multimodal_messages_images_only() {
-        let messages = vec![ChatMessage {
+        let messages = vec![ProviderMessage {
             role: "user".to_string(),
             content: None,
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
-            images: Some(vec![ImageAttachment {
+            images: Some(vec![ProviderImage {
                 base64: "img_only".to_string(),
                 mime_type: "image/webp".to_string(),
                 file_uri: None,
@@ -126,21 +147,20 @@ mod tests {
 
     #[test]
     fn test_to_multimodal_messages_tool_calls() {
-        let messages = vec![ChatMessage {
+        let messages = vec![ProviderMessage {
             role: "assistant".to_string(),
             content: Some("Checking weather...".to_string()),
             reasoning: None,
-            tool_calls: Some(vec![ToolCall {
+            tool_calls: Some(vec![ProviderToolCall {
                 id: "call_123".to_string(),
                 tool_type: "function".to_string(),
-                function: FunctionCall {
+                function: ProviderFunctionCall {
                     name: "get_weather".to_string(),
                     arguments: "{\"location\":\"London\"}".to_string(),
                 },
                 thought_signature: None,
             }]),
             tool_call_id: None,
-            is_cron: None,
             images: None,
         }];
 
@@ -159,13 +179,12 @@ mod tests {
 
     #[test]
     fn test_to_multimodal_messages_null_content() {
-        let messages = vec![ChatMessage {
+        let messages = vec![ProviderMessage {
             role: "assistant".to_string(),
             content: None,
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
             images: None,
         }];
 
@@ -178,13 +197,12 @@ mod tests {
 
     #[test]
     fn test_to_multimodal_messages_tool_result() {
-        let messages = vec![ChatMessage {
+        let messages = vec![ProviderMessage {
             role: "tool".to_string(),
             content: Some("Sunny, 20C".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: Some("call_123".to_string()),
-            is_cron: None,
             images: None,
         }];
 
@@ -197,14 +215,13 @@ mod tests {
 
     #[test]
     fn test_to_multimodal_messages_empty_content_with_images() {
-        let messages = vec![ChatMessage {
+        let messages = vec![ProviderMessage {
             role: "user".to_string(),
             content: Some("".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
-            images: Some(vec![ImageAttachment {
+            images: Some(vec![ProviderImage {
                 base64: "data".to_string(),
                 mime_type: "image/png".to_string(),
                 file_uri: None,
@@ -220,13 +237,12 @@ mod tests {
 
     #[test]
     fn test_to_multimodal_messages_empty_image_list() {
-        let messages = vec![ChatMessage {
+        let messages = vec![ProviderMessage {
             role: "user".to_string(),
             content: Some("Hello".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
             images: Some(vec![]),
         }];
 
@@ -237,31 +253,29 @@ mod tests {
 
     #[test]
     fn test_has_images_empty_slice() {
-        let empty_messages: &[ChatMessage] = &[];
+        let empty_messages: &[ProviderMessage] = &[];
         assert!(!has_images(empty_messages));
     }
 
     #[test]
     fn test_has_images() {
-        let messages_no_images = vec![ChatMessage {
+        let messages_no_images = vec![ProviderMessage {
             role: "user".to_string(),
             content: Some("Hello".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
             images: None,
         }];
         assert!(!has_images(&messages_no_images));
 
-        let messages_with_images = vec![ChatMessage {
+        let messages_with_images = vec![ProviderMessage {
             role: "user".to_string(),
             content: Some("Look at this".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
-            images: Some(vec![ImageAttachment {
+            images: Some(vec![ProviderImage {
                 base64: "data".to_string(),
                 mime_type: "image/png".to_string(),
                 file_uri: None,
@@ -269,13 +283,12 @@ mod tests {
         }];
         assert!(has_images(&messages_with_images));
 
-        let messages_with_empty_images = vec![ChatMessage {
+        let messages_with_empty_images = vec![ProviderMessage {
             role: "user".to_string(),
             content: Some("Look at this".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
             images: Some(vec![]),
         }];
         assert!(!has_images(&messages_with_empty_images));
@@ -284,21 +297,20 @@ mod tests {
     #[test]
     fn test_multimodal_content_null_when_none() {
         // Assistant message with tool_calls but no content should serialize content: null
-        let messages = vec![ChatMessage {
+        let messages = vec![ProviderMessage {
             role: "assistant".to_string(),
             content: None,
             reasoning: None,
-            tool_calls: Some(vec![ToolCall {
+            tool_calls: Some(vec![ProviderToolCall {
                 id: "call_1".to_string(),
                 tool_type: "function".to_string(),
-                function: FunctionCall {
+                function: ProviderFunctionCall {
                     name: "get_weather".to_string(),
                     arguments: "{}".to_string(),
                 },
                 thought_signature: None,
             }]),
             tool_call_id: None,
-            is_cron: None,
             images: None,
         }];
 

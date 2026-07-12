@@ -60,11 +60,19 @@ impl<R: tauri::Runtime> Agent<R> {
                 for (img_data, mime_type) in bases.iter().zip(mimes.iter()) {
                     let file_uri = if is_gemini {
                         // Gemini: Upload to Files API for native multimodal
+                        let upload_config = crate::gemini_files::GeminiFilesUploadConfig {
+                            upload_url: crate::endpoints::gemini_files_upload(),
+                            auth_token: config
+                                .gemini_api_key
+                                .as_ref()
+                                .ok_or("No Gemini API key")?
+                                .clone(),
+                        };
                         match crate::gemini_files::upload_image_to_gemini_files_api(
                             &self.http_client,
                             img_data,
                             mime_type,
-                            config.gemini_api_key.as_ref().ok_or("No Gemini API key")?,
+                            &upload_config,
                         )
                         .await
                         {
@@ -92,12 +100,20 @@ impl<R: tauri::Runtime> Agent<R> {
                         None
                     } else {
                         // Non-vision model: use Vision LLM to produce text description
+                        let vision_config = crate::integrations::vision_llm::VisionLlmConfig {
+                            openrouter_auth_token: config.openrouter_api_key.clone(),
+                            groq_auth_token: config.groq_api_key.clone(),
+                            endpoints: crate::integrations::vision_llm::VisionLlmEndpoints {
+                                openrouter_chat_url: crate::endpoints::openrouter_chat(),
+                                groq_chat_url: crate::endpoints::groq_chat(),
+                            },
+                        };
                         match crate::integrations::vision_llm::process_image_with_context(
                             &self.http_client,
                             img_data,
                             mime_type,
                             &message,
-                            config,
+                            &vision_config,
                         )
                         .await
                         {
@@ -170,32 +186,41 @@ impl<R: tauri::Runtime> Agent<R> {
         // Skip in incognito mode to avoid using previous context
         let user_embedding = if !incognito {
             if let Some(api_key) = &config.gemini_api_key {
+                let embedding_config = crate::gemini_embedding::GeminiEmbeddingConfig {
+                    endpoint_url: crate::endpoints::gemini_embedding(),
+                    auth_token: api_key.clone(),
+                    output_dimensionality: Some(768),
+                };
                 if let (Some(bases), Some(mimes)) =
                     (images_base64.as_ref(), images_mime_types.as_ref())
                 {
                     if !bases.is_empty() {
-                        crate::interactions::generate_multimodal_embedding(
+                        crate::gemini_embedding::generate_multimodal_embedding(
                             &self.http_client,
                             &message,
                             bases,
                             mimes,
-                            api_key,
+                            &embedding_config,
                         )
                         .await
                         .ok()
                     } else {
-                        crate::interactions::generate_embedding(
+                        crate::gemini_embedding::generate_embedding(
                             &self.http_client,
                             &message,
-                            api_key,
+                            &embedding_config,
                         )
                         .await
                         .ok()
                     }
                 } else {
-                    crate::interactions::generate_embedding(&self.http_client, &message, api_key)
-                        .await
-                        .ok()
+                    crate::gemini_embedding::generate_embedding(
+                        &self.http_client,
+                        &message,
+                        &embedding_config,
+                    )
+                    .await
+                    .ok()
                 }
             } else {
                 None
@@ -517,9 +542,18 @@ impl<R: tauri::Runtime> Agent<R> {
                 {
                     let content = last_msg.content.as_ref().unwrap();
                     let response_embedding = if let Some(api_key) = &config.gemini_api_key {
-                        crate::interactions::generate_embedding(&self.http_client, content, api_key)
-                            .await
-                            .ok()
+                        let embedding_config = crate::gemini_embedding::GeminiEmbeddingConfig {
+                            endpoint_url: crate::endpoints::gemini_embedding(),
+                            auth_token: api_key.clone(),
+                            output_dimensionality: Some(768),
+                        };
+                        crate::gemini_embedding::generate_embedding(
+                            &self.http_client,
+                            content,
+                            &embedding_config,
+                        )
+                        .await
+                        .ok()
                     } else {
                         None
                     };

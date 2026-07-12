@@ -298,12 +298,20 @@ pub async fn capture_and_analyze<R: tauri::Runtime>(
     );
 
     let http_client = reqwest::Client::new();
+    let vision_config = vision_llm::VisionLlmConfig {
+        openrouter_auth_token: config.openrouter_api_key.clone(),
+        groq_auth_token: config.groq_api_key.clone(),
+        endpoints: vision_llm::VisionLlmEndpoints {
+            openrouter_chat_url: crate::endpoints::openrouter_chat(),
+            groq_chat_url: crate::endpoints::groq_chat(),
+        },
+    };
     let analysis = vision_llm::process_image_with_context(
         &http_client,
         &image_base64,
         &mime_type,
         &enriched_prompt,
-        config,
+        &vision_config,
     )
     .await?;
 

@@ -2,8 +2,9 @@
 mod tests {
     use crate::agent::{
         construct_gemini_messages, construct_interactions_input, parse_interactions_sse_line,
-        process_interactions_event, AgentEvent, ChatMessage, FunctionCall, GeminiPart,
-        ImageAttachment, InteractionDelta, InteractionOutput, InteractionStreamEvent, ToolCall,
+        process_interactions_event, AgentEvent, GeminiPart, InteractionDelta, InteractionOutput,
+        InteractionStreamEvent, ProviderFunctionCall, ProviderImage, ProviderMessage,
+        ProviderToolCall,
     };
     use serde_json::json;
 
@@ -98,22 +99,20 @@ mod tests {
     #[test]
     fn test_construct_gemini_messages_basic() {
         let history = vec![
-            ChatMessage {
+            ProviderMessage {
                 role: "user".to_string(),
                 content: Some("Hello".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                is_cron: None,
                 images: None,
             },
-            ChatMessage {
+            ProviderMessage {
                 role: "assistant".to_string(),
                 content: Some("Hi there!".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                is_cron: None,
                 images: None,
             },
         ];
@@ -138,14 +137,13 @@ mod tests {
 
     #[test]
     fn test_construct_gemini_messages_with_images() {
-        let history = vec![ChatMessage {
+        let history = vec![ProviderMessage {
             role: "user".to_string(),
             content: Some("What is this?".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
-            images: Some(vec![ImageAttachment {
+            images: Some(vec![ProviderImage {
                 base64: "base64data".to_string(),
                 mime_type: "image/png".to_string(),
                 file_uri: Some("https://example.com/image.png".to_string()),
@@ -173,21 +171,20 @@ mod tests {
 
     #[test]
     fn test_construct_gemini_messages_with_tool_calls() {
-        let history = vec![ChatMessage {
+        let history = vec![ProviderMessage {
             role: "assistant".to_string(),
             content: Some("Let me check the weather.".to_string()),
             reasoning: None,
-            tool_calls: Some(vec![ToolCall {
+            tool_calls: Some(vec![ProviderToolCall {
                 id: "call_1".to_string(),
                 tool_type: "function".to_string(),
-                function: FunctionCall {
+                function: ProviderFunctionCall {
                     name: "get_weather".to_string(),
                     arguments: "{\"location\": \"London\"}".to_string(),
                 },
                 thought_signature: Some("sig123".to_string()),
             }]),
             tool_call_id: None,
-            is_cron: None,
             images: None,
         }];
 
@@ -219,30 +216,28 @@ mod tests {
     #[test]
     fn test_construct_gemini_messages_with_tool_response() {
         let history = vec![
-            ChatMessage {
+            ProviderMessage {
                 role: "assistant".to_string(),
                 content: None,
                 reasoning: None,
-                tool_calls: Some(vec![ToolCall {
+                tool_calls: Some(vec![ProviderToolCall {
                     id: "call_1".to_string(),
                     tool_type: "function".to_string(),
-                    function: FunctionCall {
+                    function: ProviderFunctionCall {
                         name: "get_weather".to_string(),
                         arguments: "{\"location\": \"London\"}".to_string(),
                     },
                     thought_signature: None,
                 }]),
                 tool_call_id: None,
-                is_cron: None,
                 images: None,
             },
-            ChatMessage {
+            ProviderMessage {
                 role: "tool".to_string(),
                 content: Some("Sunny, 20C".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: Some("call_1".to_string()),
-                is_cron: None,
                 images: None,
             },
         ];
@@ -266,13 +261,12 @@ mod tests {
 
     #[test]
     fn test_construct_gemini_messages_tool_response_fallback() {
-        let history = vec![ChatMessage {
+        let history = vec![ProviderMessage {
             role: "tool".to_string(),
             content: Some("No context".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: Some("missing_call_id".to_string()),
-            is_cron: None,
             images: None,
         }];
 
@@ -298,13 +292,12 @@ mod tests {
         })
         .to_string();
 
-        let history = vec![ChatMessage {
+        let history = vec![ProviderMessage {
             role: "user".to_string(),
             content: Some(json_content),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
             images: None,
         }];
 
@@ -320,13 +313,12 @@ mod tests {
 
     #[test]
     fn test_construct_gemini_messages_empty_content() {
-        let history = vec![ChatMessage {
+        let history = vec![ProviderMessage {
             role: "user".to_string(),
             content: None,
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
             images: None,
         }];
 
@@ -449,22 +441,20 @@ mod tests {
     #[test]
     fn test_construct_interaction_request_basic() {
         let history = vec![
-            ChatMessage {
+            ProviderMessage {
                 role: "user".to_string(),
                 content: Some("Hello".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                is_cron: None,
                 images: None,
             },
-            ChatMessage {
+            ProviderMessage {
                 role: "assistant".to_string(),
                 content: Some("Hi there!".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                is_cron: None,
                 images: None,
             },
         ];
@@ -483,15 +473,34 @@ mod tests {
     }
 
     #[test]
+    fn test_construct_interaction_request_from_provider_message() {
+        let history = vec![ProviderMessage {
+            role: "user".to_string(),
+            content: Some("Hello from DTO".to_string()),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            images: None,
+        }];
+
+        let input = construct_interactions_input(&history);
+        let steps = input.as_array().expect("Expected array");
+
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0]["type"], "user_input");
+        assert_eq!(steps[0]["content"][0]["type"], "text");
+        assert_eq!(steps[0]["content"][0]["text"], "Hello from DTO");
+    }
+
+    #[test]
     fn test_construct_interaction_request_with_images() {
-        let history = vec![ChatMessage {
+        let history = vec![ProviderMessage {
             role: "user".to_string(),
             content: Some("What is this?".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
-            images: Some(vec![ImageAttachment {
+            images: Some(vec![ProviderImage {
                 base64: "base64data".to_string(),
                 mime_type: "image/png".to_string(),
                 file_uri: Some("https://files.example.com/image.png".to_string()),
@@ -518,14 +527,13 @@ mod tests {
 
     #[test]
     fn test_construct_interaction_request_with_inline_image() {
-        let history = vec![ChatMessage {
+        let history = vec![ProviderMessage {
             role: "user".to_string(),
             content: Some("Describe this".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
-            is_cron: None,
-            images: Some(vec![ImageAttachment {
+            images: Some(vec![ProviderImage {
                 base64: "iVBORw0KGgo=".to_string(),
                 mime_type: "image/png".to_string(),
                 file_uri: None, // No file URI — should use inline data
@@ -544,21 +552,20 @@ mod tests {
 
     #[test]
     fn test_construct_interaction_request_tool_calls() {
-        let history = vec![ChatMessage {
+        let history = vec![ProviderMessage {
             role: "assistant".to_string(),
             content: Some("Let me check.".to_string()),
             reasoning: None,
-            tool_calls: Some(vec![ToolCall {
+            tool_calls: Some(vec![ProviderToolCall {
                 id: "call_weather_0".to_string(),
                 tool_type: "function".to_string(),
-                function: FunctionCall {
+                function: ProviderFunctionCall {
                     name: "get_weather".to_string(),
                     arguments: "{\"location\": \"London\"}".to_string(),
                 },
                 thought_signature: None,
             }]),
             tool_call_id: None,
-            is_cron: None,
             images: None,
         }];
 
@@ -582,30 +589,28 @@ mod tests {
     #[test]
     fn test_construct_interaction_request_tool_response() {
         let history = vec![
-            ChatMessage {
+            ProviderMessage {
                 role: "assistant".to_string(),
                 content: None,
                 reasoning: None,
-                tool_calls: Some(vec![ToolCall {
+                tool_calls: Some(vec![ProviderToolCall {
                     id: "call_1".to_string(),
                     tool_type: "function".to_string(),
-                    function: FunctionCall {
+                    function: ProviderFunctionCall {
                         name: "get_weather".to_string(),
                         arguments: "{\"location\": \"Paris\"}".to_string(),
                     },
                     thought_signature: None,
                 }]),
                 tool_call_id: None,
-                is_cron: None,
                 images: None,
             },
-            ChatMessage {
+            ProviderMessage {
                 role: "tool".to_string(),
                 content: Some("Sunny, 25C".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: Some("call_1".to_string()),
-                is_cron: None,
                 images: None,
             },
         ];
@@ -626,13 +631,12 @@ mod tests {
 
     #[test]
     fn test_construct_interaction_request_tool_response_unknown_call_id() {
-        let history = vec![ChatMessage {
+        let history = vec![ProviderMessage {
             role: "tool".to_string(),
             content: Some("Missing earlier context".to_string()),
             reasoning: None,
             tool_calls: None,
             tool_call_id: Some("orphan_call".to_string()),
-            is_cron: None,
             images: None,
         }];
 
@@ -829,39 +833,36 @@ mod tests {
     fn test_debug_interactions_payload() {
         use crate::agent::{InteractionsGenerationConfig, InteractionsRequest, InteractionsTool};
         let history = vec![
-            ChatMessage {
+            ProviderMessage {
                 role: "user".to_string(),
                 content: Some("Hi".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                is_cron: None,
                 images: None,
             },
-            ChatMessage {
+            ProviderMessage {
                 role: "assistant".to_string(),
                 content: None,
                 reasoning: None,
-                tool_calls: Some(vec![ToolCall {
+                tool_calls: Some(vec![ProviderToolCall {
                     id: "call_1".to_string(),
                     tool_type: "function".to_string(),
-                    function: FunctionCall {
+                    function: ProviderFunctionCall {
                         name: "web_search".to_string(),
                         arguments: "{\"query\": \"test\"}".to_string(),
                     },
                     thought_signature: None,
                 }]),
                 tool_call_id: None,
-                is_cron: None,
                 images: None,
             },
-            ChatMessage {
+            ProviderMessage {
                 role: "tool".to_string(),
                 content: Some("Search results".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: Some("call_1".to_string()),
-                is_cron: None,
                 images: None,
             },
         ];
@@ -922,39 +923,36 @@ mod tests {
         };
 
         let history = vec![
-            ChatMessage {
+            ProviderMessage {
                 role: "user".to_string(),
                 content: Some("Hi".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
-                is_cron: None,
                 images: None,
             },
-            ChatMessage {
+            ProviderMessage {
                 role: "assistant".to_string(),
                 content: None,
                 reasoning: None,
-                tool_calls: Some(vec![ToolCall {
+                tool_calls: Some(vec![ProviderToolCall {
                     id: "call_1".to_string(),
                     tool_type: "function".to_string(),
-                    function: FunctionCall {
+                    function: ProviderFunctionCall {
                         name: "web_search".to_string(),
                         arguments: "{\"query\": \"test\"}".to_string(),
                     },
                     thought_signature: None,
                 }]),
                 tool_call_id: None,
-                is_cron: None,
                 images: None,
             },
-            ChatMessage {
+            ProviderMessage {
                 role: "tool".to_string(),
                 content: Some("Search results".to_string()),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: Some("call_1".to_string()),
-                is_cron: None,
                 images: None,
             },
         ];

@@ -20,6 +20,7 @@ pub mod db;
 pub mod dedup;
 pub mod endpoints;
 pub mod file_history;
+mod gemini_embedding;
 mod gemini_files;
 pub mod heartbeat;
 mod integrations;
@@ -237,8 +238,22 @@ async fn ocr_image(
 
     // Use contextual Vision LLM for image understanding
     let http_client = reqwest::Client::new();
-    vision_llm::process_image_with_context(&http_client, &image_base64, &mime, &query, &config)
-        .await
+    let vision_config = vision_llm::VisionLlmConfig {
+        openrouter_auth_token: config.openrouter_api_key.clone(),
+        groq_auth_token: config.groq_api_key.clone(),
+        endpoints: vision_llm::VisionLlmEndpoints {
+            openrouter_chat_url: endpoints::openrouter_chat(),
+            groq_chat_url: endpoints::groq_chat(),
+        },
+    };
+    vision_llm::process_image_with_context(
+        &http_client,
+        &image_base64,
+        &mime,
+        &query,
+        &vision_config,
+    )
+    .await
 }
 
 #[tauri::command]
