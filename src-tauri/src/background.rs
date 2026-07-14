@@ -382,31 +382,47 @@ async fn call_llm_oneshot_inner(
     } else {
         crate::endpoints::openrouter_chat()
     };
+    let transport_config = crate::agent::OpenAiChatTransportConfig {
+        endpoint_url: provider_url,
+        auth_token: api_key,
+    };
 
-    let payload = serde_json::json!({
-        "model": provider_config.model_id,
-        "messages": [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_message
-            }
-        ],
-        "temperature": temperature,
-        "max_tokens": max_tokens
-    });
+    let provider_messages = vec![
+        crate::agent::ProviderMessage {
+            role: "system".to_string(),
+            content: Some(system_prompt.to_string()),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            images: None,
+        },
+        crate::agent::ProviderMessage {
+            role: "user".to_string(),
+            content: Some(user_message.to_string()),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            images: None,
+        },
+    ];
+    let messages = crate::agent::to_multimodal_messages(&provider_messages);
+    let request_body = crate::agent::ChatCompletionRequest {
+        model: provider_config.model_id,
+        messages: messages.as_slice(),
+        tools: None,
+        tool_choice: None,
+        reasoning_effort: None,
+        reasoning: None,
+        include_reasoning: None,
+        temperature: Some(temperature),
+        max_tokens: Some(max_tokens),
+        stream: false,
+    };
 
-    let res = http_client
-        .post(provider_url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Background LLM API network error: {}", e))?;
+    let res =
+        crate::agent::send_chat_completion_request(http_client, &transport_config, &request_body)
+            .await
+            .map_err(|e| format!("Background LLM API network error: {}", e))?;
 
     if !res.status().is_success() {
         let error_text = res.text().await.unwrap_or_default();
@@ -420,17 +436,8 @@ async fn call_llm_oneshot_inner(
         )
     })?;
 
-    // Extract text content from response
-    if let Some(choices) = body.get("choices").and_then(|c| c.as_array()) {
-        if let Some(first) = choices.first() {
-            if let Some(content) = first
-                .get("message")
-                .and_then(|m| m.get("content"))
-                .and_then(|c| c.as_str())
-            {
-                return Ok(content.to_string());
-            }
-        }
+    if let Some(content) = crate::agent::extract_chat_completion_text(&body) {
+        return Ok(content);
     }
 
     Err(format!(
@@ -448,34 +455,37 @@ async fn call_gemini_oneshot(
     model: &str,
     system_prompt: &str,
     user_message: &str,
-    _max_tokens: u32,
-    _temperature: f64,
+    max_tokens: u32,
+    temperature: f64,
 ) -> Result<String, String> {
     let api_key = config
         .gemini_api_key
         .as_deref()
         .ok_or("No Gemini API key configured for background jobs")?;
+    let transport_config = crate::agent::GeminiInteractionsTransportConfig {
+        endpoint_url: crate::endpoints::gemini_interactions(),
+        auth_token: api_key.to_string(),
+        api_revision: crate::agent::GEMINI_API_REVISION,
+    };
+    let request_body = crate::agent::InteractionsRequest {
+        model: model.to_string(),
+        input: serde_json::json!(user_message),
+        system_instruction: Some(system_prompt.to_string()),
+        tools: None,
+        generation_config: Some(crate::agent::InteractionsGenerationConfig {
+            thinking_level: None,
+            thinking_summaries: None,
+            temperature: Some(temperature as f32),
+            max_output_tokens: Some(max_tokens),
+        }),
+        stream: false,
+        store: Some(false),
+    };
 
-    let url = "https://generativelanguage.googleapis.com/v1beta/interactions";
-
-    let payload = serde_json::json!({
-        "model": model,
-        "system_instruction": system_prompt,
-        "input": user_message,
-        "stream": false,
-        "store": false
-    });
-
-    let res = http_client
-        .post(url)
-        .header("X-Goog-Api-Key", api_key)
-        .header("Content-Type", "application/json")
-        // Opt into the new steps schema (May 2026 breaking change).
-        .header("Api-Revision", crate::agent::GEMINI_API_REVISION)
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Gemini background API network error: {}", e))?;
+    let res =
+        crate::agent::send_interactions_request(http_client, &transport_config, &request_body)
+            .await
+            .map_err(|e| format!("Gemini background API network error: {}", e))?;
 
     if !res.status().is_success() {
         let error_text = res.text().await.unwrap_or_default();
@@ -487,21 +497,8 @@ async fn call_gemini_oneshot(
         .await
         .map_err(|e| format!("Failed to parse Gemini Interactions response: {}", e))?;
 
-    // Use shared helper for steps schema (concatenates all text parts)
-    if let Some(text) = crate::agent::extract_model_text_from_steps(&body) {
+    if let Some(text) = crate::agent::extract_interactions_text(&body) {
         return Ok(text);
-    }
-
-    // Fallback: legacy outputs array (can be removed after June 8, 2026)
-    if let Some(outputs) = body.get("outputs").and_then(|o| o.as_array()) {
-        for output in outputs {
-            let output_type = output.get("type").and_then(|t| t.as_str()).unwrap_or("");
-            if output_type == "text" {
-                if let Some(text) = output.get("text").and_then(|t| t.as_str()) {
-                    return Ok(text.to_string());
-                }
-            }
-        }
     }
 
     Err("No text content in Gemini Interactions response".to_string())
@@ -536,7 +533,7 @@ pub async fn call_llm_with_tools(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,
     model: &str,
-    messages: &[serde_json::Value],
+    messages: &[crate::agent::ProviderMessage],
     tools: &[crate::agent::ToolDefinition],
     max_tokens: u32,
     temperature: f64,
@@ -603,7 +600,7 @@ async fn call_gemini_with_tools(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,
     model: &str,
-    messages: &[serde_json::Value],
+    messages: &[crate::agent::ProviderMessage],
     tools: &[crate::agent::ToolDefinition],
     _max_tokens: u32,
     _temperature: f64,
@@ -612,131 +609,27 @@ async fn call_gemini_with_tools(
         .gemini_api_key
         .as_deref()
         .ok_or("No Gemini API key configured for heartbeat")?;
-
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-        model
-    );
-
-    // Convert OpenAI-format messages to Gemini contents
-    let mut contents: Vec<serde_json::Value> = Vec::new();
-    let mut system_instruction: Option<serde_json::Value> = None;
-
-    for msg in messages {
-        let role = msg["role"].as_str().unwrap_or("user");
-        match role {
-            "system" => {
-                system_instruction = Some(serde_json::json!({
-                    "parts": [{ "text": msg["content"].as_str().unwrap_or("") }]
-                }));
-            }
-            "assistant" => {
-                let mut parts: Vec<serde_json::Value> = Vec::new();
-                if let Some(content) = msg["content"].as_str() {
-                    if !content.is_empty() {
-                        parts.push(serde_json::json!({ "text": content }));
-                    }
-                }
-                // Convert tool_calls to functionCall parts
-                if let Some(tc_array) = msg["tool_calls"].as_array() {
-                    for tc in tc_array {
-                        if let Some(func) = tc.get("function") {
-                            let name = func["name"].as_str().unwrap_or("");
-                            let args_str = func["arguments"].as_str().unwrap_or("{}");
-                            let args: serde_json::Value =
-                                serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
-                            parts.push(serde_json::json!({
-                                "functionCall": { "name": name, "args": args }
-                            }));
-                        }
-                    }
-                }
-                if !parts.is_empty() {
-                    contents.push(serde_json::json!({ "role": "model", "parts": parts }));
-                }
-            }
-            "tool" => {
-                // Find the tool name from tool_call_id by looking back at previous assistant message
-                let tool_call_id = msg["tool_call_id"].as_str().unwrap_or("");
-                let mut func_name = "unknown".to_string();
-                // Search backwards for the matching tool_call
-                for prev in contents.iter().rev() {
-                    if let Some(parts) = prev["parts"].as_array() {
-                        for part in parts {
-                            if let Some(fc) = part.get("functionCall") {
-                                // Gemini doesn't use IDs — match by position/name
-                                // Best effort: use the name from the most recent assistant message
-                                if let Some(n) = fc["name"].as_str() {
-                                    func_name = n.to_string();
-                                }
-                            }
-                        }
-                    }
-                }
-                // Alternative: look at the original messages for tool_call_id -> name mapping
-                for prev_msg in messages.iter().rev() {
-                    if let Some(tcs) = prev_msg["tool_calls"].as_array() {
-                        for tc in tcs {
-                            if tc["id"].as_str() == Some(tool_call_id) {
-                                if let Some(n) = tc["function"]["name"].as_str() {
-                                    func_name = n.to_string();
-                                }
-                            }
-                        }
-                    }
-                }
-                let result_content = msg["content"].as_str().unwrap_or("");
-                contents.push(serde_json::json!({
-                    "role": "function",
-                    "parts": [{
-                        "functionResponse": {
-                            "name": func_name,
-                            "response": { "result": result_content }
-                        }
-                    }]
-                }));
-            }
-            _ => {
-                // user
-                contents.push(serde_json::json!({
-                    "role": "user",
-                    "parts": [{ "text": msg["content"].as_str().unwrap_or("") }]
-                }));
-            }
-        }
-    }
-
-    // Build Gemini tool format: normalize schemas for Gemini proto compatibility
-    // (strips additionalProperties/strict and collapses nullable union types).
-    let function_declarations: Vec<serde_json::Value> = tools
+    let transport_config = crate::agent::GeminiGenerateContentTransportConfig {
+        endpoint_url: crate::endpoints::gemini_generate_content(model),
+        auth_token: api_key.to_string(),
+    };
+    let (contents, system_instruction) =
+        crate::agent::construct_generate_content_messages(messages);
+    let provider_tools: Vec<_> = tools
         .iter()
-        .map(|t| {
-            let mut params = t.function.parameters.clone();
-            crate::agent::normalize_gemini_schema(&mut params);
-            serde_json::json!({
-                "name": t.function.name,
-                "description": t.function.description,
-                "parameters": params
-            })
-        })
+        .map(crate::agent::adapters::provider_tool_definition_from_host)
         .collect();
+    let request_body = crate::agent::GenerateContentRequest {
+        contents,
+        tools: Some(crate::agent::construct_gemini_tools(&provider_tools)),
+        system_instruction,
+        generation_config: None,
+    };
 
-    let mut payload = serde_json::json!({
-        "contents": contents,
-        "tools": [{ "functionDeclarations": function_declarations }]
-    });
-    if let Some(si) = system_instruction {
-        payload["systemInstruction"] = si;
-    }
-
-    let res = http_client
-        .post(&url)
-        .header("X-Goog-Api-Key", api_key)
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Gemini heartbeat API error: {}", e))?;
+    let res =
+        crate::agent::send_generate_content_request(http_client, &transport_config, &request_body)
+            .await
+            .map_err(|e| format!("Gemini heartbeat API error: {}", e))?;
 
     if !res.status().is_success() {
         let error_text = res.text().await.unwrap_or_default();
@@ -747,57 +640,20 @@ async fn call_gemini_with_tools(
         .json()
         .await
         .map_err(|e| format!("Failed to parse Gemini response: {}", e))?;
-
-    // Parse Gemini response: candidates[0].content.parts[]
-    let parts = body
-        .get("candidates")
-        .and_then(|c| c.as_array())
-        .and_then(|a| a.first())
-        .and_then(|c| c.get("content"))
-        .and_then(|c| c.get("parts"))
-        .and_then(|p| p.as_array());
-
-    let mut content: Option<String> = None;
-    let mut tool_calls: Vec<LlmToolCall> = Vec::new();
-    let mut call_counter = 0u32;
-
-    if let Some(parts) = parts {
-        for part in parts {
-            if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                // Skip thinking/thought parts
-                if part
-                    .get("thought")
-                    .and_then(|t| t.as_bool())
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-                content = Some(text.to_string());
-            }
-            if let Some(fc) = part.get("functionCall") {
-                let name = fc["name"].as_str().unwrap_or("").to_string();
-                let args = fc.get("args").cloned().unwrap_or(serde_json::json!({}));
-                call_counter += 1;
-                tool_calls.push(LlmToolCall {
-                    id: format!("gemini_call_{}", call_counter),
-                    name,
-                    arguments: args.to_string(),
-                });
-            }
-        }
-    }
-
-    let finish_reason = if tool_calls.is_empty() {
-        "stop"
-    } else {
-        "tool_calls"
-    }
-    .to_string();
+    let completion = crate::agent::parse_generate_content_completion(&body);
 
     Ok(LlmToolResponse {
-        content,
-        tool_calls,
-        finish_reason,
+        content: completion.content,
+        tool_calls: completion
+            .tool_calls
+            .into_iter()
+            .map(|call| LlmToolCall {
+                id: call.id,
+                name: call.function.name,
+                arguments: call.function.arguments,
+            })
+            .collect(),
+        finish_reason: completion.finish_reason,
     })
 }
 
@@ -806,7 +662,7 @@ async fn call_openai_with_tools(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,
     model: &str,
-    messages: &[serde_json::Value],
+    messages: &[crate::agent::ProviderMessage],
     tools: &[crate::agent::ToolDefinition],
     max_tokens: u32,
     temperature: f64,
@@ -817,28 +673,32 @@ async fn call_openai_with_tools(
     } else {
         crate::endpoints::openrouter_chat()
     };
-
-    let tools_json: Vec<serde_json::Value> = tools
+    let transport_config = crate::agent::OpenAiChatTransportConfig {
+        endpoint_url: provider_url,
+        auth_token: api_key,
+    };
+    let provider_tools: Vec<_> = tools
         .iter()
-        .filter_map(|t| serde_json::to_value(t).ok())
+        .map(crate::agent::adapters::provider_tool_definition_from_host)
         .collect();
+    let multimodal_messages = crate::agent::to_multimodal_messages(messages);
+    let request_body = crate::agent::ChatCompletionRequest {
+        model: provider_config.model_id,
+        messages: multimodal_messages.as_slice(),
+        tools: Some(provider_tools),
+        tool_choice: Some("auto".to_string()),
+        reasoning_effort: None,
+        reasoning: None,
+        include_reasoning: None,
+        temperature: Some(temperature),
+        max_tokens: Some(max_tokens),
+        stream: false,
+    };
 
-    let payload = serde_json::json!({
-        "model": provider_config.model_id,
-        "messages": messages,
-        "tools": tools_json,
-        "temperature": temperature,
-        "max_tokens": max_tokens
-    });
-
-    let res = http_client
-        .post(provider_url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Heartbeat LLM API network error: {}", e))?;
+    let res =
+        crate::agent::send_chat_completion_request(http_client, &transport_config, &request_body)
+            .await
+            .map_err(|e| format!("Heartbeat LLM API network error: {}", e))?;
 
     if !res.status().is_success() {
         let error_text = res.text().await.unwrap_or_default();
@@ -851,64 +711,25 @@ async fn call_openai_with_tools(
             provider_config.provider_name, e
         )
     })?;
-
-    // Parse the first choice
-    let choice = body
-        .get("choices")
-        .and_then(|c| c.as_array())
-        .and_then(|a| a.first())
-        .ok_or_else(|| format!("No choices in {} response", provider_config.provider_name))?;
-
-    let message = choice.get("message").ok_or("No message in choice")?;
-    let finish_reason = choice
-        .get("finish_reason")
-        .and_then(|f| f.as_str())
-        .unwrap_or("stop")
-        .to_string();
-
-    let content = message
-        .get("content")
-        .and_then(|c| c.as_str())
-        .map(|s| s.to_string());
-
-    // Parse tool_calls if present
-    let mut tool_calls = Vec::new();
-    if let Some(tc_array) = message.get("tool_calls").and_then(|tc| tc.as_array()) {
-        for tc in tc_array {
-            let id = tc
-                .get("id")
-                .and_then(|i| i.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            if let Some(func) = tc.get("function") {
-                let name = func
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let arguments = func
-                    .get("arguments")
-                    .map(|a| {
-                        if let Some(s) = a.as_str() {
-                            s.to_string()
-                        } else {
-                            a.to_string()
-                        }
-                    })
-                    .unwrap_or_default();
-                tool_calls.push(LlmToolCall {
-                    id,
-                    name,
-                    arguments,
-                });
-            }
-        }
-    }
+    let completion = crate::agent::parse_chat_completion(&body).map_err(|e| {
+        format!(
+            "Failed to parse {} response: {}",
+            provider_config.provider_name, e
+        )
+    })?;
 
     Ok(LlmToolResponse {
-        content,
-        tool_calls,
-        finish_reason,
+        content: completion.content,
+        tool_calls: completion
+            .tool_calls
+            .into_iter()
+            .map(|call| LlmToolCall {
+                id: call.id,
+                name: call.function.name,
+                arguments: call.function.arguments,
+            })
+            .collect(),
+        finish_reason: completion.finish_reason,
     })
 }
 

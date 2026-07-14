@@ -223,6 +223,8 @@ impl<R: tauri::Runtime> Agent<R> {
                     reasoning_effort,
                     reasoning: None,
                     include_reasoning: if is_groq { None } else { Some(true) },
+                    temperature: None,
+                    max_tokens: None,
                     stream: true,
                 };
 
@@ -315,6 +317,8 @@ impl<R: tauri::Runtime> Agent<R> {
                         reasoning_effort: None,
                         reasoning: None,
                         include_reasoning: Some(true),
+                        temperature: None,
+                        max_tokens: None,
                         stream: true,
                     };
 
