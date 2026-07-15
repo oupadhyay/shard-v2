@@ -7,6 +7,12 @@ pub struct GeminiInteractionsTransportConfig {
     pub api_revision: &'static str,
 }
 
+#[derive(Debug, Clone)]
+pub struct GeminiGenerateContentTransportConfig {
+    pub endpoint_url: String,
+    pub auth_token: String,
+}
+
 pub async fn send_interactions_stream(
     client: &reqwest::Client,
     config: &GeminiInteractionsTransportConfig,
@@ -17,6 +23,37 @@ pub async fn send_interactions_stream(
         .header("x-goog-api-key", &config.auth_token)
         .header("Content-Type", "application/json")
         .header("Api-Revision", config.api_revision)
+        .json(request)
+        .send()
+        .await
+        .map_err(|e| format!("API network error: {}", e))
+}
+
+pub async fn send_interactions_request(
+    client: &reqwest::Client,
+    config: &GeminiInteractionsTransportConfig,
+    request: &InteractionsRequest,
+) -> Result<reqwest::Response, String> {
+    client
+        .post(&config.endpoint_url)
+        .header("x-goog-api-key", &config.auth_token)
+        .header("Content-Type", "application/json")
+        .header("Api-Revision", config.api_revision)
+        .json(request)
+        .send()
+        .await
+        .map_err(|e| format!("API network error: {}", e))
+}
+
+pub async fn send_generate_content_request<B: serde::Serialize + ?Sized>(
+    client: &reqwest::Client,
+    config: &GeminiGenerateContentTransportConfig,
+    request: &B,
+) -> Result<reqwest::Response, String> {
+    client
+        .post(&config.endpoint_url)
+        .header("X-Goog-Api-Key", &config.auth_token)
+        .header("Content-Type", "application/json")
         .json(request)
         .send()
         .await

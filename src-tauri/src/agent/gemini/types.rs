@@ -10,7 +10,7 @@ pub struct GenerateContentRequest {
     pub contents: Vec<GeminiContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<GeminiTool>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", rename = "systemInstruction")]
     pub system_instruction: Option<GeminiContent>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "generationConfig")]
     pub generation_config: Option<GenerationConfig>,

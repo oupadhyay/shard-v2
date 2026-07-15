@@ -14,8 +14,10 @@ use super::Agent;
 
 impl<R: tauri::Runtime> Agent<R> {
     pub(crate) async fn classify_intent(&self, query: &str, api_key: &str) -> Result<bool, String> {
-        let url = crate::endpoints::gemini_classify();
-
+        let transport_config = super::gemini::GeminiGenerateContentTransportConfig {
+            endpoint_url: crate::endpoints::gemini_classify(),
+            auth_token: api_key.to_string(),
+        };
         let payload = serde_json::json!({
             "contents": [{
                 "parts": [{
@@ -29,13 +31,10 @@ impl<R: tauri::Runtime> Agent<R> {
         });
 
         let client = reqwest::Client::new();
-        let res = client
-            .post(url)
-            .header("X-Goog-Api-Key", api_key)
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        let res =
+            super::gemini::send_generate_content_request(&client, &transport_config, &payload)
+                .await
+                .map_err(|e| e.to_string())?;
 
         if !res.status().is_success() {
             return Err(format!("Intent classification failed: {}", res.status()));
@@ -43,18 +42,8 @@ impl<R: tauri::Runtime> Agent<R> {
 
         let body: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
 
-        if let Some(candidates) = body.get("candidates").and_then(|c| c.as_array()) {
-            if let Some(first) = candidates.first() {
-                if let Some(content) = first.get("content") {
-                    if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
-                        if let Some(text_part) = parts.first() {
-                            if let Some(text) = text_part.get("text").and_then(|t| t.as_str()) {
-                                return Ok(text.trim().to_uppercase().contains("YES"));
-                            }
-                        }
-                    }
-                }
-            }
+        if let Some(text) = super::gemini::extract_generate_content_text(&body) {
+            return Ok(text.trim().to_uppercase().contains("YES"));
         }
 
         Ok(false)

@@ -24,6 +24,9 @@ pub struct Endpoints {
     /// (model is baked into the URL because the classifier is pinned to
     /// `gemini-3.1-flash-lite-preview`).
     pub gemini_classify: String,
+    /// Gemini generateContent model URL prefix. The model name and
+    /// `:generateContent` suffix are appended by [`gemini_generate_content`].
+    pub gemini_generate_content_base: String,
     /// Base URL prefix for `DELETE` on uploaded Gemini files. The file name
     /// is appended at call time. Trailing slash NOT included.
     pub gemini_files_base: String,
@@ -43,6 +46,7 @@ impl Default for Endpoints {
         Self {
             gemini_interactions: "https://generativelanguage.googleapis.com/v1beta/interactions".to_string(),
             gemini_classify: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent".to_string(),
+            gemini_generate_content_base: "https://generativelanguage.googleapis.com/v1beta/models".to_string(),
             gemini_files_base: "https://generativelanguage.googleapis.com/v1beta/files".to_string(),
             gemini_files_upload: "https://generativelanguage.googleapis.com/upload/v1beta/files".to_string(),
             gemini_embedding: "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent".to_string(),
@@ -71,6 +75,16 @@ pub fn gemini_interactions() -> String {
 #[inline]
 pub fn gemini_classify() -> String {
     read(|e| e.gemini_classify.clone())
+}
+
+#[inline]
+pub fn gemini_generate_content(model: &str) -> String {
+    read(|e| {
+        format!(
+            "{}/{}:generateContent",
+            e.gemini_generate_content_base, model
+        )
+    })
 }
 
 #[inline]

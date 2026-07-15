@@ -19,6 +19,7 @@ pub mod crystals;
 pub mod db;
 pub mod dedup;
 pub mod endpoints;
+mod external_tools;
 pub mod file_history;
 mod gemini_embedding;
 mod gemini_files;

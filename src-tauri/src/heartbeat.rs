@@ -681,8 +681,22 @@ pub async fn process_heartbeat_turn<R: Runtime>(
     };
 
     let mut messages = vec![
-        serde_json::json!({ "role": "system", "content": system_prompt }),
-        serde_json::json!({ "role": "user", "content": user_content }),
+        crate::agent::ProviderMessage {
+            role: "system".to_string(),
+            content: Some(system_prompt),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            images: None,
+        },
+        crate::agent::ProviderMessage {
+            role: "user".to_string(),
+            content: Some(user_content),
+            reasoning: None,
+            tool_calls: None,
+            tool_call_id: None,
+            images: None,
+        },
     ];
 
     // 5. Tool-calling loop
@@ -722,29 +736,28 @@ pub async fn process_heartbeat_turn<R: Runtime>(
         }
 
         // Add assistant message with tool_calls to conversation
-        let tool_calls_json: Vec<serde_json::Value> = llm_response
+        let provider_tool_calls: Vec<crate::agent::ProviderToolCall> = llm_response
             .tool_calls
             .iter()
-            .map(|tc| {
-                serde_json::json!({
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.name,
-                        "arguments": tc.arguments
-                    }
-                })
+            .map(|tc| crate::agent::ProviderToolCall {
+                id: tc.id.clone(),
+                tool_type: "function".to_string(),
+                function: crate::agent::ProviderFunctionCall {
+                    name: tc.name.clone(),
+                    arguments: tc.arguments.clone(),
+                },
+                thought_signature: None,
             })
             .collect();
 
-        let mut assistant_msg = serde_json::json!({
-            "role": "assistant",
-            "tool_calls": tool_calls_json
+        messages.push(crate::agent::ProviderMessage {
+            role: "assistant".to_string(),
+            content: llm_response.content.clone(),
+            reasoning: None,
+            tool_calls: Some(provider_tool_calls),
+            tool_call_id: None,
+            images: None,
         });
-        if let Some(ref content) = llm_response.content {
-            assistant_msg["content"] = serde_json::Value::String(content.clone());
-        }
-        messages.push(assistant_msg);
 
         // Process each tool call
         let mut draft_created = false;
@@ -778,19 +791,28 @@ pub async fn process_heartbeat_turn<R: Runtime>(
                             msg_id
                         );
                         // Add tool response indicating draft was queued
-                        messages.push(serde_json::json!({
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "content": format!("Action '{}' has been queued for user approval. The user will be notified.", tc.name)
-                        }));
+                        messages.push(crate::agent::ProviderMessage {
+                            role: "tool".to_string(),
+                            content: Some(format!(
+                                "Action '{}' has been queued for user approval. The user will be notified.",
+                                tc.name
+                            )),
+                            reasoning: None,
+                            tool_calls: None,
+                            tool_call_id: Some(tc.id.clone()),
+                            images: None,
+                        });
                     }
                     Err(e) => {
                         log::error!("[Heartbeat] Failed to create draft: {}", e);
-                        messages.push(serde_json::json!({
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "content": format!("Error creating draft: {}", e)
-                        }));
+                        messages.push(crate::agent::ProviderMessage {
+                            role: "tool".to_string(),
+                            content: Some(format!("Error creating draft: {}", e)),
+                            reasoning: None,
+                            tool_calls: None,
+                            tool_call_id: Some(tc.id.clone()),
+                            images: None,
+                        });
                     }
                 }
                 draft_created = true;
@@ -805,11 +827,14 @@ pub async fn process_heartbeat_turn<R: Runtime>(
                     tc.name,
                     result.len()
                 );
-                messages.push(serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": result
-                }));
+                messages.push(crate::agent::ProviderMessage {
+                    role: "tool".to_string(),
+                    content: Some(result),
+                    reasoning: None,
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                    images: None,
+                });
             }
             tool_calls_made += 1;
         }
@@ -903,52 +928,20 @@ async fn execute_safe_tool<R: Runtime>(
     tool_name: &str,
     args: &serde_json::Value,
 ) -> String {
-    use crate::integrations::*;
+    if let Some(result) = crate::external_tools::execute_external_tool(
+        http_client,
+        tool_name,
+        args,
+        crate::external_tools::ExternalToolConfig {
+            brave_api_key: config.brave_api_key.as_deref(),
+        },
+    )
+    .await
+    {
+        return result;
+    }
 
     match tool_name {
-        "web_search" => {
-            let query = args["query"].as_str().unwrap_or_default();
-            match web_search::perform_web_search(query, config.brave_api_key.as_deref()).await {
-                Ok(results) => serde_json::to_string(&results)
-                    .unwrap_or_else(|_| "Failed to serialize search results".to_string()),
-                Err(e) => format!("Error: {}", e),
-            }
-        }
-        "open_url" => {
-            let url = args["url"].as_str().unwrap_or_default();
-            match browser::read_url(http_client, url).await {
-                Ok(md) => format!("Read URL: {}\n\n{}", url, md),
-                Err(e) => format!("Error: {}", e),
-            }
-        }
-        "search_wikipedia" => {
-            let query = args["query"].as_str().unwrap_or_default();
-            match wikipedia::perform_wikipedia_lookup(http_client, query).await {
-                Ok(Some((title, summary, _))) => format!("Wikipedia: {}\n{}", title, summary),
-                Ok(None) => "No Wikipedia results found.".to_string(),
-                Err(e) => format!("Error: {}", e),
-            }
-        }
-        "search_arxiv" => {
-            let query = args["query"].as_str().unwrap_or_default();
-            match arxiv::perform_arxiv_lookup(http_client, query, 3).await {
-                Ok(papers) => {
-                    let summaries: Vec<String> = papers
-                        .iter()
-                        .map(|p| format!("- [{}] {}: {}", p.id, p.title, p.summary))
-                        .collect();
-                    format!("ArXiv Results:\n{}", summaries.join("\n\n"))
-                }
-                Err(e) => format!("Error: {}", e),
-            }
-        }
-        "read_arxiv_paper" => {
-            let paper_id = args["paper_id"].as_str().unwrap_or_default();
-            match arxiv::read_arxiv_paper(http_client, paper_id).await {
-                Ok(paper) => format!("# {}\n\n**Abstract:** {}\n\n{}", paper.title, paper.abstract_text, paper.content),
-                Err(e) => format!("Error: {}", e),
-            }
-        }
         "save_memory" => {
             if config.incognito_mode.unwrap_or(false) {
                 return "Skipped: Memory saving is disabled in incognito mode.".to_string();
@@ -1082,20 +1075,6 @@ async fn execute_safe_tool<R: Runtime>(
                     context
                 }
             )
-        }
-        "get_weather" => {
-            let location = args["location"].as_str().unwrap_or_default();
-            match crate::integrations::weather::perform_weather_lookup(http_client, location).await {
-                Ok(json_str) => json_str,
-                Err(e) => format!("Error: {}", e),
-            }
-        }
-        "get_stock_price" => {
-            let symbol = args["symbol"].as_str().unwrap_or_default();
-            match crate::integrations::finance::perform_finance_lookup(symbol).await {
-                Ok(result) => result,
-                Err(e) => format!("Error: {}", e),
-            }
         }
         "run_python" => {
             "Tool 'run_python' is currently not available in heartbeat background runs.".to_string()

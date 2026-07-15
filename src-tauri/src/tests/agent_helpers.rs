@@ -122,6 +122,7 @@ impl TestEnv {
         endpoints::set_overrides(Endpoints {
             gemini_interactions: format!("{}/v1beta/interactions", base),
             gemini_classify: format!("{}/v1beta/models/classifier:generateContent", base),
+            gemini_generate_content_base: format!("{}/v1beta/models", base),
             gemini_files_base: format!("{}/v1beta/files", base),
             gemini_files_upload: format!("{}/upload/v1beta/files", base),
             gemini_embedding: format!("{}/v1beta/models/embedder:embedContent", base),

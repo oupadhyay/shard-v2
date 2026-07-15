@@ -3,6 +3,10 @@
 
 use serde::Serialize;
 
+#[cfg(test)]
+#[path = "openrouter/provider_tests.rs"]
+mod provider_tests;
+
 use super::provider::{
     ProviderFunctionCall, ProviderMessage, ProviderToolCall, ProviderToolDefinition,
 };
@@ -21,6 +25,10 @@ pub struct ChatCompletionRequest<M: Serialize> {
     pub reasoning: Option<ReasoningConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_reasoning: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
     pub stream: bool,
 }
 
@@ -43,6 +51,13 @@ pub enum OpenAiChatStreamEvent {
     ReasoningDelta(String),
     ContentDelta(String),
     ToolCallDelta(ProviderToolCall),
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct OpenAiChatCompletion {
+    pub content: Option<String>,
+    pub tool_calls: Vec<ProviderToolCall>,
+    pub finish_reason: String,
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +246,84 @@ pub fn process_chat_completion_sse_line(
     }
 
     events
+}
+
+pub fn extract_chat_completion_text(body: &serde_json::Value) -> Option<String> {
+    body.get("choices")
+        .and_then(|choices| choices.as_array())
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .map(|content| content.to_string())
+}
+
+pub fn parse_chat_completion(body: &serde_json::Value) -> Result<OpenAiChatCompletion, String> {
+    let choice = body
+        .get("choices")
+        .and_then(|choices| choices.as_array())
+        .and_then(|choices| choices.first())
+        .ok_or_else(|| "No choices in chat completion response".to_string())?;
+
+    let message = choice
+        .get("message")
+        .ok_or_else(|| "No message in chat completion choice".to_string())?;
+    let finish_reason = choice
+        .get("finish_reason")
+        .and_then(|finish_reason| finish_reason.as_str())
+        .unwrap_or("stop")
+        .to_string();
+    let content = message
+        .get("content")
+        .and_then(|content| content.as_str())
+        .map(|content| content.to_string());
+
+    let mut tool_calls = Vec::new();
+    if let Some(tool_call_values) = message.get("tool_calls").and_then(|calls| calls.as_array()) {
+        for tool_call_value in tool_call_values {
+            let id = tool_call_value
+                .get("id")
+                .and_then(|id| id.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let tool_type = tool_call_value
+                .get("type")
+                .and_then(|tool_type| tool_type.as_str())
+                .unwrap_or("function")
+                .to_string();
+
+            if let Some(function) = tool_call_value.get("function") {
+                let name = function
+                    .get("name")
+                    .and_then(|name| name.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = function
+                    .get("arguments")
+                    .map(|arguments| {
+                        if let Some(arguments) = arguments.as_str() {
+                            arguments.to_string()
+                        } else {
+                            arguments.to_string()
+                        }
+                    })
+                    .unwrap_or_default();
+
+                tool_calls.push(ProviderToolCall {
+                    id,
+                    tool_type,
+                    function: ProviderFunctionCall { name, arguments },
+                    thought_signature: None,
+                });
+            }
+        }
+    }
+
+    Ok(OpenAiChatCompletion {
+        content,
+        tool_calls,
+        finish_reason,
+    })
 }
 
 /// Check if a model supports tool calling

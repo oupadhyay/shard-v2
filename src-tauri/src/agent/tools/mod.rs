@@ -15,14 +15,6 @@
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::integrations::{
-    arxiv::{perform_arxiv_lookup, read_arxiv_paper},
-    finance::perform_finance_lookup,
-    weather::perform_weather_lookup,
-    web_search::perform_web_search,
-    wikipedia::perform_wikipedia_lookup,
-};
-
 use super::Agent;
 
 impl<R: tauri::Runtime> Agent<R> {
@@ -113,150 +105,47 @@ impl<R: tauri::Runtime> Agent<R> {
         args: &Value,
         config: &crate::config::AppConfig,
     ) -> String {
+        if let Some(result) = crate::external_tools::execute_external_tool(
+            &self.http_client,
+            function_name,
+            args,
+            crate::external_tools::ExternalToolConfig {
+                brave_api_key: config.brave_api_key.as_deref(),
+            },
+        )
+        .await
+        {
+            return result;
+        }
+
         match function_name {
-            "get_weather" => {
-                let location = args["location"].as_str().unwrap_or_default();
-                match perform_weather_lookup(&self.http_client, location).await {
-                    Ok(json_str) => json_str,
-                    Err(e) => format!("Error: {}", e),
-                }
-            }
-            "search_wikipedia" => {
-                let query = args["query"].as_str().unwrap_or_default();
-                match perform_wikipedia_lookup(&self.http_client, query).await {
-                    Ok(Some((title, summary, _))) => {
-                        format!("Wikipedia Title: {}\nSummary: {}", title, summary)
-                    }
-                    Ok(None) => "No Wikipedia results found.".to_string(),
-                    Err(e) => format!("Error: {}", e),
-                }
-            }
-            "get_stock_price" => {
-                let symbol = args["symbol"].as_str().unwrap_or_default();
-                perform_finance_lookup(symbol)
-                    .await
-                    .unwrap_or_else(|e| format!("Error: {}", e))
-            }
-            "search_arxiv" => {
-                let query = args["query"].as_str().unwrap_or_default();
-                match perform_arxiv_lookup(&self.http_client, query, 3).await {
-                    Ok(papers) => {
-                        let summaries: Vec<String> = papers
-                            .iter()
-                            .map(|p| {
-                                format!(
-                                    "- [{}] {} ({}): {}",
-                                    p.id,
-                                    p.title,
-                                    p.published_date.as_deref().unwrap_or("?"),
-                                    p.summary
-                                )
-                            })
-                            .collect();
-                        format!("ArXiv Results:\n{}", summaries.join("\n\n"))
-                    }
-                    Err(e) => format!("Error: {}", e),
-                }
-            }
-            "read_arxiv_paper" => {
-                let paper_id = args["paper_id"].as_str().unwrap_or_default();
-                match read_arxiv_paper(&self.http_client, paper_id).await {
-                    Ok(paper) => {
-                        format!(
-                            "# {}\n\n**Abstract:** {}\n\n{}",
-                            paper.title, paper.abstract_text, paper.content
-                        )
-                    }
-                    Err(e) => format!("Error reading paper: {}", e),
-                }
-            }
-            "web_search" => {
-                let query = args["query"].as_str().unwrap_or_default();
-                match perform_web_search(query, config.brave_api_key.as_deref()).await {
-                    Ok(results) => serde_json::to_string(&results).unwrap_or_else(|_| {
-                        "Failed to serialize search results to JSON".to_string()
-                    }),
-                    Err(e) => format!("Error: {}", e),
-                }
-            }
-            "open_url" => {
-                let url = args["url"].as_str().unwrap_or_default();
-                match crate::integrations::browser::read_url(&self.http_client, url).await {
-                    Ok(markdown) => {
-                        format!("Read URL Results for {}:\n\n{}", url, markdown)
-                    }
-                    Err(e) => format!("Error reading URL: {}", e),
-                }
-            }
             "youtube_transcript" => {
                 let video = args["video"].as_str().unwrap_or_default();
-                let video_id = match crate::integrations::youtube::extract_video_id(video) {
-                    Some(id) => id,
-                    None => {
-                        return format!(
-                            "Error: Could not extract a YouTube video ID from '{}'",
-                            video
-                        )
-                    }
-                };
-                match crate::integrations::youtube::fetch_transcript(&self.http_client, &video_id)
+                match crate::external_tools::fetch_youtube_transcript(&self.http_client, video)
                     .await
                 {
-                    Ok(result) => {
-                        let formatted = crate::integrations::youtube::format_transcript(
-                            &result.segments,
-                            result.title.as_deref(),
-                            result.channel.as_deref(),
-                        );
-                        let title_label = result.title.as_deref().unwrap_or(&video_id);
-                        let video_link = format!("https://youtu.be/{}", video_id);
-                        // Truncate very long transcripts to avoid blowing up context,
-                        // but generate a chunked LLM summary of the full content so nothing is lost.
-                        let char_count = formatted.chars().count();
-                        if char_count > 30_000 {
-                            // Find byte offset of the 30,000th character
-                            let truncate_at = formatted
-                                .char_indices()
-                                .nth(30_000)
-                                .map(|(i, _)| i)
-                                .unwrap_or(formatted.len());
-
-                            // Summarize the full transcript via background LLM (chunked for long transcripts)
-                            let summary = self
-                                .summarize_long_transcript(config, &formatted, title_label)
-                                .await;
-
-                            let summary_section = match &summary {
-                                Ok(s) => format!(
-                                    "\n\n--- LLM Summary of Full Video ---\n\n{}\n\n--- End Summary ---",
-                                    s
-                                ),
+                    Ok(transcript) => {
+                        let summary = if transcript.char_count() > 30_000 {
+                            match self
+                                .summarize_long_transcript(
+                                    config,
+                                    &transcript.formatted,
+                                    transcript.title_label(),
+                                )
+                                .await
+                            {
+                                Ok(summary) => Some(summary),
                                 Err(e) => {
                                     log::warn!("[YouTube] Failed to summarize transcript: {}", e);
-                                    String::new()
+                                    None
                                 }
-                            };
-
-                            format!(
-                                "YouTube Transcript — {} ({})\n{} segments, truncated\n\n{}...\n\n[Transcript truncated at ~30,000 chars. Total length: {} chars]{}",
-                                title_label,
-                                video_link,
-                                result.segments.len(),
-                                &formatted[..truncate_at],
-                                char_count,
-                                summary_section,
-                            )
+                            }
                         } else {
-                            format!(
-                                "YouTube Transcript — {} ({})\n{} segments\n\n{}",
-                                title_label,
-                                video_link,
-                                result.segments.len(),
-                                formatted
-                            )
-                        }
+                            None
+                        };
+                        transcript.render(summary.as_deref())
                     }
-                    Err(e) => format!("Error fetching transcript: {}", e),
+                    Err(e) => e,
                 }
             }
             "save_memory" => {

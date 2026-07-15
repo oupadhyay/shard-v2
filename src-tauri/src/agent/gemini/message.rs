@@ -1,9 +1,18 @@
-use crate::agent::provider::{ProviderMessage, ProviderToolDefinition};
+use crate::agent::provider::{
+    ProviderFunctionCall, ProviderMessage, ProviderToolCall, ProviderToolDefinition,
+};
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
 use super::types::*;
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct GeminiToolCompletion {
+    pub content: Option<String>,
+    pub tool_calls: Vec<ProviderToolCall>,
+    pub finish_reason: String,
+}
 
 /// Extract the first model text from a steps-schema Interactions API response.
 /// Concatenates all text items within the first `model_output` step.
@@ -26,6 +35,57 @@ pub fn extract_model_text_from_steps(body: &Value) -> Option<String> {
         }
     }
     None
+}
+
+pub fn extract_interactions_text(body: &Value) -> Option<String> {
+    if let Some(text) = extract_model_text_from_steps(body) {
+        return Some(text);
+    }
+
+    body.get("outputs")
+        .and_then(|outputs| outputs.as_array())
+        .and_then(|outputs| {
+            outputs.iter().find_map(|output| {
+                if output.get("type").and_then(|value| value.as_str()) == Some("text") {
+                    output
+                        .get("text")
+                        .and_then(|text| text.as_str())
+                        .map(|text| text.to_string())
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+pub fn extract_generate_content_text(body: &Value) -> Option<String> {
+    let parts = body
+        .get("candidates")
+        .and_then(|candidates| candidates.as_array())
+        .and_then(|candidates| candidates.first())
+        .and_then(|candidate| candidate.get("content"))
+        .and_then(|content| content.get("parts"))
+        .and_then(|parts| parts.as_array())?;
+
+    let mut text = String::new();
+    for part in parts {
+        if part
+            .get("thought")
+            .and_then(|thought| thought.as_bool())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if let Some(part_text) = part.get("text").and_then(|text| text.as_str()) {
+            text.push_str(part_text);
+        }
+    }
+
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 /// Convert provider-neutral chat history to Gemini API format.
@@ -247,6 +307,115 @@ pub fn construct_interactions_tools(tools: &[ProviderToolDefinition]) -> Vec<Int
             }
         })
         .collect()
+}
+
+pub fn construct_gemini_tools(tools: &[ProviderToolDefinition]) -> Vec<GeminiTool> {
+    let function_declarations = tools
+        .iter()
+        .map(|tool| {
+            let mut parameters = tool.function.parameters.clone();
+            super::schema::normalize_gemini_schema(&mut parameters);
+            GeminiFunctionDefinition {
+                name: tool.function.name.clone(),
+                description: tool.function.description.clone(),
+                parameters,
+            }
+        })
+        .collect();
+
+    vec![GeminiTool {
+        function_declarations,
+    }]
+}
+
+pub fn construct_generate_content_messages(
+    messages: &[ProviderMessage],
+) -> (Vec<GeminiContent>, Option<GeminiContent>) {
+    let mut system_instruction = None;
+    let mut non_system_messages = Vec::new();
+
+    for msg in messages {
+        match msg.role.as_str() {
+            "system" => {
+                system_instruction = Some(GeminiContent {
+                    role: None,
+                    parts: vec![GeminiPart::Text {
+                        text: msg.content.clone().unwrap_or_default(),
+                    }],
+                });
+            }
+            _ => non_system_messages.push(msg.clone()),
+        }
+    }
+
+    (
+        construct_gemini_messages(&non_system_messages),
+        system_instruction,
+    )
+}
+
+pub fn parse_generate_content_completion(body: &Value) -> GeminiToolCompletion {
+    let parts = body
+        .get("candidates")
+        .and_then(|candidates| candidates.as_array())
+        .and_then(|candidates| candidates.first())
+        .and_then(|candidate| candidate.get("content"))
+        .and_then(|content| content.get("parts"))
+        .and_then(|parts| parts.as_array());
+
+    let mut content = String::new();
+    let mut tool_calls = Vec::new();
+    let mut call_counter = 0_u32;
+
+    if let Some(parts) = parts {
+        for part in parts {
+            if part
+                .get("thought")
+                .and_then(|thought| thought.as_bool())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            if let Some(text) = part.get("text").and_then(|text| text.as_str()) {
+                content.push_str(text);
+            }
+
+            if let Some(function_call) = part.get("functionCall") {
+                call_counter += 1;
+                let name = function_call
+                    .get("name")
+                    .and_then(|name| name.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = function_call
+                    .get("args")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}))
+                    .to_string();
+                tool_calls.push(ProviderToolCall {
+                    id: format!("gemini_call_{}", call_counter),
+                    tool_type: "function".to_string(),
+                    function: ProviderFunctionCall { name, arguments },
+                    thought_signature: None,
+                });
+            }
+        }
+    }
+
+    GeminiToolCompletion {
+        content: if content.is_empty() {
+            None
+        } else {
+            Some(content)
+        },
+        finish_reason: if tool_calls.is_empty() {
+            "stop".to_string()
+        } else {
+            "tool_calls".to_string()
+        },
+        tool_calls,
+    }
 }
 
 fn clean_legacy_file_data_text(text: &str) -> String {
