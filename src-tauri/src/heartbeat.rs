@@ -681,7 +681,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
     };
 
     let mut messages = vec![
-        crate::agent::ProviderMessage {
+        crate::llm_provider::ProviderMessage {
             role: "system".to_string(),
             content: Some(system_prompt),
             reasoning: None,
@@ -689,7 +689,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
             tool_call_id: None,
             images: None,
         },
-        crate::agent::ProviderMessage {
+        crate::llm_provider::ProviderMessage {
             role: "user".to_string(),
             content: Some(user_content),
             reasoning: None,
@@ -736,13 +736,13 @@ pub async fn process_heartbeat_turn<R: Runtime>(
         }
 
         // Add assistant message with tool_calls to conversation
-        let provider_tool_calls: Vec<crate::agent::ProviderToolCall> = llm_response
+        let provider_tool_calls: Vec<crate::llm_provider::ProviderToolCall> = llm_response
             .tool_calls
             .iter()
-            .map(|tc| crate::agent::ProviderToolCall {
+            .map(|tc| crate::llm_provider::ProviderToolCall {
                 id: tc.id.clone(),
                 tool_type: "function".to_string(),
-                function: crate::agent::ProviderFunctionCall {
+                function: crate::llm_provider::ProviderFunctionCall {
                     name: tc.name.clone(),
                     arguments: tc.arguments.clone(),
                 },
@@ -750,7 +750,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
             })
             .collect();
 
-        messages.push(crate::agent::ProviderMessage {
+        messages.push(crate::llm_provider::ProviderMessage {
             role: "assistant".to_string(),
             content: llm_response.content.clone(),
             reasoning: None,
@@ -791,7 +791,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
                             msg_id
                         );
                         // Add tool response indicating draft was queued
-                        messages.push(crate::agent::ProviderMessage {
+                        messages.push(crate::llm_provider::ProviderMessage {
                             role: "tool".to_string(),
                             content: Some(format!(
                                 "Action '{}' has been queued for user approval. The user will be notified.",
@@ -805,7 +805,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
                     }
                     Err(e) => {
                         log::error!("[Heartbeat] Failed to create draft: {}", e);
-                        messages.push(crate::agent::ProviderMessage {
+                        messages.push(crate::llm_provider::ProviderMessage {
                             role: "tool".to_string(),
                             content: Some(format!("Error creating draft: {}", e)),
                             reasoning: None,
@@ -827,7 +827,7 @@ pub async fn process_heartbeat_turn<R: Runtime>(
                     tc.name,
                     result.len()
                 );
-                messages.push(crate::agent::ProviderMessage {
+                messages.push(crate::llm_provider::ProviderMessage {
                     role: "tool".to_string(),
                     content: Some(result),
                     reasoning: None,

@@ -1,8 +1,8 @@
-use super::provider::{
+use super::types::{ChatMessage, ToolDefinition};
+use crate::llm_provider::{
     ProviderFunctionCall, ProviderFunctionDefinition, ProviderImage, ProviderMessage,
     ProviderToolCall, ProviderToolDefinition,
 };
-use super::types::{ChatMessage, ToolDefinition};
 
 pub(crate) fn chat_message_to_provider(message: &ChatMessage) -> ProviderMessage {
     ProviderMessage {

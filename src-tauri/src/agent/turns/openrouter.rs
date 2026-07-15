@@ -25,9 +25,9 @@ use super::super::openrouter::{
     process_chat_completion_sse_line, send_chat_completion_request, to_multimodal_messages,
     ChatCompletionRequest, OpenAiChatStreamEvent, OpenAiChatStreamState, OpenAiChatTransportConfig,
 };
-use super::super::provider::ProviderToolDefinition;
 use super::super::types::ChatMessage;
 use super::super::{Agent, TurnContext};
+use crate::llm_provider::ProviderToolDefinition;
 
 impl<R: tauri::Runtime> Agent<R> {
     pub(crate) async fn process_openrouter_turn(

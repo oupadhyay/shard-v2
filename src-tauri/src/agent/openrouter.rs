@@ -7,8 +7,9 @@ use serde::Serialize;
 #[path = "openrouter/provider_tests.rs"]
 mod provider_tests;
 
-use super::provider::{
-    ProviderFunctionCall, ProviderMessage, ProviderToolCall, ProviderToolDefinition,
+use crate::llm_provider::{
+    ProviderChatCompletion, ProviderChatRequest, ProviderFunctionCall, ProviderMessage,
+    ProviderStreamEvent, ProviderToolCall, ProviderToolDefinition,
 };
 
 #[derive(Serialize, Debug)]
@@ -46,19 +47,7 @@ pub struct OpenAiChatStreamState {
     pub tool_calls: Vec<ProviderToolCall>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum OpenAiChatStreamEvent {
-    ReasoningDelta(String),
-    ContentDelta(String),
-    ToolCallDelta(ProviderToolCall),
-}
-
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct OpenAiChatCompletion {
-    pub content: Option<String>,
-    pub tool_calls: Vec<ProviderToolCall>,
-    pub finish_reason: String,
-}
+pub type OpenAiChatStreamEvent = ProviderStreamEvent;
 
 #[derive(Debug, Clone)]
 pub struct OpenAiChatTransportConfig {
@@ -79,6 +68,28 @@ pub async fn send_chat_completion_request<B: serde::Serialize + ?Sized>(
         .json(request)
         .send()
         .await
+}
+
+pub fn build_chat_completion_request(
+    request: &ProviderChatRequest,
+) -> ChatCompletionRequest<Vec<serde_json::Value>> {
+    let use_tools = request.tools.is_some();
+
+    ChatCompletionRequest {
+        model: request.model.clone(),
+        messages: to_multimodal_messages(&request.messages),
+        tools: request.tools.clone(),
+        tool_choice: request
+            .tool_choice
+            .clone()
+            .or_else(|| use_tools.then(|| "auto".to_string())),
+        reasoning_effort: request.options.reasoning_effort.clone(),
+        reasoning: None,
+        include_reasoning: request.options.include_reasoning,
+        temperature: request.options.temperature,
+        max_tokens: request.options.max_output_tokens,
+        stream: request.stream,
+    }
 }
 
 /// Convert chat messages to multimodal API format with image support
@@ -258,7 +269,7 @@ pub fn extract_chat_completion_text(body: &serde_json::Value) -> Option<String> 
         .map(|content| content.to_string())
 }
 
-pub fn parse_chat_completion(body: &serde_json::Value) -> Result<OpenAiChatCompletion, String> {
+pub fn parse_chat_completion(body: &serde_json::Value) -> Result<ProviderChatCompletion, String> {
     let choice = body
         .get("choices")
         .and_then(|choices| choices.as_array())
@@ -319,7 +330,7 @@ pub fn parse_chat_completion(body: &serde_json::Value) -> Result<OpenAiChatCompl
         }
     }
 
-    Ok(OpenAiChatCompletion {
+    Ok(ProviderChatCompletion {
         content,
         tool_calls,
         finish_reason,

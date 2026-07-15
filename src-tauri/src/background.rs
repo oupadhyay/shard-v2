@@ -388,7 +388,7 @@ async fn call_llm_oneshot_inner(
     };
 
     let provider_messages = vec![
-        crate::agent::ProviderMessage {
+        crate::llm_provider::ProviderMessage {
             role: "system".to_string(),
             content: Some(system_prompt.to_string()),
             reasoning: None,
@@ -396,7 +396,7 @@ async fn call_llm_oneshot_inner(
             tool_call_id: None,
             images: None,
         },
-        crate::agent::ProviderMessage {
+        crate::llm_provider::ProviderMessage {
             role: "user".to_string(),
             content: Some(user_message.to_string()),
             reasoning: None,
@@ -405,19 +405,19 @@ async fn call_llm_oneshot_inner(
             images: None,
         },
     ];
-    let messages = crate::agent::to_multimodal_messages(&provider_messages);
-    let request_body = crate::agent::ChatCompletionRequest {
+    let provider_request = crate::llm_provider::ProviderChatRequest {
         model: provider_config.model_id,
-        messages: messages.as_slice(),
+        messages: provider_messages,
         tools: None,
         tool_choice: None,
-        reasoning_effort: None,
-        reasoning: None,
-        include_reasoning: None,
-        temperature: Some(temperature),
-        max_tokens: Some(max_tokens),
+        options: crate::llm_provider::ProviderGenerationOptions {
+            temperature: Some(temperature),
+            max_output_tokens: Some(max_tokens),
+            ..Default::default()
+        },
         stream: false,
     };
+    let request_body = crate::agent::build_chat_completion_request(&provider_request);
 
     let res =
         crate::agent::send_chat_completion_request(http_client, &transport_config, &request_body)
@@ -533,7 +533,7 @@ pub async fn call_llm_with_tools(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,
     model: &str,
-    messages: &[crate::agent::ProviderMessage],
+    messages: &[crate::llm_provider::ProviderMessage],
     tools: &[crate::agent::ToolDefinition],
     max_tokens: u32,
     temperature: f64,
@@ -600,7 +600,7 @@ async fn call_gemini_with_tools(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,
     model: &str,
-    messages: &[crate::agent::ProviderMessage],
+    messages: &[crate::llm_provider::ProviderMessage],
     tools: &[crate::agent::ToolDefinition],
     _max_tokens: u32,
     _temperature: f64,
@@ -613,18 +613,19 @@ async fn call_gemini_with_tools(
         endpoint_url: crate::endpoints::gemini_generate_content(model),
         auth_token: api_key.to_string(),
     };
-    let (contents, system_instruction) =
-        crate::agent::construct_generate_content_messages(messages);
     let provider_tools: Vec<_> = tools
         .iter()
         .map(crate::agent::adapters::provider_tool_definition_from_host)
         .collect();
-    let request_body = crate::agent::GenerateContentRequest {
-        contents,
-        tools: Some(crate::agent::construct_gemini_tools(&provider_tools)),
-        system_instruction,
-        generation_config: None,
+    let provider_request = crate::llm_provider::ProviderChatRequest {
+        model: model.to_string(),
+        messages: messages.to_vec(),
+        tools: Some(provider_tools),
+        tool_choice: None,
+        options: crate::llm_provider::ProviderGenerationOptions::default(),
+        stream: false,
     };
+    let request_body = crate::agent::build_generate_content_request(&provider_request);
 
     let res =
         crate::agent::send_generate_content_request(http_client, &transport_config, &request_body)
@@ -662,7 +663,7 @@ async fn call_openai_with_tools(
     http_client: &reqwest::Client,
     config: &crate::config::AppConfig,
     model: &str,
-    messages: &[crate::agent::ProviderMessage],
+    messages: &[crate::llm_provider::ProviderMessage],
     tools: &[crate::agent::ToolDefinition],
     max_tokens: u32,
     temperature: f64,
@@ -681,19 +682,19 @@ async fn call_openai_with_tools(
         .iter()
         .map(crate::agent::adapters::provider_tool_definition_from_host)
         .collect();
-    let multimodal_messages = crate::agent::to_multimodal_messages(messages);
-    let request_body = crate::agent::ChatCompletionRequest {
+    let provider_request = crate::llm_provider::ProviderChatRequest {
         model: provider_config.model_id,
-        messages: multimodal_messages.as_slice(),
+        messages: messages.to_vec(),
         tools: Some(provider_tools),
         tool_choice: Some("auto".to_string()),
-        reasoning_effort: None,
-        reasoning: None,
-        include_reasoning: None,
-        temperature: Some(temperature),
-        max_tokens: Some(max_tokens),
+        options: crate::llm_provider::ProviderGenerationOptions {
+            temperature: Some(temperature),
+            max_output_tokens: Some(max_tokens),
+            ..Default::default()
+        },
         stream: false,
     };
+    let request_body = crate::agent::build_chat_completion_request(&provider_request);
 
     let res =
         crate::agent::send_chat_completion_request(http_client, &transport_config, &request_body)

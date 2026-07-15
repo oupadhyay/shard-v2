@@ -26,6 +26,7 @@ mod gemini_files;
 pub mod heartbeat;
 mod integrations;
 mod interactions;
+pub mod llm_provider;
 pub mod mcp;
 pub mod memories;
 mod models;

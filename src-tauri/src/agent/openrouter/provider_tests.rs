@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::agent::{
-        has_images, supports_tools, to_multimodal_messages, ProviderFunctionCall, ProviderImage,
-        ProviderMessage, ProviderToolCall,
+    use crate::agent::{has_images, supports_tools, to_multimodal_messages};
+    use crate::llm_provider::{
+        ProviderFunctionCall, ProviderImage, ProviderMessage, ProviderToolCall,
     };
 
     #[test]
