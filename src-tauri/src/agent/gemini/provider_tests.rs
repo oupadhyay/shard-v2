@@ -3,8 +3,10 @@ mod tests {
     use crate::agent::{
         construct_gemini_messages, construct_interactions_input, parse_interactions_sse_line,
         process_interactions_event, AgentEvent, GeminiPart, InteractionDelta, InteractionOutput,
-        InteractionStreamEvent, ProviderFunctionCall, ProviderImage, ProviderMessage,
-        ProviderToolCall,
+        InteractionStreamEvent,
+    };
+    use crate::llm_provider::{
+        ProviderFunctionCall, ProviderImage, ProviderMessage, ProviderToolCall,
     };
     use serde_json::json;
 

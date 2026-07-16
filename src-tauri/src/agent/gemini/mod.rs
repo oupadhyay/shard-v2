@@ -16,10 +16,10 @@ mod types;
 mod provider_tests;
 
 pub use message::{
-    construct_gemini_messages, construct_gemini_tools, construct_generate_content_messages,
-    construct_interactions_input, construct_interactions_tools, extract_generate_content_text,
-    extract_interactions_text, extract_model_text_from_steps, parse_generate_content_completion,
-    GeminiToolCompletion,
+    build_generate_content_request, construct_gemini_messages, construct_gemini_tools,
+    construct_generate_content_messages, construct_interactions_input,
+    construct_interactions_tools, extract_generate_content_text, extract_interactions_text,
+    extract_model_text_from_steps, parse_generate_content_completion,
 };
 #[cfg(test)]
 pub(crate) use schema::normalize_gemini_schema;

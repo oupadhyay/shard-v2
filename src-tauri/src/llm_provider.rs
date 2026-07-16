@@ -61,3 +61,46 @@ pub struct ProviderFunctionDefinition {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strict: Option<bool>,
 }
+
+/// Provider-neutral generation knobs accepted by provider adapters.
+///
+/// Individual providers may ignore fields they do not support; host code owns
+/// policy decisions about which options to set for a given workflow.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProviderGenerationOptions {
+    pub temperature: Option<f64>,
+    pub max_output_tokens: Option<u32>,
+    pub reasoning_effort: Option<String>,
+    pub include_reasoning: Option<bool>,
+    pub thinking_level: Option<String>,
+    pub thinking_summaries: Option<String>,
+}
+
+/// Provider-neutral request shape for one-shot or streaming chat-style calls.
+///
+/// This is the intended public contract for an extracted provider crate: host
+/// code supplies messages, tools, model id, and options without exposing
+/// persisted host chat types or Tauri state to provider implementations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderChatRequest {
+    pub model: String,
+    pub messages: Vec<ProviderMessage>,
+    pub tools: Option<Vec<ProviderToolDefinition>>,
+    pub tool_choice: Option<String>,
+    pub options: ProviderGenerationOptions,
+    pub stream: bool,
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ProviderChatCompletion {
+    pub content: Option<String>,
+    pub tool_calls: Vec<ProviderToolCall>,
+    pub finish_reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProviderStreamEvent {
+    ReasoningDelta(String),
+    ContentDelta(String),
+    ToolCallDelta(ProviderToolCall),
+}

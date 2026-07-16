@@ -150,7 +150,8 @@ mod tests {
 
     #[test]
     fn test_construct_gemini_messages() {
-        use crate::agent::{construct_gemini_messages, GeminiPart, ProviderMessage};
+        use crate::agent::{construct_gemini_messages, GeminiPart};
+        use crate::llm_provider::ProviderMessage;
 
         let history = vec![
             ProviderMessage {

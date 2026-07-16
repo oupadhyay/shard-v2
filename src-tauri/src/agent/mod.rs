@@ -29,7 +29,6 @@ pub mod hooks;
 mod host;
 pub(crate) mod openrouter;
 mod process;
-mod provider;
 mod research;
 mod retry;
 mod state;
@@ -39,30 +38,27 @@ mod types;
 mod youtube_summary;
 
 pub use gemini::{
-    construct_gemini_messages, construct_gemini_tools, construct_generate_content_messages,
-    construct_interactions_input, construct_interactions_tools, extract_generate_content_text,
-    extract_interactions_text, extract_model_text_from_steps, parse_gemini_chunk,
-    parse_generate_content_completion, parse_interactions_sse_line, process_interactions_event,
-    send_generate_content_request, send_interactions_request, AgentEvent, GeminiCandidate,
-    GeminiContent, GeminiFileData, GeminiFunctionCall, GeminiFunctionCallWithSignature,
-    GeminiFunctionDefinition, GeminiFunctionResponse, GeminiGenerateContentTransportConfig,
-    GeminiInteractionsTransportConfig, GeminiPart, GeminiTool, GeminiToolCompletion,
-    GenerateContentRequest, GenerateContentResponse, GenerationConfig, InteractionContentStart,
-    InteractionDelta, InteractionDeltaSummaryContent, InteractionFunctionResult, InteractionOutput,
+    build_generate_content_request, construct_gemini_messages, construct_gemini_tools,
+    construct_generate_content_messages, construct_interactions_input,
+    construct_interactions_tools, extract_generate_content_text, extract_interactions_text,
+    extract_model_text_from_steps, parse_gemini_chunk, parse_generate_content_completion,
+    parse_interactions_sse_line, process_interactions_event, send_generate_content_request,
+    send_interactions_request, AgentEvent, GeminiCandidate, GeminiContent, GeminiFileData,
+    GeminiFunctionCall, GeminiFunctionCallWithSignature, GeminiFunctionDefinition,
+    GeminiFunctionResponse, GeminiGenerateContentTransportConfig,
+    GeminiInteractionsTransportConfig, GeminiPart, GeminiTool, GenerateContentRequest,
+    GenerateContentResponse, GenerationConfig, InteractionContentStart, InteractionDelta,
+    InteractionDeltaSummaryContent, InteractionFunctionResult, InteractionOutput,
     InteractionStreamEvent, InteractionsGenerationConfig, InteractionsRequest,
     InteractionsResponse, InteractionsTool, ThinkingConfig, GEMINI_API_REVISION,
 };
 pub use host::Agent;
 pub(crate) use host::TurnContext;
 pub use openrouter::{
-    extract_chat_completion_text, has_images, parse_chat_completion,
+    build_chat_completion_request, extract_chat_completion_text, has_images, parse_chat_completion,
     process_chat_completion_sse_line, send_chat_completion_request, supports_tools,
-    to_multimodal_messages, ChatCompletionRequest, OpenAiChatCompletion, OpenAiChatStreamEvent,
-    OpenAiChatStreamState, OpenAiChatTransportConfig, ReasoningConfig,
-};
-pub use provider::{
-    ProviderFunctionCall, ProviderFunctionDefinition, ProviderImage, ProviderMessage,
-    ProviderToolCall, ProviderToolDefinition,
+    to_multimodal_messages, ChatCompletionRequest, OpenAiChatStreamEvent, OpenAiChatStreamState,
+    OpenAiChatTransportConfig, ReasoningConfig,
 };
 pub use types::{
     ChatMessage, FunctionCall, FunctionDefinition, ImageAttachment, PersistedChatState,

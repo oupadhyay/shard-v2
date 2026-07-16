@@ -1,18 +1,12 @@
-use crate::agent::provider::{
-    ProviderFunctionCall, ProviderMessage, ProviderToolCall, ProviderToolDefinition,
+use crate::llm_provider::{
+    ProviderChatCompletion, ProviderChatRequest, ProviderFunctionCall, ProviderMessage,
+    ProviderToolCall, ProviderToolDefinition,
 };
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
 use super::types::*;
-
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct GeminiToolCompletion {
-    pub content: Option<String>,
-    pub tool_calls: Vec<ProviderToolCall>,
-    pub finish_reason: String,
-}
 
 /// Extract the first model text from a steps-schema Interactions API response.
 /// Concatenates all text items within the first `model_output` step.
@@ -354,7 +348,18 @@ pub fn construct_generate_content_messages(
     )
 }
 
-pub fn parse_generate_content_completion(body: &Value) -> GeminiToolCompletion {
+pub fn build_generate_content_request(request: &ProviderChatRequest) -> GenerateContentRequest {
+    let (contents, system_instruction) = construct_generate_content_messages(&request.messages);
+
+    GenerateContentRequest {
+        contents,
+        tools: request.tools.as_deref().map(construct_gemini_tools),
+        system_instruction,
+        generation_config: None,
+    }
+}
+
+pub fn parse_generate_content_completion(body: &Value) -> ProviderChatCompletion {
     let parts = body
         .get("candidates")
         .and_then(|candidates| candidates.as_array())
@@ -403,7 +408,7 @@ pub fn parse_generate_content_completion(body: &Value) -> GeminiToolCompletion {
         }
     }
 
-    GeminiToolCompletion {
+    ProviderChatCompletion {
         content: if content.is_empty() {
             None
         } else {
