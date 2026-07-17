@@ -1,8 +1,9 @@
-use super::types::{ChatMessage, ToolDefinition};
+use super::types::ChatMessage;
 use crate::llm_provider::{
     ProviderFunctionCall, ProviderFunctionDefinition, ProviderImage, ProviderMessage,
     ProviderToolCall, ProviderToolDefinition,
 };
+use crate::tool_api::ToolDefinition;
 
 pub(crate) fn chat_message_to_provider(message: &ChatMessage) -> ProviderMessage {
     ProviderMessage {
@@ -72,9 +73,8 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::agent::types::{
-        FunctionCall, FunctionDefinition, ImageAttachment, ToolCall, ToolDefinition,
-    };
+    use crate::agent::types::{FunctionCall, ImageAttachment, ToolCall};
+    use crate::tool_api::{FunctionDefinition, ToolDefinition};
 
     #[test]
     fn chat_message_to_provider_preserves_boundary_fields() {

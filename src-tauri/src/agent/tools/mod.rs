@@ -107,8 +107,10 @@ impl<R: tauri::Runtime> Agent<R> {
     ) -> String {
         if let Some(result) = crate::external_tools::execute_external_tool(
             &self.http_client,
-            function_name,
-            args,
+            crate::tool_api::ToolInvocation {
+                name: function_name,
+                args,
+            },
             crate::external_tools::ExternalToolConfig {
                 brave_api_key: config.brave_api_key.as_deref(),
             },

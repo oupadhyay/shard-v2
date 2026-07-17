@@ -2,7 +2,6 @@
  * Type definitions for Agent module
  */
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 // ============================================================================
 // Chat Message Types
@@ -99,23 +98,6 @@ pub struct ToolCall {
 pub struct FunctionCall {
     pub name: String,
     pub arguments: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ToolDefinition {
-    #[serde(rename = "type")]
-    pub tool_type: String,
-    pub function: FunctionDefinition,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct FunctionDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters: Value,
-    /// Required by Groq for proper tool calling
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub strict: Option<bool>,
 }
 
 // ============================================================================

@@ -1,4 +1,10 @@
-// Gemini Files API integration for native image support
+//! Stateless Gemini Files API transport helpers.
+//!
+//! Ownership split: the Gemini/provider API crate should own this resumable
+//! upload/delete protocol eventually. The Shard host remains responsible for
+//! deciding when to upload images, storing returned file URIs in chat history,
+//! and deleting uploaded files during session cleanup.
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

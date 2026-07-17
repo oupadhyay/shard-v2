@@ -5,7 +5,7 @@
 //! that supports Hermes-style toolset grouping, parallel-safety hints, and
 //! per-tool cache TTL configuration.
 
-use crate::agent::{FunctionDefinition, ToolDefinition};
+use crate::tool_api::{FunctionDefinition, ToolDefinition};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 

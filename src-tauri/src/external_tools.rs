@@ -4,8 +4,6 @@
 //! personas, memory, and persistence. This module owns only network/API-backed
 //! tool behavior so it can move to a separate external-tools crate later.
 
-use serde_json::Value;
-
 use crate::integrations::{
     arxiv::{perform_arxiv_lookup, read_arxiv_paper},
     finance::perform_finance_lookup,
@@ -13,6 +11,7 @@ use crate::integrations::{
     web_search::perform_web_search,
     wikipedia::perform_wikipedia_lookup,
 };
+use crate::tool_api::ToolInvocation;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExternalToolConfig<'a> {
@@ -86,20 +85,19 @@ impl YoutubeTranscriptToolOutput {
 
 pub async fn execute_external_tool(
     http_client: &reqwest::Client,
-    function_name: &str,
-    args: &Value,
+    invocation: ToolInvocation<'_>,
     config: ExternalToolConfig<'_>,
 ) -> Option<String> {
-    match function_name {
+    match invocation.name {
         "get_weather" => {
-            let location = args["location"].as_str().unwrap_or_default();
+            let location = invocation.args["location"].as_str().unwrap_or_default();
             Some(match perform_weather_lookup(http_client, location).await {
                 Ok(json_str) => json_str,
                 Err(e) => format!("Error: {}", e),
             })
         }
         "search_wikipedia" => {
-            let query = args["query"].as_str().unwrap_or_default();
+            let query = invocation.args["query"].as_str().unwrap_or_default();
             Some(match perform_wikipedia_lookup(http_client, query).await {
                 Ok(Some((title, summary, _))) => {
                     format!("Wikipedia Title: {}\nSummary: {}", title, summary)
@@ -109,7 +107,7 @@ pub async fn execute_external_tool(
             })
         }
         "get_stock_price" => {
-            let symbol = args["symbol"].as_str().unwrap_or_default();
+            let symbol = invocation.args["symbol"].as_str().unwrap_or_default();
             Some(
                 perform_finance_lookup(symbol)
                     .await
@@ -117,7 +115,7 @@ pub async fn execute_external_tool(
             )
         }
         "search_arxiv" => {
-            let query = args["query"].as_str().unwrap_or_default();
+            let query = invocation.args["query"].as_str().unwrap_or_default();
             Some(match perform_arxiv_lookup(http_client, query, 3).await {
                 Ok(papers) => {
                     let summaries: Vec<String> = papers
@@ -138,7 +136,7 @@ pub async fn execute_external_tool(
             })
         }
         "read_arxiv_paper" => {
-            let paper_id = args["paper_id"].as_str().unwrap_or_default();
+            let paper_id = invocation.args["paper_id"].as_str().unwrap_or_default();
             Some(match read_arxiv_paper(http_client, paper_id).await {
                 Ok(paper) => {
                     format!(
@@ -150,7 +148,7 @@ pub async fn execute_external_tool(
             })
         }
         "web_search" => {
-            let query = args["query"].as_str().unwrap_or_default();
+            let query = invocation.args["query"].as_str().unwrap_or_default();
             Some(
                 match perform_web_search(query, config.brave_api_key).await {
                     Ok(results) => serde_json::to_string(&results).unwrap_or_else(|_| {
@@ -161,7 +159,7 @@ pub async fn execute_external_tool(
             )
         }
         "open_url" => {
-            let url = args["url"].as_str().unwrap_or_default();
+            let url = invocation.args["url"].as_str().unwrap_or_default();
             Some(
                 match crate::integrations::browser::read_url(http_client, url).await {
                     Ok(markdown) => format!("Read URL Results for {}:\n\n{}", url, markdown),
