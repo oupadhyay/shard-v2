@@ -534,7 +534,7 @@ pub async fn call_llm_with_tools(
     config: &crate::config::AppConfig,
     model: &str,
     messages: &[crate::llm_provider::ProviderMessage],
-    tools: &[crate::agent::ToolDefinition],
+    tools: &[crate::tool_api::ToolDefinition],
     max_tokens: u32,
     temperature: f64,
 ) -> Result<LlmToolResponse, String> {
@@ -601,7 +601,7 @@ async fn call_gemini_with_tools(
     config: &crate::config::AppConfig,
     model: &str,
     messages: &[crate::llm_provider::ProviderMessage],
-    tools: &[crate::agent::ToolDefinition],
+    tools: &[crate::tool_api::ToolDefinition],
     _max_tokens: u32,
     _temperature: f64,
 ) -> Result<LlmToolResponse, String> {
@@ -664,7 +664,7 @@ async fn call_openai_with_tools(
     config: &crate::config::AppConfig,
     model: &str,
     messages: &[crate::llm_provider::ProviderMessage],
-    tools: &[crate::agent::ToolDefinition],
+    tools: &[crate::tool_api::ToolDefinition],
     max_tokens: u32,
     temperature: f64,
 ) -> Result<LlmToolResponse, String> {

@@ -1,6 +1,10 @@
-/// Vision LLM module - Use Groq or OpenRouter vision models for image understanding
-/// This replaces Tesseract OCR with API-based vision model calls for better
-/// multilingual support and the ability to understand images without text.
+//! Vision fallback orchestration for image understanding.
+//!
+//! Ownership split: this workflow stays in the Shard host because it decides
+//! when non-vision chat models need image-to-text preprocessing, which fallback
+//! models to try, and how to prompt them with user/app context. The underlying
+//! OpenAI-compatible request/transport pieces can later share provider helpers.
+
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 

@@ -930,8 +930,10 @@ async fn execute_safe_tool<R: Runtime>(
 ) -> String {
     if let Some(result) = crate::external_tools::execute_external_tool(
         http_client,
-        tool_name,
-        args,
+        crate::tool_api::ToolInvocation {
+            name: tool_name,
+            args,
+        },
         crate::external_tools::ExternalToolConfig {
             brave_api_key: config.brave_api_key.as_deref(),
         },

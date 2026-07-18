@@ -61,8 +61,7 @@ pub use openrouter::{
     OpenAiChatTransportConfig, ReasoningConfig,
 };
 pub use types::{
-    ChatMessage, FunctionCall, FunctionDefinition, ImageAttachment, PersistedChatState,
-    RetryReason, ToolCall, ToolDefinition,
+    ChatMessage, FunctionCall, ImageAttachment, PersistedChatState, RetryReason, ToolCall,
 };
 
 // Phase 6 refactor — re-export the pure helpers so tests reach them under
