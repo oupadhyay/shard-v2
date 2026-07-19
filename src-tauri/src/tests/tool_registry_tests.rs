@@ -1,6 +1,20 @@
 #[cfg(test)]
 mod tests {
     use crate::tool_registry::ToolRegistry;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_external_tool_adapter_preserves_host_dispatch_fallback() {
+        let result = crate::tool_registry::try_execute_external_tool(
+            &reqwest::Client::new(),
+            &crate::config::AppConfig::default(),
+            "save_memory",
+            &json!({}),
+        )
+        .await;
+
+        assert!(result.is_none());
+    }
 
     #[test]
     fn test_registry_has_all_tools() {

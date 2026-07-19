@@ -928,17 +928,8 @@ async fn execute_safe_tool<R: Runtime>(
     tool_name: &str,
     args: &serde_json::Value,
 ) -> String {
-    if let Some(result) = crate::external_tools::execute_external_tool(
-        http_client,
-        crate::tool_api::ToolInvocation {
-            name: tool_name,
-            args,
-        },
-        crate::external_tools::ExternalToolConfig {
-            brave_api_key: config.brave_api_key.as_deref(),
-        },
-    )
-    .await
+    if let Some(result) =
+        crate::tool_registry::try_execute_external_tool(http_client, config, tool_name, args).await
     {
         return result;
     }
