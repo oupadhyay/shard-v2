@@ -1,12 +1,13 @@
 //! Hermes-style Tool Registry
 //!
-//! Centralizes tool metadata (schema, toolset, caching, parallelism) in one place.
+//! Centralizes host-owned tool metadata (schema, toolset, caching, parallelism)
+//! and the adapter from host config to portable external-tool execution.
 //! Replaces the flat `Vec<ToolDefinition>` in `tools.rs` with a queryable registry
 //! that supports Hermes-style toolset grouping, parallel-safety hints, and
 //! per-tool cache TTL configuration.
 
-use crate::tool_api::{FunctionDefinition, ToolDefinition};
-use serde_json::json;
+use crate::tool_api::{FunctionDefinition, ToolDefinition, ToolInvocation};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
 static REGISTRY: std::sync::OnceLock<ToolRegistry> = std::sync::OnceLock::new();
@@ -14,6 +15,26 @@ static REGISTRY: std::sync::OnceLock<ToolRegistry> = std::sync::OnceLock::new();
 /// Returns a reference to the global singleton `ToolRegistry`.
 pub fn global() -> &'static ToolRegistry {
     REGISTRY.get_or_init(ToolRegistry::new)
+}
+
+/// Adapts host configuration to the host-free external-tool API.
+///
+/// `None` means the invocation is not an external tool and the caller should
+/// continue with its own host-specific dispatch and workflow policy.
+pub(crate) async fn try_execute_external_tool(
+    http_client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    name: &str,
+    args: &Value,
+) -> Option<String> {
+    crate::external_tools::execute_external_tool(
+        http_client,
+        ToolInvocation { name, args },
+        crate::external_tools::ExternalToolConfig {
+            brave_api_key: config.brave_api_key.as_deref(),
+        },
+    )
+    .await
 }
 
 // ============================================================================

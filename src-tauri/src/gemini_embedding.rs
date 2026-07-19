@@ -123,3 +123,79 @@ async fn send_embedding_request(
 
     Ok(body.embedding.values)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn text_embedding_request_wire_shape_is_stable() {
+        let request = EmbeddingRequest {
+            content: EmbeddingContent {
+                parts: vec![EmbeddingPart::Text {
+                    text: "remember this".to_string(),
+                }],
+            },
+            output_dimensionality: Some(768),
+        };
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({
+                "content": {
+                    "parts": [{ "text": "remember this" }]
+                },
+                "outputDimensionality": 768
+            })
+        );
+    }
+
+    #[test]
+    fn multimodal_embedding_request_wire_shape_is_stable() {
+        let request = EmbeddingRequest {
+            content: EmbeddingContent {
+                parts: vec![
+                    EmbeddingPart::Text {
+                        text: "a diagram".to_string(),
+                    },
+                    EmbeddingPart::InlineData {
+                        inline_data: InlineData {
+                            mime_type: "image/png".to_string(),
+                            data: "aW1hZ2U=".to_string(),
+                        },
+                    },
+                ],
+            },
+            output_dimensionality: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({
+                "content": {
+                    "parts": [
+                        { "text": "a diagram" },
+                        {
+                            "inline_data": {
+                                "mime_type": "image/png",
+                                "data": "aW1hZ2U="
+                            }
+                        }
+                    ]
+                },
+                "outputDimensionality": null
+            })
+        );
+    }
+
+    #[test]
+    fn embedding_response_wire_shape_is_stable() {
+        let response: EmbeddingResponse = serde_json::from_value(json!({
+            "embedding": { "values": [0.25, -0.5, 1.0] }
+        }))
+        .unwrap();
+
+        assert_eq!(response.embedding.values, vec![0.25, -0.5, 1.0]);
+    }
+}

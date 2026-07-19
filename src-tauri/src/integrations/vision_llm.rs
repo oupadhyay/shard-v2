@@ -270,23 +270,52 @@ Please analyze the image carefully and provide a helpful response that directly 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn test_vision_content_serialization() {
-        let content = VisionContent::Text {
-            text: "Hello".to_string(),
+    fn openai_vision_request_wire_shape_is_stable() {
+        let request = OpenAIVisionRequest {
+            model: "vision-model".to_string(),
+            messages: vec![VisionMessage {
+                role: "user".to_string(),
+                content: vec![
+                    VisionContent::Text {
+                        text: "What is shown?".to_string(),
+                    },
+                    VisionContent::ImageUrl {
+                        image_url: ImageUrlPayload {
+                            url: "data:image/png;base64,abc123".to_string(),
+                        },
+                    },
+                ],
+            }],
+            max_completion_tokens: Some(2048),
+            max_tokens: None,
+            temperature: Some(0.7),
         };
-        let json = serde_json::to_string(&content).unwrap();
-        assert!(json.contains("\"type\":\"text\""));
-        assert!(json.contains("\"text\":\"Hello\""));
 
-        let image_content = VisionContent::ImageUrl {
-            image_url: ImageUrlPayload {
-                url: "data:image/png;base64,abc123".to_string(),
-            },
-        };
-        let json = serde_json::to_string(&image_content).unwrap();
-        assert!(json.contains("\"type\":\"image_url\""));
-        assert!(json.contains("\"url\":\"data:image/png;base64,abc123\""));
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({
+                "model": "vision-model",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "What is shown?"
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/png;base64,abc123"
+                            }
+                        }
+                    ]
+                }],
+                "max_completion_tokens": 2048,
+                "temperature": 0.7_f32
+            })
+        );
     }
 }

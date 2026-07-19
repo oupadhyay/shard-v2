@@ -27,6 +27,28 @@ pub struct GeminiFilesDeleteConfig {
     pub auth_token: String,
 }
 
+#[derive(Serialize)]
+struct FileMetadata {
+    display_name: String,
+}
+
+#[derive(Serialize)]
+struct InitialUploadRequest {
+    file: FileMetadata,
+}
+
+#[derive(Deserialize)]
+struct UploadedFile {
+    uri: String,
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+}
+
+#[derive(Deserialize)]
+struct UploadResponse {
+    file: UploadedFile,
+}
+
 /// Uploads an image to the Gemini Files API using the resumable upload protocol.
 ///
 /// Protocol steps:
@@ -51,16 +73,6 @@ pub async fn upload_image_to_gemini_files_api(
     // Step 2: Initial POST to get upload_url
     // We generate a random display name to avoid collisions, though Gemini handles this.
     let display_name = format!("image_{}.png", uuid::Uuid::new_v4());
-
-    #[derive(Serialize)]
-    struct FileMetadata {
-        display_name: String,
-    }
-
-    #[derive(Serialize)]
-    struct InitialUploadRequest {
-        file: FileMetadata,
-    }
 
     let init_response = client
         .post(&config.upload_url)
@@ -112,18 +124,6 @@ pub async fn upload_image_to_gemini_files_api(
     }
 
     // Step 4: Parse response to get file URI
-    #[derive(Deserialize)]
-    struct UploadedFile {
-        uri: String,
-        #[serde(rename = "mimeType")]
-        mime_type: String,
-    }
-
-    #[derive(Deserialize)]
-    struct UploadResponse {
-        file: UploadedFile,
-    }
-
     let response_data: UploadResponse = upload_response
         .json()
         .await
@@ -161,5 +161,52 @@ pub async fn delete_uploaded_gemini_file(
             "Failed to delete Gemini file (HTTP {}): {}",
             status, error_text
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn initial_upload_request_wire_shape_is_stable() {
+        let request = InitialUploadRequest {
+            file: FileMetadata {
+                display_name: "image_test.png".to_string(),
+            },
+        };
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({
+                "file": {
+                    "display_name": "image_test.png"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn upload_response_maps_provider_fields_to_file_uri() {
+        let response: UploadResponse = serde_json::from_value(json!({
+            "file": {
+                "uri": "https://generativelanguage.googleapis.com/v1beta/files/example",
+                "mimeType": "image/png"
+            }
+        }))
+        .unwrap();
+
+        let file_uri = GeminiFileUri {
+            mime_type: response.file.mime_type,
+            file_uri: response.file.uri,
+        };
+        assert_eq!(
+            serde_json::to_value(file_uri).unwrap(),
+            json!({
+                "mimeType": "image/png",
+                "fileUri": "https://generativelanguage.googleapis.com/v1beta/files/example"
+            })
+        );
     }
 }
