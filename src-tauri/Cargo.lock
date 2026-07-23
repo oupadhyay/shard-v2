@@ -7247,7 +7247,6 @@ dependencies = [
  "rmcp",
  "rusqlite",
  "rust-stemmers",
- "scraper",
  "screenshots",
  "serde",
  "serde_json",
@@ -7269,14 +7268,12 @@ dependencies = [
  "tokio-cron-scheduler",
  "toml 0.8.23",
  "unicode-segmentation",
- "urlencoding",
  "uuid 1.18.1",
  "wasmtime",
  "wasmtime-wasi",
  "wikipedia",
  "window-vibrancy",
  "wiremock",
- "yahoo_finance_api",
 ]
 
 [[package]]

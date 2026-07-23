@@ -37,15 +37,12 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["full"] }
 tauri-plugin-log = "2"
 arboard = "3"
-yahoo_finance_api = "2"
 wikipedia = "0.3"
-scraper = "0.19"
 image = "0.25"
 screenshots = "0.6"
 futures-util = "0.3"
 base64 = "0.22"
 uuid = { version = "1.0", features = ["v4"] }
-urlencoding = "2.1"
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1.12.2"
 lazy_static = "1.4"
