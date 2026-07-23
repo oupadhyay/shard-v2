@@ -1,4 +1,3 @@
-use log;
 use reqwest::Url;
 use reqwest::{header, Client};
 use std::time::Duration;

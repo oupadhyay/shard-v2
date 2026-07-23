@@ -1,5 +1,4 @@
-use log;
-use reqwest;
+use reqwest::header;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +30,7 @@ struct BraveResult {
 /// Perform web search using Brave Search API (primary) or DuckDuckGo fallback
 /// If brave_api_key is provided, uses Brave Search first
 pub async fn perform_web_search(
+    client: &reqwest::Client,
     query: &str,
     brave_api_key: Option<&str>,
 ) -> Result<Vec<SearchResult>, String> {
@@ -40,7 +40,7 @@ pub async fn perform_web_search(
     // Try Brave Search first if API key is provided
     if let Some(api_key) = brave_api_key {
         if !api_key.is_empty() {
-            match perform_brave_search(query, api_key).await {
+            match perform_brave_search(client, query, api_key).await {
                 Ok(results) if !results.is_empty() => return Ok(results),
                 Ok(_) => log::warn!("Brave Search returned no results, trying DuckDuckGo fallback"),
                 Err(e) => log::warn!("Brave Search failed: {}, trying DuckDuckGo fallback", e),
@@ -49,17 +49,17 @@ pub async fn perform_web_search(
     }
 
     // Fallback to DuckDuckGo
-    perform_duckduckgo_search(query).await
+    perform_duckduckgo_search(client, query).await
 }
 
 /// Brave Search API (free tier: 2000 queries/month, no payment info required)
 /// Sign up at: https://brave.com/search/api/
-async fn perform_brave_search(query: &str, api_key: &str) -> Result<Vec<SearchResult>, String> {
+async fn perform_brave_search(
+    client: &reqwest::Client,
+    query: &str,
+    api_key: &str,
+) -> Result<Vec<SearchResult>, String> {
     log::info!("Using Brave Search API");
-
-    let client = reqwest::Client::builder()
-        .build()
-        .map_err(|e| format!("Failed to build client: {}", e))?;
 
     let url = format!(
         "https://api.search.brave.com/res/v1/web/search?q={}&count=5",
@@ -102,19 +102,21 @@ async fn perform_brave_search(query: &str, api_key: &str) -> Result<Vec<SearchRe
 }
 
 /// DuckDuckGo HTML scraping fallback
-async fn perform_duckduckgo_search(query: &str) -> Result<Vec<SearchResult>, String> {
+async fn perform_duckduckgo_search(
+    client: &reqwest::Client,
+    query: &str,
+) -> Result<Vec<SearchResult>, String> {
     log::info!("Using DuckDuckGo HTML fallback");
-
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .build()
-        .map_err(|e| format!("Failed to build client: {}", e))?;
 
     let url = "https://html.duckduckgo.com/html/";
     let params = [("q", query)];
 
     let response = client
         .post(url)
+        .header(
+            header::USER_AGENT,
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
         .form(&params)
         .send()
         .await

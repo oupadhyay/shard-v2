@@ -7253,6 +7253,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "shard-external-tools",
  "shard-tool-api",
  "sqlite-vec",
  "stop-words",
@@ -7275,6 +7276,24 @@ dependencies = [
  "wikipedia",
  "window-vibrancy",
  "wiremock",
+ "yahoo_finance_api",
+]
+
+[[package]]
+name = "shard-external-tools"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "quick-xml 0.37.5",
+ "regex",
+ "reqwest 0.12.24",
+ "scraper",
+ "serde",
+ "serde_json",
+ "shard-tool-api",
+ "time 0.3.47",
+ "tokio 1.48.0",
+ "urlencoding",
  "yahoo_finance_api",
 ]
 

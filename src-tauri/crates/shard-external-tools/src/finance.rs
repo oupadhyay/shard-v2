@@ -1,4 +1,3 @@
-use log;
 use time::Duration;
 use yahoo_finance_api as yfa;
 

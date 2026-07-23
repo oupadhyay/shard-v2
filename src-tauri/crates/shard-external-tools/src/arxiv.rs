@@ -1,6 +1,4 @@
-use log;
 use regex::Regex;
-use reqwest;
 use serde::{Deserialize, Serialize};
 
 // ArXiv Atom XML Structs (Ported from legacy)
