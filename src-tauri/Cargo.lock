@@ -7253,6 +7253,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "shard-tool-api",
  "sqlite-vec",
  "stop-words",
  "tauri",
@@ -7275,6 +7276,14 @@ dependencies = [
  "window-vibrancy",
  "wiremock",
  "yahoo_finance_api",
+]
+
+[[package]]
+name = "shard-tool-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

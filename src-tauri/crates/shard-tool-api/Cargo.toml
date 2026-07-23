@@ -1,0 +1,10 @@
+[package]
+name = "shard-tool-api"
+version = "0.1.0"
+description = "Provider-neutral tool API contracts for Shard"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

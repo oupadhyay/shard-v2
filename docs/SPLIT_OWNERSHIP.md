@@ -3,11 +3,26 @@
 This repo is being prepared for future crate/repository splits without moving
 code prematurely. The goal is to make ownership explicit at API boundaries first.
 
+## Dependency direction
+
+The in-repository workspace is the proof stage before code moves to separate
+repositories. Dependencies must remain one-way:
+
+```text
+shard host ────────────────> shard-tool-api
+     ├─────────────────────> shard-external-tools ──> shard-tool-api
+     └─────────────────────> shard-provider ─────────> shard-tool-api
+```
+
+`shard-provider` and `shard-external-tools` must not depend on each other. The
+Shard host is the only layer that composes provider transport, external tools,
+durable state, UI events, and workflow policy.
+
 ## Tooling
 
 | Area | Owner after split | Keep here? | Notes |
 | --- | --- | --- | --- |
-| Tool schema DTOs (`ToolDefinition`, `FunctionDefinition`, invocation shape) | Neutral tool API crate | No | Host, providers, MCP, and external tool executors all share these DTOs. They must not depend on `Agent` or Tauri state. |
+| Tool schema DTOs (`ToolDefinition`, `FunctionDefinition`, invocation shape) | `shard-tool-api` | No | The canonical DTOs live in the workspace crate. The host compatibility module contains re-exports only. Host, providers, MCP, and external tool executors share these types without depending on `Agent` or Tauri state. |
 | Tool registry metadata | Split | Partially | Portable external-tool schemas/catalog entries can move with their implementations. The composed Shard registry stays host-owned because it combines availability, persona filtering, cache TTL, parallelism, and heartbeat draft-gating policy. |
 | External API tools (`web_search`, `open_url`, weather, finance, Wikipedia, arXiv) | External tools crate | Eventually no | These are host-free network calls plus API-key config. Host owns hooks, cache, UI events, and deciding which tools are available. |
 | YouTube transcript fetch/render | External tools crate, summarization host-side | Split | Transcript retrieval/rendering is external-tool code. LLM summarization of very large transcripts stays host/provider orchestration. |
