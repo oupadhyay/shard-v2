@@ -1,5 +1,3 @@
-use log;
-use reqwest;
 use serde::{Deserialize, Serialize};
 
 // --- Open-Meteo Geocoding API Structures ---

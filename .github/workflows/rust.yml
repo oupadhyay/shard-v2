@@ -12,6 +12,22 @@ on:
       - "src-tauri/**"
 
 jobs:
+  external-tools:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: cargo check -p shard-external-tools
+      - run: cargo test -p shard-external-tools
+
   tool-api:
     runs-on: ubuntu-latest
     defaults:

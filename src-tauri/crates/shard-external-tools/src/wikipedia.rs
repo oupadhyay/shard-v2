@@ -1,5 +1,3 @@
-use log;
-use reqwest;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
