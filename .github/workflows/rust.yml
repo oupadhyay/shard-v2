@@ -1,0 +1,54 @@
+name: Rust
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/rust.yml"
+      - "src-tauri/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/rust.yml"
+      - "src-tauri/**"
+
+jobs:
+  tool-api:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: cargo fmt --all --check
+      - run: cargo check -p shard-tool-api
+      - run: cargo test -p shard-tool-api
+
+  shard-lib:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: cargo check -p shard --lib
+      - run: cargo test -p shard --lib tool_api

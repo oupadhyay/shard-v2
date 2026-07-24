@@ -1,3 +1,8 @@
+[workspace]
+resolver = "2"
+members = [".", "crates/shard-tool-api"]
+default-members = ["."]
+
 [package]
 name = "shard"
 version = "0.4.0"
@@ -13,6 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+shard-tool-api = { path = "crates/shard-tool-api" }
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
