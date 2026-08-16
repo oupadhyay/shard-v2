@@ -12,6 +12,65 @@
 use log;
 use reqwest::Client;
 use serde::Deserialize;
+use std::future::Future;
+
+/// Explicit process inputs for YouTube metadata acquisition.
+///
+/// Keeping these values outside the process executor makes the `yt-dlp`
+/// boundary deterministic in tests and lets callers select a bundled binary
+/// or a constrained environment without changing transcript behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct YoutubeProcessConfig {
+    pub executable: String,
+    pub arguments: Vec<String>,
+    pub environment: Vec<(String, String)>,
+    pub timeout: std::time::Duration,
+}
+
+impl Default for YoutubeProcessConfig {
+    fn default() -> Self {
+        // Augment PATH so yt-dlp is found in bundled .app builds where macOS
+        // provides only a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin).
+        let system_path = std::env::var("PATH").unwrap_or_default();
+        let extra = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/sbin",
+        ];
+        let mut parts: Vec<&str> = extra.to_vec();
+        if !system_path.is_empty() {
+            parts.push(&system_path);
+        }
+
+        Self {
+            executable: "yt-dlp".to_string(),
+            arguments: vec![
+                "-j".to_string(),
+                "--no-warnings".to_string(),
+                "--skip-download".to_string(),
+            ],
+            environment: vec![("PATH".to_string(), parts.join(":"))],
+            timeout: std::time::Duration::from_secs(30),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct YtDlpCommand {
+    executable: String,
+    arguments: Vec<String>,
+    environment: Vec<(String, String)>,
+    timeout: std::time::Duration,
+}
+
+#[derive(Debug)]
+struct YtDlpOutput {
+    success: bool,
+    exit_code: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
 
 // ── Video ID extraction ─────────────────────────────────────────────
 
@@ -150,12 +209,16 @@ pub struct TranscriptResult {
 ///
 /// Uses `yt-dlp -j` to get subtitle URLs, then fetches the XML caption track.
 /// Prefers manual English captions, falls back to auto-generated, then first available.
-pub async fn fetch_transcript(client: &Client, video_id: &str) -> Result<TranscriptResult, String> {
+pub async fn fetch_transcript(
+    client: &Client,
+    video_id: &str,
+    process_config: &YoutubeProcessConfig,
+) -> Result<TranscriptResult, String> {
     log::info!("[YouTube] Fetching transcript for video: {}", video_id);
 
     // 1. Run yt-dlp to get video metadata JSON
     let video_url = format!("https://www.youtube.com/watch?v={}", video_id);
-    let metadata = run_ytdlp(&video_url).await?;
+    let metadata = run_ytdlp(&video_url, process_config).await?;
 
     let title = metadata.title.clone();
     let channel = metadata.channel.clone();
@@ -220,27 +283,50 @@ pub async fn fetch_transcript(client: &Client, video_id: &str) -> Result<Transcr
 
 /// Run `yt-dlp -j <url>` and parse the JSON output.
 /// Times out after 30 seconds to prevent indefinite hangs.
-async fn run_ytdlp(video_url: &str) -> Result<YtDlpMetadata, String> {
-    // Augment PATH so yt-dlp is found in bundled .app builds where macOS
-    // provides only a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin).
-    let path_env = {
-        let system_path = std::env::var("PATH").unwrap_or_default();
-        let extra = [
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/opt/homebrew/sbin",
-            "/usr/local/sbin",
-        ];
-        let mut parts: Vec<&str> = extra.to_vec();
-        if !system_path.is_empty() {
-            parts.push(&system_path);
-        }
-        parts.join(":")
-    };
+async fn run_ytdlp(
+    video_url: &str,
+    process_config: &YoutubeProcessConfig,
+) -> Result<YtDlpMetadata, String> {
+    run_ytdlp_with(video_url, process_config, execute_ytdlp).await
+}
 
-    let mut child = tokio::process::Command::new("yt-dlp")
-        .args(["-j", "--no-warnings", "--skip-download", video_url])
-        .env("PATH", &path_env)
+async fn run_ytdlp_with<F, Fut>(
+    video_url: &str,
+    process_config: &YoutubeProcessConfig,
+    execute: F,
+) -> Result<YtDlpMetadata, String>
+where
+    F: FnOnce(YtDlpCommand) -> Fut,
+    Fut: Future<Output = Result<YtDlpOutput, String>>,
+{
+    let mut arguments = process_config.arguments.clone();
+    arguments.push(video_url.to_string());
+    let command = YtDlpCommand {
+        executable: process_config.executable.clone(),
+        arguments,
+        environment: process_config.environment.clone(),
+        timeout: process_config.timeout,
+    };
+    let output = execute(command).await?;
+
+    if !output.success {
+        let stderr_str = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "yt-dlp failed (exit {}): {}",
+            output.exit_code.unwrap_or(-1),
+            stderr_str.trim()
+        ));
+    }
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(&stdout_str)
+        .map_err(|e| format!("Failed to parse yt-dlp JSON output: {}", e))
+}
+
+async fn execute_ytdlp(command: YtDlpCommand) -> Result<YtDlpOutput, String> {
+    let mut child = tokio::process::Command::new(&command.executable)
+        .args(&command.arguments)
+        .envs(command.environment)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -284,30 +370,26 @@ async fn run_ytdlp(video_url: &str) -> Result<YtDlpMetadata, String> {
         ))
     };
 
-    let timeout = std::time::Duration::from_secs(30);
-    let (status, stdout_buf, stderr_buf) = match tokio::time::timeout(timeout, join_fut).await {
+    let (status, stdout, stderr) = match tokio::time::timeout(command.timeout, join_fut).await {
         Err(_) => {
             let _ = child.kill().await;
-            return Err("yt-dlp timed out after 30 seconds".to_string());
+            return Err(format!(
+                "yt-dlp timed out after {} seconds",
+                command.timeout.as_secs()
+            ));
         }
         Ok(Err(e)) => {
             return Err(format!("Failed to run yt-dlp: {}", e));
         }
-        Ok(Ok((status, stdout_buf, stderr_buf))) => (status, stdout_buf, stderr_buf),
+        Ok(Ok((status, stdout, stderr))) => (status, stdout, stderr),
     };
 
-    if !status.success() {
-        let stderr_str = String::from_utf8_lossy(&stderr_buf);
-        return Err(format!(
-            "yt-dlp failed (exit {}): {}",
-            status.code().unwrap_or(-1),
-            stderr_str.trim()
-        ));
-    }
-
-    let stdout_str = String::from_utf8_lossy(&stdout_buf);
-    serde_json::from_str(&stdout_str)
-        .map_err(|e| format!("Failed to parse yt-dlp JSON output: {}", e))
+    Ok(YtDlpOutput {
+        success: status.success(),
+        exit_code: status.code(),
+        stdout,
+        stderr,
+    })
 }
 
 /// Pick the best caption URL from yt-dlp metadata.
@@ -457,6 +539,71 @@ fn html_decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_run_ytdlp_uses_explicit_process_config() {
+        let process_config = YoutubeProcessConfig {
+            executable: "/test/bin/yt-dlp".to_string(),
+            arguments: vec!["--dump-single-json".to_string()],
+            environment: vec![("PATH".to_string(), "/test/bin".to_string())],
+            timeout: std::time::Duration::from_secs(7),
+        };
+
+        let metadata = run_ytdlp_with(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            &process_config,
+            |command| async move {
+                assert_eq!(command.executable, "/test/bin/yt-dlp");
+                assert_eq!(
+                    command.arguments,
+                    [
+                        "--dump-single-json",
+                        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                    ]
+                );
+                assert_eq!(
+                    command.environment,
+                    [("PATH".to_string(), "/test/bin".to_string())]
+                );
+                assert_eq!(command.timeout, std::time::Duration::from_secs(7));
+
+                Ok(YtDlpOutput {
+                    success: true,
+                    exit_code: Some(0),
+                    stdout: br#"{
+                        "title": "Test Video",
+                        "channel": "Test Channel",
+                        "subtitles": {},
+                        "automatic_captions": {}
+                    }"#
+                    .to_vec(),
+                    stderr: Vec::new(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(metadata.title.as_deref(), Some("Test Video"));
+        assert_eq!(metadata.channel.as_deref(), Some("Test Channel"));
+    }
+
+    #[test]
+    fn test_default_process_config_preserves_ytdlp_contract() {
+        let process_config = YoutubeProcessConfig::default();
+
+        assert_eq!(process_config.executable, "yt-dlp");
+        assert_eq!(
+            process_config.arguments,
+            ["-j", "--no-warnings", "--skip-download"]
+        );
+        assert_eq!(process_config.environment.len(), 1);
+        assert_eq!(process_config.environment[0].0, "PATH");
+        assert!(process_config.environment[0]
+            .1
+            .starts_with("/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/sbin:/usr/local/sbin"));
+        assert_eq!(process_config.timeout, std::time::Duration::from_secs(30));
+    }
 
     #[test]
     fn test_extract_video_id_watch_url() {

@@ -119,8 +119,13 @@ impl<R: tauri::Runtime> Agent<R> {
         match function_name {
             "youtube_transcript" => {
                 let video = args["video"].as_str().unwrap_or_default();
-                match crate::external_tools::fetch_youtube_transcript(&self.http_client, video)
-                    .await
+                let process_config = crate::external_tools::YoutubeProcessConfig::default();
+                match crate::external_tools::fetch_youtube_transcript(
+                    &self.http_client,
+                    video,
+                    &process_config,
+                )
+                .await
                 {
                     Ok(transcript) => {
                         let summary = if transcript.char_count() > 30_000 {
