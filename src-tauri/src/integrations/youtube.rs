@@ -31,17 +31,22 @@ impl Default for YoutubeProcessConfig {
     fn default() -> Self {
         // Augment PATH so yt-dlp is found in bundled .app builds where macOS
         // provides only a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin).
-        let system_path = std::env::var("PATH").unwrap_or_default();
+        let system_path = std::env::var_os("PATH");
         let extra = [
             "/opt/homebrew/bin",
             "/usr/local/bin",
             "/opt/homebrew/sbin",
             "/usr/local/sbin",
         ];
-        let mut parts: Vec<&str> = extra.to_vec();
-        if !system_path.is_empty() {
-            parts.push(&system_path);
+        let mut parts: Vec<std::path::PathBuf> =
+            extra.into_iter().map(std::path::PathBuf::from).collect();
+        if let Some(system_path) = &system_path {
+            parts.extend(std::env::split_paths(system_path));
         }
+        let path_env = std::env::join_paths(parts)
+            .unwrap_or_else(|_| system_path.unwrap_or_default())
+            .to_string_lossy()
+            .into_owned();
 
         Self {
             executable: "yt-dlp".to_string(),
@@ -50,7 +55,7 @@ impl Default for YoutubeProcessConfig {
                 "--no-warnings".to_string(),
                 "--skip-download".to_string(),
             ],
-            environment: vec![("PATH".to_string(), parts.join(":"))],
+            environment: vec![("PATH".to_string(), path_env)],
             timeout: std::time::Duration::from_secs(30),
         }
     }
@@ -324,7 +329,8 @@ where
 }
 
 async fn execute_ytdlp(command: YtDlpCommand) -> Result<YtDlpOutput, String> {
-    let mut child = tokio::process::Command::new(&command.executable)
+    let executable = command.executable.clone();
+    let mut child = tokio::process::Command::new(&executable)
         .args(&command.arguments)
         .envs(command.environment)
         .stdout(std::process::Stdio::piped())
@@ -332,7 +338,10 @@ async fn execute_ytdlp(command: YtDlpCommand) -> Result<YtDlpOutput, String> {
         .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                "yt-dlp is not installed. Install it with: brew install yt-dlp (macOS) or pip install yt-dlp".to_string()
+                format!(
+                    "YouTube metadata executable '{}' was not found. Install yt-dlp with: brew install yt-dlp (macOS) or pip install yt-dlp, or update YoutubeProcessConfig.executable.",
+                    executable
+                )
             } else {
                 format!("Failed to run yt-dlp: {}", e)
             }
@@ -556,9 +565,9 @@ mod tests {
                 assert_eq!(command.executable, "/test/bin/yt-dlp");
                 assert_eq!(
                     command.arguments,
-                    [
-                        "--dump-single-json",
-                        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                    vec![
+                        "--dump-single-json".to_string(),
+                        "https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_string()
                     ]
                 );
                 assert_eq!(
@@ -595,14 +604,50 @@ mod tests {
         assert_eq!(process_config.executable, "yt-dlp");
         assert_eq!(
             process_config.arguments,
-            ["-j", "--no-warnings", "--skip-download"]
+            vec![
+                "-j".to_string(),
+                "--no-warnings".to_string(),
+                "--skip-download".to_string()
+            ]
         );
         assert_eq!(process_config.environment.len(), 1);
         assert_eq!(process_config.environment[0].0, "PATH");
-        assert!(process_config.environment[0]
-            .1
-            .starts_with("/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/sbin:/usr/local/sbin"));
+        assert_eq!(
+            std::env::split_paths(std::ffi::OsStr::new(&process_config.environment[0].1))
+                .take(4)
+                .collect::<Vec<_>>(),
+            vec![
+                std::path::PathBuf::from("/opt/homebrew/bin"),
+                std::path::PathBuf::from("/usr/local/bin"),
+                std::path::PathBuf::from("/opt/homebrew/sbin"),
+                std::path::PathBuf::from("/usr/local/sbin"),
+            ]
+        );
         assert_eq!(process_config.timeout, std::time::Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn test_execute_ytdlp_reports_configured_missing_executable() {
+        let executable = std::env::temp_dir()
+            .join(format!("shard-missing-yt-dlp-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let command = YtDlpCommand {
+            executable: executable.clone(),
+            arguments: Vec::new(),
+            environment: Vec::new(),
+            timeout: std::time::Duration::from_secs(1),
+        };
+
+        let error = execute_ytdlp(command).await.unwrap_err();
+
+        assert_eq!(
+            error,
+            format!(
+                "YouTube metadata executable '{}' was not found. Install yt-dlp with: brew install yt-dlp (macOS) or pip install yt-dlp, or update YoutubeProcessConfig.executable.",
+                executable
+            )
+        );
     }
 
     #[test]
