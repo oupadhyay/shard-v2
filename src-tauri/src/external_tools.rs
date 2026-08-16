@@ -4,6 +4,7 @@
 //! personas, memory, persistence, and YouTube summarization/presentation. HTTP
 //! API-backed tool execution is re-exported from `shard-external-tools`.
 
+pub use crate::integrations::youtube::YoutubeProcessConfig;
 pub use shard_external_tools::{execute_external_tool, ExternalToolConfig};
 
 #[derive(Debug, Clone)]
@@ -74,6 +75,7 @@ impl YoutubeTranscriptToolOutput {
 pub async fn fetch_youtube_transcript(
     http_client: &reqwest::Client,
     video: &str,
+    process_config: &YoutubeProcessConfig,
 ) -> Result<YoutubeTranscriptToolOutput, String> {
     let video_id = crate::integrations::youtube::extract_video_id(video).ok_or_else(|| {
         format!(
@@ -82,7 +84,9 @@ pub async fn fetch_youtube_transcript(
         )
     })?;
 
-    let result = crate::integrations::youtube::fetch_transcript(http_client, &video_id).await?;
+    let result =
+        crate::integrations::youtube::fetch_transcript(http_client, &video_id, process_config)
+            .await?;
     let formatted = crate::integrations::youtube::format_transcript(
         &result.segments,
         result.title.as_deref(),
