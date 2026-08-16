@@ -10,6 +10,7 @@ mod finance;
 mod weather;
 mod web_search;
 mod wikipedia;
+mod youtube;
 
 use arxiv::{perform_arxiv_lookup, read_arxiv_paper};
 use finance::perform_finance_lookup;
@@ -17,6 +18,7 @@ use shard_tool_api::ToolInvocation;
 use weather::perform_weather_lookup;
 use web_search::perform_web_search;
 use wikipedia::perform_wikipedia_lookup;
+pub use youtube::{fetch_youtube_transcript, YoutubeProcessConfig, YoutubeTranscriptToolOutput};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExternalToolConfig<'a> {
@@ -25,9 +27,9 @@ pub struct ExternalToolConfig<'a> {
 
 /// Execute an HTTP-backed external tool.
 ///
-/// `None` means this crate does not own the invocation and the host should
-/// continue its own dispatch. In particular, YouTube remains host-owned until
-/// its process configuration and presentation policy are separated.
+/// `None` means the host must continue its own dispatch. YouTube uses the
+/// structured [`fetch_youtube_transcript`] API instead because the host
+/// composes optional LLM summarization before rendering the final result.
 pub async fn execute_external_tool(
     http_client: &reqwest::Client,
     invocation: ToolInvocation<'_>,
@@ -137,7 +139,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn youtube_remains_outside_shared_dispatch() {
+    async fn youtube_requires_host_summary_composition() {
         assert!(dispatch("youtube_transcript").await.is_none());
     }
 }
