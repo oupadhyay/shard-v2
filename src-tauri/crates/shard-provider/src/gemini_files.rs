@@ -68,7 +68,23 @@ pub async fn upload_image_to_gemini_files_api(
         .map_err(|e| format!("Failed to decode base64 image: {}", e))?;
     let num_bytes = image_bytes.len();
 
-    let display_name = format!("image_{}.png", uuid::Uuid::new_v4());
+    let extension = match mime_type {
+        "image/avif" => Some("avif"),
+        "image/bmp" => Some("bmp"),
+        "image/gif" => Some("gif"),
+        "image/heic" => Some("heic"),
+        "image/heif" => Some("heif"),
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/tiff" => Some("tiff"),
+        "image/webp" => Some("webp"),
+        _ => None,
+    };
+    let image_id = uuid::Uuid::new_v4();
+    let display_name = match extension {
+        Some(extension) => format!("image_{image_id}.{extension}"),
+        None => format!("image_{image_id}"),
+    };
 
     let init_response = client
         .post(&config.upload_url)
@@ -132,10 +148,16 @@ pub async fn delete_uploaded_gemini_file(
     config: &GeminiFilesDeleteConfig,
 ) -> Result<(), String> {
     let file_name = file_uri
+        .trim_end_matches('/')
         .rsplit('/')
         .next()
+        .filter(|file_name| !file_name.is_empty())
         .ok_or_else(|| "Gemini file URI did not contain a file name".to_string())?;
-    let delete_url = format!("{}/{}", config.files_base_url, file_name);
+    let delete_url = format!(
+        "{}/{}",
+        config.files_base_url.trim_end_matches('/'),
+        file_name
+    );
     let response = client
         .delete(delete_url)
         .header("X-Goog-Api-Key", &config.auth_token)
@@ -213,7 +235,7 @@ mod tests {
             .and(header("x-goog-upload-protocol", "resumable"))
             .and(header("x-goog-upload-command", "start"))
             .and(header("x-goog-upload-header-content-length", "4"))
-            .and(header("x-goog-upload-header-content-type", "image/png"))
+            .and(header("x-goog-upload-header-content-type", "image/jpeg"))
             .and(header("content-type", "application/json"))
             .respond_with(ResponseTemplate::new(200).insert_header("x-goog-upload-url", upload_url))
             .expect(1)
@@ -224,7 +246,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "file": {
                     "uri": "https://generativelanguage.googleapis.com/v1beta/files/uploaded",
-                    "mimeType": "image/png"
+                    "mimeType": "image/jpeg"
                 }
             })))
             .expect(1)
@@ -234,7 +256,7 @@ mod tests {
         let result = upload_image_to_gemini_files_api(
             &reqwest::Client::new(),
             "AQIDBA==",
-            "image/png",
+            "image/jpeg",
             &GeminiFilesUploadConfig {
                 upload_url: format!("{}/upload/v1beta/files", server.uri()),
                 auth_token: "test-gemini".to_string(),
@@ -243,7 +265,7 @@ mod tests {
         .await
         .expect("upload should succeed");
 
-        assert_eq!(result.mime_type, "image/png");
+        assert_eq!(result.mime_type, "image/jpeg");
         assert_eq!(
             result.file_uri,
             "https://generativelanguage.googleapis.com/v1beta/files/uploaded"
@@ -253,7 +275,7 @@ mod tests {
         let initial_body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
         let display_name = initial_body["file"]["display_name"].as_str().unwrap();
         assert!(display_name.starts_with("image_"));
-        assert!(display_name.ends_with(".png"));
+        assert!(display_name.ends_with(".jpg"));
         assert_eq!(requests[1].headers["content-length"], "4");
         assert_eq!(requests[1].headers["x-goog-upload-offset"], "0");
         assert_eq!(
@@ -276,9 +298,9 @@ mod tests {
 
         delete_uploaded_gemini_file(
             &reqwest::Client::new(),
-            "https://generativelanguage.googleapis.com/v1beta/files/uploaded",
+            "https://generativelanguage.googleapis.com/v1beta/files/uploaded/",
             &GeminiFilesDeleteConfig {
-                files_base_url: format!("{}/v1beta/files", server.uri()),
+                files_base_url: format!("{}/v1beta/files/", server.uri()),
                 auth_token: "test-gemini".to_string(),
             },
         )

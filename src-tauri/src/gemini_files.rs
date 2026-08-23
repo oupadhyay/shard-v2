@@ -3,7 +3,10 @@
 //! Transport and wire contracts live in `shard-provider`; the Shard host owns
 //! upload routing, chat-history URI persistence, and cleanup policy.
 
+// This type is part of the host module's compatibility surface even though
+// current in-tree callers only infer it as the upload function's return type.
+#[allow(unused_imports)]
 pub use shard_provider::gemini_files::{
-    delete_uploaded_gemini_file, upload_image_to_gemini_files_api, GeminiFilesDeleteConfig,
-    GeminiFilesUploadConfig,
+    delete_uploaded_gemini_file, upload_image_to_gemini_files_api, GeminiFileUri,
+    GeminiFilesDeleteConfig, GeminiFilesUploadConfig,
 };
