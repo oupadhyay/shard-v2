@@ -7304,7 +7304,6 @@ dependencies = [
  "log",
  "objc",
  "ocr-rs",
- "quick-xml 0.37.5",
  "rand 0.8.5",
  "readability",
  "regex",
@@ -7356,6 +7355,7 @@ dependencies = [
  "time 0.3.47",
  "tokio 1.48.0",
  "urlencoding",
+ "wiremock",
  "yahoo_finance_api",
 ]
 

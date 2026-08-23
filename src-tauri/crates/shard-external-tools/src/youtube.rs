@@ -9,7 +9,6 @@
  *   4. Fetch the XML transcript from the caption track URL (srv1 format)
  *   5. Parse XML into timestamped text segments
  */
-use log;
 use reqwest::Client;
 use serde::Deserialize;
 use std::future::Future;
@@ -194,36 +193,151 @@ struct TranscriptSegment {
 
 /// A single transcript segment with timing info.
 #[derive(Debug, Clone)]
-pub struct TimedSegment {
-    pub start_secs: f64,
-    pub duration_secs: f64,
-    pub text: String,
+struct TimedSegment {
+    start_secs: f64,
+    duration_secs: f64,
+    text: String,
 }
 
 /// Result of fetching a transcript, including video metadata.
 #[derive(Debug)]
-pub struct TranscriptResult {
+struct TranscriptResult {
+    title: Option<String>,
+    channel: Option<String>,
+    segments: Vec<TimedSegment>,
+}
+
+/// Structured transcript data returned to the host before optional LLM
+/// summarization is composed into the final rendered tool result.
+#[derive(Debug, Clone)]
+pub struct YoutubeTranscriptToolOutput {
+    pub video_id: String,
+    pub video_link: String,
     pub title: Option<String>,
     pub channel: Option<String>,
-    pub segments: Vec<TimedSegment>,
+    pub segment_count: usize,
+    pub formatted: String,
+}
+
+impl YoutubeTranscriptToolOutput {
+    pub fn title_label(&self) -> &str {
+        self.title.as_deref().unwrap_or(&self.video_id)
+    }
+
+    fn source_label(&self) -> String {
+        match self.channel.as_deref() {
+            Some(channel) => format!("{} — {}", self.title_label(), channel),
+            None => self.title_label().to_string(),
+        }
+    }
+
+    pub fn char_count(&self) -> usize {
+        self.formatted.chars().count()
+    }
+
+    pub fn render(&self, summary: Option<&str>) -> String {
+        let char_count = self.char_count();
+        if char_count > 30_000 {
+            let truncate_at = self
+                .formatted
+                .char_indices()
+                .nth(30_000)
+                .map(|(i, _)| i)
+                .unwrap_or(self.formatted.len());
+            let summary_section = summary
+                .map(|summary| {
+                    format!(
+                        "\n\n--- LLM Summary of Full Video ---\n\n{}\n\n--- End Summary ---",
+                        summary
+                    )
+                })
+                .unwrap_or_default();
+
+            format!(
+                "YouTube Transcript — {} ({})\n{} segments, truncated\n\n{}...\n\n[Transcript truncated at ~30,000 chars. Total length: {} chars]{}",
+                self.source_label(),
+                self.video_link,
+                self.segment_count,
+                &self.formatted[..truncate_at],
+                char_count,
+                summary_section,
+            )
+        } else {
+            format!(
+                "YouTube Transcript — {} ({})\n{} segments\n\n{}",
+                self.source_label(),
+                self.video_link,
+                self.segment_count,
+                self.formatted
+            )
+        }
+    }
 }
 
 // ── Core logic ──────────────────────────────────────────────────────
+
+/// Acquire and format a YouTube transcript without applying host LLM policy.
+pub async fn fetch_youtube_transcript(
+    http_client: &Client,
+    video: &str,
+    process_config: &YoutubeProcessConfig,
+) -> Result<YoutubeTranscriptToolOutput, String> {
+    fetch_youtube_transcript_with(http_client, video, process_config, execute_ytdlp).await
+}
+
+async fn fetch_youtube_transcript_with<F, Fut>(
+    http_client: &Client,
+    video: &str,
+    process_config: &YoutubeProcessConfig,
+    execute: F,
+) -> Result<YoutubeTranscriptToolOutput, String>
+where
+    F: FnOnce(YtDlpCommand) -> Fut,
+    Fut: Future<Output = Result<YtDlpOutput, String>>,
+{
+    let video_id = extract_video_id(video).ok_or_else(|| {
+        format!(
+            "Error: Could not extract a YouTube video ID from '{}'",
+            video
+        )
+    })?;
+
+    let result = fetch_transcript_with(http_client, &video_id, process_config, execute).await?;
+    let formatted = format_transcript(
+        &result.segments,
+        result.title.as_deref(),
+        result.channel.as_deref(),
+    );
+
+    Ok(YoutubeTranscriptToolOutput {
+        video_link: format!("https://youtu.be/{}", video_id),
+        video_id,
+        title: result.title,
+        channel: result.channel,
+        segment_count: result.segments.len(),
+        formatted,
+    })
+}
 
 /// Fetch the transcript for a YouTube video.
 ///
 /// Uses `yt-dlp -j` to get subtitle URLs, then fetches the XML caption track.
 /// Prefers manual English captions, falls back to auto-generated, then first available.
-pub async fn fetch_transcript(
+async fn fetch_transcript_with<F, Fut>(
     client: &Client,
     video_id: &str,
     process_config: &YoutubeProcessConfig,
-) -> Result<TranscriptResult, String> {
+    execute: F,
+) -> Result<TranscriptResult, String>
+where
+    F: FnOnce(YtDlpCommand) -> Fut,
+    Fut: Future<Output = Result<YtDlpOutput, String>>,
+{
     log::info!("[YouTube] Fetching transcript for video: {}", video_id);
 
     // 1. Run yt-dlp to get video metadata JSON
     let video_url = format!("https://www.youtube.com/watch?v={}", video_id);
-    let metadata = run_ytdlp(&video_url, process_config).await?;
+    let metadata = run_ytdlp_with(&video_url, process_config, execute).await?;
 
     let title = metadata.title.clone();
     let channel = metadata.channel.clone();
@@ -284,15 +398,6 @@ pub async fn fetch_transcript(
         channel,
         segments,
     })
-}
-
-/// Run `yt-dlp -j <url>` and parse the JSON output.
-/// Times out after 30 seconds to prevent indefinite hangs.
-async fn run_ytdlp(
-    video_url: &str,
-    process_config: &YoutubeProcessConfig,
-) -> Result<YtDlpMetadata, String> {
-    run_ytdlp_with(video_url, process_config, execute_ytdlp).await
 }
 
 async fn run_ytdlp_with<F, Fut>(
@@ -493,7 +598,7 @@ fn format_timestamp(total_secs: u32, force_hours: bool) -> String {
 
 /// Format transcript segments into a readable string with timestamps.
 /// Includes video metadata header if title/channel are provided.
-pub fn format_transcript(
+fn format_transcript(
     segments: &[TimedSegment],
     title: Option<&str>,
     channel: Option<&str>,
@@ -548,6 +653,98 @@ fn html_decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    #[tokio::test]
+    async fn test_fetch_youtube_transcript_acquires_parses_and_renders() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/captions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"<transcript>
+                    <text start="0" dur="3.5">Hello world</text>
+                    <text start="65.2" dur="2">Second segment</text>
+                </transcript>"#,
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let caption_url = format!("{}/captions", server.uri());
+        let process_config = YoutubeProcessConfig::default();
+        let output = fetch_youtube_transcript_with(
+            &Client::new(),
+            "https://youtu.be/dQw4w9WgXcQ",
+            &process_config,
+            move |command| async move {
+                assert_eq!(command.executable, "yt-dlp");
+                assert_eq!(
+                    command.arguments,
+                    vec![
+                        "-j".to_string(),
+                        "--no-warnings".to_string(),
+                        "--skip-download".to_string(),
+                        "https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_string()
+                    ]
+                );
+
+                Ok(YtDlpOutput {
+                    success: true,
+                    exit_code: Some(0),
+                    stdout: serde_json::to_vec(&serde_json::json!({
+                        "title": "Test Video",
+                        "channel": "Test Channel",
+                        "subtitles": {
+                            "en": [{"url": caption_url, "ext": "srv1"}]
+                        },
+                        "automatic_captions": {}
+                    }))
+                    .unwrap(),
+                    stderr: Vec::new(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(output.video_id, "dQw4w9WgXcQ");
+        assert_eq!(output.video_link, "https://youtu.be/dQw4w9WgXcQ");
+        assert_eq!(output.title.as_deref(), Some("Test Video"));
+        assert_eq!(output.channel.as_deref(), Some("Test Channel"));
+        assert_eq!(output.segment_count, 2);
+        assert_eq!(
+            output.formatted,
+            "Title: Test Video\nChannel: Test Channel\nDuration: 01:07\n\n[00:00] Hello world\n[01:05] Second segment\n"
+        );
+        assert_eq!(
+            output.render(None),
+            "YouTube Transcript — Test Video — Test Channel (https://youtu.be/dQw4w9WgXcQ)\n2 segments\n\nTitle: Test Video\nChannel: Test Channel\nDuration: 01:07\n\n[00:00] Hello world\n[01:05] Second segment\n"
+        );
+        server.verify().await;
+    }
+
+    #[test]
+    fn youtube_transcript_render_truncates_on_char_boundary_and_appends_summary() {
+        let output = YoutubeTranscriptToolOutput {
+            video_id: "abc123".to_string(),
+            video_link: "https://youtu.be/abc123".to_string(),
+            title: Some("Title".to_string()),
+            channel: None,
+            segment_count: 2,
+            formatted: format!("{}é", "a".repeat(30_000)),
+        };
+
+        let rendered = output.render(Some("summary"));
+
+        assert!(rendered.contains("YouTube Transcript — Title (https://youtu.be/abc123)"));
+        assert!(
+            rendered.contains("[Transcript truncated at ~30,000 chars. Total length: 30001 chars]")
+        );
+        assert!(rendered.contains("--- LLM Summary of Full Video ---\n\nsummary"));
+    }
 
     #[tokio::test]
     async fn test_run_ytdlp_uses_explicit_process_config() {
