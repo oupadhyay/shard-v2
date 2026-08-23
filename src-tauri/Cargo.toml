@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     ".",
     "crates/shard-external-tools",
+    "crates/shard-provider",
     "crates/shard-tool-api",
 ]
 default-members = ["."]
@@ -23,6 +24,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 shard-external-tools = { path = "crates/shard-external-tools" }
+shard-provider = { path = "crates/shard-provider" }
 shard-tool-api = { path = "crates/shard-tool-api" }
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
