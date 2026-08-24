@@ -7304,7 +7304,6 @@ dependencies = [
  "log",
  "objc",
  "ocr-rs",
- "quick-xml 0.37.5",
  "rand 0.10.2",
  "readability",
  "regex",
@@ -7318,6 +7317,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "shard-external-tools",
+ "shard-provider",
  "shard-tool-api",
  "sqlite-vec",
  "stop-words",
@@ -7358,6 +7358,19 @@ dependencies = [
  "urlencoding",
  "wiremock",
  "yahoo_finance_api",
+]
+
+[[package]]
+name = "shard-provider"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "tokio 1.48.0",
+ "uuid 1.18.1",
+ "wiremock",
 ]
 
 [[package]]
