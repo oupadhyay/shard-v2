@@ -7365,9 +7365,11 @@ name = "shard-provider"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "log",
  "reqwest 0.12.24",
  "serde",
  "serde_json",
+ "shard-tool-api",
  "tokio 1.48.0",
  "uuid 1.18.1",
  "wiremock",

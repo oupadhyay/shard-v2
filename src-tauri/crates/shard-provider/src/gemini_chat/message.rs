@@ -1,4 +1,6 @@
-use crate::llm_provider::{
+//! Gemini request shaping and completion parsing.
+
+use crate::chat::{
     ProviderChatCompletion, ProviderChatRequest, ProviderFunctionCall, ProviderMessage,
     ProviderToolCall, ProviderToolDefinition,
 };
