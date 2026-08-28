@@ -1,12 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use crate::agent::{
+    use crate::chat::{ProviderFunctionCall, ProviderImage, ProviderMessage, ProviderToolCall};
+    use crate::gemini_chat::{
         construct_gemini_messages, construct_interactions_input, parse_interactions_sse_line,
-        process_interactions_event, AgentEvent, GeminiPart, InteractionDelta, InteractionOutput,
-        InteractionStreamEvent,
-    };
-    use crate::llm_provider::{
-        ProviderFunctionCall, ProviderImage, ProviderMessage, ProviderToolCall,
+        process_interactions_event, GeminiPart, GeminiStreamEvent, InteractionDelta,
+        InteractionOutput, InteractionStreamEvent,
     };
     use serde_json::json;
 
@@ -780,7 +778,7 @@ mod tests {
         let events = process_interactions_event(&event, &mut full_text, &mut full_reasoning);
 
         assert_eq!(events.len(), 1);
-        if let AgentEvent::InteractionToolCall {
+        if let GeminiStreamEvent::InteractionToolCall {
             id,
             name,
             arguments,
@@ -833,7 +831,9 @@ mod tests {
 
     #[test]
     fn test_debug_interactions_payload() {
-        use crate::agent::{InteractionsGenerationConfig, InteractionsRequest, InteractionsTool};
+        use crate::gemini_chat::{
+            InteractionsGenerationConfig, InteractionsRequest, InteractionsTool,
+        };
         let history = vec![
             ProviderMessage {
                 role: "user".to_string(),
@@ -904,93 +904,5 @@ mod tests {
         assert_eq!(json["system_instruction"], "test mode");
         assert!(json["tools"].is_array(), "tools should be an array");
         assert_eq!(json["generation_config"]["thinking_level"], "low");
-    }
-
-    #[tokio::test]
-    #[ignore] // Prevent CI from running this without API keys
-    async fn test_live_tool_call_invalid_argument() {
-        use crate::agent::{InteractionsGenerationConfig, InteractionsRequest, InteractionsTool};
-        let keys_res = crate::secrets::get_all_secrets();
-        if keys_res.is_err() {
-            println!("No keys found, skipping live test");
-            return;
-        }
-        let keys = keys_res.unwrap();
-        let api_key = match keys.get("gemini_api_key") {
-            Some(key) => key.clone(),
-            None => {
-                println!("No gemini key found, skipping");
-                return;
-            }
-        };
-
-        let history = vec![
-            ProviderMessage {
-                role: "user".to_string(),
-                content: Some("Hi".to_string()),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                images: None,
-            },
-            ProviderMessage {
-                role: "assistant".to_string(),
-                content: None,
-                reasoning: None,
-                tool_calls: Some(vec![ProviderToolCall {
-                    id: "call_1".to_string(),
-                    tool_type: "function".to_string(),
-                    function: ProviderFunctionCall {
-                        name: "web_search".to_string(),
-                        arguments: "{\"query\": \"test\"}".to_string(),
-                    },
-                    thought_signature: None,
-                }]),
-                tool_call_id: None,
-                images: None,
-            },
-            ProviderMessage {
-                role: "tool".to_string(),
-                content: Some("Search results".to_string()),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: Some("call_1".to_string()),
-                images: None,
-            },
-        ];
-
-        let req = InteractionsRequest {
-            model: "gemini-3.1-flash-lite-preview".to_string(),
-            input: construct_interactions_input(&history),
-            system_instruction: Some("test mode".to_string()),
-            tools: Some(vec![InteractionsTool::Function {
-                name: "web_search".to_string(),
-                description: "Search the web".to_string(),
-                parameters: serde_json::json!({"type": "object", "properties": {"query": {"type": "string"}}}),
-            }]),
-            generation_config: Some(InteractionsGenerationConfig {
-                thinking_level: Some("high".to_string()),
-                thinking_summaries: None,
-                temperature: None,
-                max_output_tokens: None,
-            }),
-            stream: true,
-            store: Some(false),
-        };
-
-        let client = reqwest::Client::new();
-        let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:interactions";
-        let res = client
-            .post(url)
-            .header("x-goog-api-key", api_key)
-            .header("Content-Type", "application/json")
-            .json(&req)
-            .send()
-            .await
-            .unwrap();
-
-        let status = res.status();
-        let text = res.text().await.unwrap();
-        panic!("STATUS: {}\nBODY: {}", status, text);
     }
 }

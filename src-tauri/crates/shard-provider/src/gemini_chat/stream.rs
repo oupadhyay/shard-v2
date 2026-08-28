@@ -6,12 +6,11 @@ use super::types::*;
 /// Becomes the default on May 26, 2026; legacy removed June 8, 2026.
 pub const GEMINI_API_REVISION: &str = "2026-05-20";
 
-/// Events emitted by Gemini stream parsers.
+/// Provider events emitted by Gemini stream parsers.
 ///
-/// The name is kept for public compatibility with existing tests and callers;
-/// semantically this is now a provider event that the Tauri host maps to UI,
-/// persistence, and tool execution side effects.
-pub enum AgentEvent {
+/// The host maps these protocol events to UI, persistence, and tool-execution
+/// side effects.
+pub enum GeminiStreamEvent {
     ResponseChunk(String),
     ReasoningChunk(String),
     ToolCall(GeminiFunctionCallWithSignature),
@@ -30,7 +29,7 @@ pub fn parse_gemini_chunk(
     full_text: &mut String,
     full_reasoning: &mut String,
     tool_calls: &mut Vec<GeminiFunctionCallWithSignature>,
-) -> Vec<AgentEvent> {
+) -> Vec<GeminiStreamEvent> {
     let mut events = Vec::new();
     log::debug!(
         "Gemini part structure: {:?}",
@@ -45,20 +44,20 @@ pub fn parse_gemini_chunk(
             if is_thinking {
                 log::debug!("Detected thinking summary pattern!");
                 full_reasoning.push_str(&text);
-                events.push(AgentEvent::ReasoningChunk(text));
+                events.push(GeminiStreamEvent::ReasoningChunk(text));
             } else {
                 full_text.push_str(&text);
-                events.push(AgentEvent::ResponseChunk(text));
+                events.push(GeminiStreamEvent::ResponseChunk(text));
             }
         }
         GeminiPart::Thought { thought, text } => {
             log::debug!("Gemini thought part: thought={}, text={}", thought, text);
             if thought {
                 full_reasoning.push_str(&text);
-                events.push(AgentEvent::ReasoningChunk(text));
+                events.push(GeminiStreamEvent::ReasoningChunk(text));
             } else {
                 full_text.push_str(&text);
-                events.push(AgentEvent::ResponseChunk(text));
+                events.push(GeminiStreamEvent::ResponseChunk(text));
             }
         }
         GeminiPart::FunctionCall {
@@ -70,7 +69,7 @@ pub fn parse_gemini_chunk(
                 thought_signature,
             };
             tool_calls.push(fc.clone());
-            events.push(AgentEvent::ToolCall(fc));
+            events.push(GeminiStreamEvent::ToolCall(fc));
         }
         _ => {
             log::debug!("Gemini other part type");
@@ -105,7 +104,7 @@ pub fn process_interactions_event(
     event: &InteractionStreamEvent,
     full_text: &mut String,
     full_reasoning: &mut String,
-) -> Vec<AgentEvent> {
+) -> Vec<GeminiStreamEvent> {
     let mut events = Vec::new();
 
     match event.event_type.as_str() {
@@ -117,19 +116,19 @@ pub fn process_interactions_event(
                 match delta {
                     InteractionDelta::Text { text } => {
                         full_text.push_str(text);
-                        events.push(AgentEvent::ResponseChunk(text.clone()));
+                        events.push(GeminiStreamEvent::ResponseChunk(text.clone()));
                     }
                     InteractionDelta::Thought { thought } => {
                         if let Some(thought_text) = thought {
                             full_reasoning.push_str(thought_text);
-                            events.push(AgentEvent::ReasoningChunk(thought_text.clone()));
+                            events.push(GeminiStreamEvent::ReasoningChunk(thought_text.clone()));
                         }
                     }
                     InteractionDelta::ThoughtSummary { content } => {
                         if let Some(c) = content {
                             if let Some(text) = &c.text {
                                 full_reasoning.push_str(text);
-                                events.push(AgentEvent::ReasoningChunk(text.clone()));
+                                events.push(GeminiStreamEvent::ReasoningChunk(text.clone()));
                             }
                         }
                     }
@@ -140,7 +139,7 @@ pub fn process_interactions_event(
                     } => {
                         // In the Interactions API stream, signature usually comes in a separate ThoughtSignature event.
                         // We emit them as separate events and let the caller associate them.
-                        events.push(AgentEvent::InteractionToolCall {
+                        events.push(GeminiStreamEvent::InteractionToolCall {
                             id: id.clone(),
                             name: name.clone(),
                             arguments: arguments.clone(),
@@ -148,7 +147,7 @@ pub fn process_interactions_event(
                         });
                     }
                     InteractionDelta::ThoughtSignature { signature } => {
-                        events.push(AgentEvent::InteractionToolCall {
+                        events.push(GeminiStreamEvent::InteractionToolCall {
                             id: "".to_string(), // Partial event, signature only
                             name: "".to_string(),
                             arguments: json!(null),
@@ -171,7 +170,9 @@ pub fn process_interactions_event(
                                 if item.get("type").and_then(|t| t.as_str()) == Some("text") {
                                     if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
                                         full_text.push_str(text);
-                                        events.push(AgentEvent::ResponseChunk(text.to_string()));
+                                        events.push(GeminiStreamEvent::ResponseChunk(
+                                            text.to_string(),
+                                        ));
                                     }
                                 }
                             }
@@ -180,7 +181,7 @@ pub fn process_interactions_event(
                     "thought" => {
                         // Thought step.start carries the signature needed for tool calling
                         if let Some(sig) = step.get("signature").and_then(|s| s.as_str()) {
-                            events.push(AgentEvent::InteractionToolCall {
+                            events.push(GeminiStreamEvent::InteractionToolCall {
                                 id: "".to_string(),
                                 name: "".to_string(),
                                 arguments: json!(null),

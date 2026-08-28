@@ -4,6 +4,8 @@
 //! lookup, retries, durable state, UI events, and workflow policy. This crate
 //! accepts explicit transport configuration and request data.
 
+pub mod chat;
+pub mod gemini_chat;
 pub mod gemini_embedding;
 pub mod gemini_files;
 

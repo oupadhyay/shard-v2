@@ -16,7 +16,7 @@ use serde_json::Value;
 
 /// Normalize a JSON Schema `Value` so it is compatible with Gemini's
 /// proto-backed function declaration schema. See module docs for details.
-pub(crate) fn normalize_gemini_schema(schema: &mut Value) {
+pub fn normalize_gemini_schema(schema: &mut Value) {
     let obj = match schema.as_object_mut() {
         Some(o) => o,
         None => return,
