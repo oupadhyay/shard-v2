@@ -35,9 +35,17 @@ export default defineConfig(async () => ({
         dedicated: "dedicated.html",
       },
       output: {
-        manualChunks: {
-          'vendor-highlight': ['highlight.js'],
-          'vendor-markdown': ['markdown-it', '@vscode/markdown-it-katex', 'katex', 'dompurify'],
+        manualChunks(id) {
+          if (id.includes("/node_modules/highlight.js/")) {
+            return "vendor-highlight";
+          }
+          if (
+            ["markdown-it", "@vscode/markdown-it-katex", "katex", "dompurify"].some(
+              (dependency) => id.includes(`/node_modules/${dependency}/`),
+            )
+          ) {
+            return "vendor-markdown";
+          }
         },
       },
     },
