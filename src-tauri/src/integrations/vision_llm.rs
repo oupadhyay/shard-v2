@@ -3,10 +3,12 @@
 //! Ownership split: this workflow stays in the Shard host because it decides
 //! when non-vision chat models need image-to-text preprocessing, which fallback
 //! models to try, and how to prompt them with user/app context. The underlying
-//! OpenAI-compatible request/transport pieces can later share provider helpers.
+//! OpenAI-compatible request shaping and transport live in `shard-provider`.
+
+use std::time::Duration;
 
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use shard_provider::{analyze_image, OpenAiVisionRequest, OpenAiVisionTransportConfig};
 
 /// Groq Vision model (Llama 4 Scout with vision capabilities)
 const GROQ_VISION_MODEL: &str = "meta-llama/llama-4-scout-17b-16e-instruct";
@@ -27,51 +29,31 @@ pub struct VisionLlmConfig {
     pub endpoints: VisionLlmEndpoints,
 }
 
-#[derive(Serialize, Debug)]
-struct OpenAIVisionRequest {
-    model: String,
-    messages: Vec<VisionMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_completion_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
+const VISION_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
+
+fn vision_request(
+    model: &str,
+    prompt: &str,
+    image_base64: &str,
+    mime_type: &str,
+) -> OpenAiVisionRequest {
+    OpenAiVisionRequest {
+        model: model.to_string(),
+        prompt: prompt.to_string(),
+        image_base64: image_base64.to_string(),
+        mime_type: mime_type.to_string(),
+        max_completion_tokens: Some(2048),
+        max_tokens: None,
+        temperature: Some(0.7),
+    }
 }
 
-#[derive(Serialize, Debug)]
-struct VisionMessage {
-    role: String,
-    content: Vec<VisionContent>,
-}
-
-#[derive(Serialize, Debug)]
-#[serde(tag = "type")]
-enum VisionContent {
-    #[serde(rename = "text")]
-    Text { text: String },
-    #[serde(rename = "image_url")]
-    ImageUrl { image_url: ImageUrlPayload },
-}
-
-#[derive(Serialize, Debug)]
-struct ImageUrlPayload {
-    url: String, // data:image/png;base64,... format
-}
-
-#[derive(Deserialize, Debug)]
-struct OpenAIResponse {
-    choices: Option<Vec<OpenAIChoice>>,
-}
-
-#[derive(Deserialize, Debug)]
-struct OpenAIChoice {
-    message: OpenAIMessage,
-}
-
-#[derive(Deserialize, Debug)]
-struct OpenAIMessage {
-    content: Option<String>,
+fn transport_config(endpoint_url: &str, auth_token: &str) -> OpenAiVisionTransportConfig {
+    OpenAiVisionTransportConfig {
+        endpoint_url: endpoint_url.to_string(),
+        auth_token: auth_token.to_string(),
+        timeout: VISION_REQUEST_TIMEOUT,
+    }
 }
 
 /// Process an image with the user's actual question for contextual understanding.
@@ -99,8 +81,6 @@ Please analyze the image carefully and provide a helpful response that directly 
         user_question
     );
 
-    let data_uri = format!("data:{};base64,{}", mime_type, image_base64);
-
     // Try OpenRouter with Gemma 4 31B
     if let Some(openrouter_key) = &config.openrouter_auth_token {
         log::info!(
@@ -108,109 +88,37 @@ Please analyze the image carefully and provide a helpful response that directly 
             CONTEXT_VISION_MODEL
         );
 
-        let request = OpenAIVisionRequest {
-            model: CONTEXT_VISION_MODEL.to_string(),
-            messages: vec![VisionMessage {
-                role: "user".to_string(),
-                content: vec![
-                    VisionContent::Text {
-                        text: contextual_prompt.clone(),
-                    },
-                    VisionContent::ImageUrl {
-                        image_url: ImageUrlPayload {
-                            url: data_uri.clone(),
-                        },
-                    },
-                ],
-            }],
-            max_completion_tokens: Some(2048), // More tokens for detailed contextual response
-            max_tokens: None,
-            temperature: Some(0.7),
-        };
+        let transport = transport_config(&config.endpoints.openrouter_chat_url, openrouter_key);
+        let request = vision_request(
+            CONTEXT_VISION_MODEL,
+            &contextual_prompt,
+            image_base64,
+            mime_type,
+        );
 
-        let response = http_client
-            .post(&config.endpoints.openrouter_chat_url)
-            .header("Authorization", format!("Bearer {}", openrouter_key))
-            .header("Content-Type", "application/json")
-            .timeout(std::time::Duration::from_secs(45)) // Longer timeout for contextual response
-            .json(&request)
-            .send()
-            .await;
-
-        if let Ok(resp) = response {
-            if resp.status().is_success() {
-                if let Ok(body) = resp.json::<OpenAIResponse>().await {
-                    if let Some(content) = body
-                        .choices
-                        .and_then(|c| c.into_iter().next())
-                        .and_then(|choice| choice.message.content)
-                    {
-                        log::info!(
-                            "[VisionLLM] Contextual vision success with {} ({} chars)",
-                            CONTEXT_VISION_MODEL,
-                            content.len()
-                        );
-                        return Ok(content);
-                    }
-                }
-            } else {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                log::warn!(
-                    "[VisionLLM] {} failed with status {}: {}",
+        match analyze_image(http_client, &transport, &request).await {
+            Ok(content) => {
+                log::info!(
+                    "[VisionLLM] Contextual vision success with {} ({} chars)",
                     CONTEXT_VISION_MODEL,
-                    status,
-                    &error_text[..error_text.len().min(200)]
+                    content.len()
                 );
+                return Ok(content);
+            }
+            Err(error) => {
+                log::warn!("[VisionLLM] {} failed: {}", CONTEXT_VISION_MODEL, error);
             }
         }
 
         // Fallback to other vision models if Gemma 4 fails
         for model in OPENROUTER_VISION_MODELS {
-            let request = OpenAIVisionRequest {
-                model: model.to_string(),
-                messages: vec![VisionMessage {
-                    role: "user".to_string(),
-                    content: vec![
-                        VisionContent::Text {
-                            text: contextual_prompt.clone(),
-                        },
-                        VisionContent::ImageUrl {
-                            image_url: ImageUrlPayload {
-                                url: data_uri.clone(),
-                            },
-                        },
-                    ],
-                }],
-                max_completion_tokens: Some(2048),
-                max_tokens: None,
-                temperature: Some(0.7),
-            };
+            let request = vision_request(model, &contextual_prompt, image_base64, mime_type);
 
             log::info!("[VisionLLM] Trying fallback vision model: {}", model);
 
-            let response = http_client
-                .post(&config.endpoints.openrouter_chat_url)
-                .header("Authorization", format!("Bearer {}", openrouter_key))
-                .header("Content-Type", "application/json")
-                .timeout(std::time::Duration::from_secs(45))
-                .json(&request)
-                .send()
-                .await;
-
-            if let Ok(resp) = response {
-                if resp.status().is_success() {
-                    if let Ok(body) = resp.json::<OpenAIResponse>().await {
-                        if let Some(content) = body
-                            .choices
-                            .and_then(|c| c.into_iter().next())
-                            .and_then(|choice| choice.message.content)
-                        {
-                            log::info!("[VisionLLM] Fallback success with {}", model);
-                            return Ok(content);
-                        }
-                    }
-                }
+            if let Ok(content) = analyze_image(http_client, &transport, &request).await {
+                log::info!("[VisionLLM] Fallback success with {}", model);
+                return Ok(content);
             }
         }
     }
@@ -219,103 +127,19 @@ Please analyze the image carefully and provide a helpful response that directly 
     if let Some(groq_key) = &config.groq_auth_token {
         log::info!("[VisionLLM] Trying Groq for contextual vision...");
 
-        let request = OpenAIVisionRequest {
-            model: GROQ_VISION_MODEL.to_string(),
-            messages: vec![VisionMessage {
-                role: "user".to_string(),
-                content: vec![
-                    VisionContent::Text {
-                        text: contextual_prompt,
-                    },
-                    VisionContent::ImageUrl {
-                        image_url: ImageUrlPayload { url: data_uri },
-                    },
-                ],
-            }],
-            max_completion_tokens: Some(2048),
-            max_tokens: None,
-            temperature: Some(0.7),
-        };
+        let transport = transport_config(&config.endpoints.groq_chat_url, groq_key);
+        let request = vision_request(
+            GROQ_VISION_MODEL,
+            &contextual_prompt,
+            image_base64,
+            mime_type,
+        );
 
-        let response = http_client
-            .post(&config.endpoints.groq_chat_url)
-            .header("Authorization", format!("Bearer {}", groq_key))
-            .header("Content-Type", "application/json")
-            .timeout(std::time::Duration::from_secs(45))
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| format!("Network error: {}", e))?;
-
-        if response.status().is_success() {
-            let body: OpenAIResponse = response
-                .json()
-                .await
-                .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-            return body
-                .choices
-                .and_then(|c| c.into_iter().next())
-                .and_then(|choice| choice.message.content)
-                .ok_or_else(|| "No content in response".to_string());
-        }
+        return analyze_image(http_client, &transport, &request).await;
     }
 
     Err(
         "No Vision LLM API key configured or all attempts failed for contextual processing"
             .to_string(),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn openai_vision_request_wire_shape_is_stable() {
-        let request = OpenAIVisionRequest {
-            model: "vision-model".to_string(),
-            messages: vec![VisionMessage {
-                role: "user".to_string(),
-                content: vec![
-                    VisionContent::Text {
-                        text: "What is shown?".to_string(),
-                    },
-                    VisionContent::ImageUrl {
-                        image_url: ImageUrlPayload {
-                            url: "data:image/png;base64,abc123".to_string(),
-                        },
-                    },
-                ],
-            }],
-            max_completion_tokens: Some(2048),
-            max_tokens: None,
-            temperature: Some(0.7),
-        };
-
-        assert_eq!(
-            serde_json::to_value(request).unwrap(),
-            json!({
-                "model": "vision-model",
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "What is shown?"
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/png;base64,abc123"
-                            }
-                        }
-                    ]
-                }],
-                "max_completion_tokens": 2048,
-                "temperature": 0.7_f32
-            })
-        );
-    }
 }
