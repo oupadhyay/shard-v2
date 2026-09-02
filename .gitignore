@@ -31,5 +31,4 @@ dist-ssr
 docs/*
 
 # Agent files
-AGENTS.md
 lessons_learned.md
