@@ -30,10 +30,11 @@ This repository owns:
 - image and Gemini Files lifecycle, long-transcript summarization, and the
   decision to invoke vision fallback.
 
-It does **not** own portable provider transports, portable external-tool
-execution, or canonical tool-contract DTOs. Compatibility re-exports and
-proof-stage copies may remain temporarily during the repository cutover, but
-host policy must not move into those crates.
+Extracted Gemini transports, OpenAI-compatible vision transport, portable
+external-tool execution, and canonical tool-contract DTOs live in the sibling
+repositories. The existing OpenAI-compatible chat path remains in the host;
+it was not part of this extraction. Compatibility re-exports remain for live
+callers, but no proof-stage crate copies remain.
 
 ## Dependency Rules
 
@@ -51,9 +52,9 @@ shard-v2 ──> shard-tool-api
   approval policy.
 - Do not create a second source of `shard-tool-api` in one Cargo graph. Rust
   treats identical types from path and Git sources as different nominal types.
-- Until final cutover, `src-tauri/crates/` contains proof-stage copies. Keep a
-  portable change synchronized with its standalone repository; do not evolve
-  an in-tree copy independently.
+- The Git cutover is complete. Do not recreate `src-tauri/crates/` copies.
+  Make portable changes in their standalone repository, then update the host
+  to a reviewed immutable revision.
 
 See [`docs/SPLIT_OWNERSHIP.md`](docs/SPLIT_OWNERSHIP.md) for the detailed
 boundary map.
@@ -108,9 +109,12 @@ cargo tree -i shard-tool-api
 cargo tree -d
 ```
 
-During the proof stage, first merge and validate the standalone repository
-change, then test `shard-v2` against that exact revision. Remove an in-tree copy
-only after the external revision passes standalone and host validation.
+First merge and validate the standalone repository change, then test
+`shard-v2` against that exact revision. `src-tauri/Cargo.toml` and its lockfile
+are authoritative for consumed revisions; see `docs/SPLIT_OWNERSHIP.md` for
+the initial cutover pins. Standalone crate tests run in their own repositories:
+host `cargo test --workspace` does not run Git dependency unit tests, and
+`cargo test -p` cannot run dependency tests requiring dev-dependencies.
 
 ## Native GUI Regression Matrix
 
