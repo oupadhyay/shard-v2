@@ -119,17 +119,18 @@ pub fn store_secrets_batch(updates: HashMap<ApiKeyType, Option<String>>) -> Resu
 
     for (key_type, value_opt) in updates {
         match value_opt {
-            Some(value) if !value.is_empty() => {
-                let name = key_type.key_name().to_string();
-                if keys.get(&name) != Some(&value) {
-                    keys.insert(name, value);
-                    changed = true;
-                }
-            }
-            Some(_) => {
-                // Some("") means delete
-                if keys.remove(key_type.key_name()).is_some() {
-                    changed = true;
+            Some(value) => {
+                if value.is_empty() {
+                    // Some("") means delete
+                    if keys.remove(key_type.key_name()).is_some() {
+                        changed = true;
+                    }
+                } else {
+                    let name = key_type.key_name().to_string();
+                    if keys.get(&name) != Some(&value) {
+                        keys.insert(name, value);
+                        changed = true;
+                    }
                 }
             }
             None => {

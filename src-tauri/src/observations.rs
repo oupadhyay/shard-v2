@@ -884,6 +884,20 @@ pub fn causal_chain(
 ) -> Result<Vec<Observation>, String> {
     use std::collections::VecDeque;
 
+    type ObservationRow = (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        i64,
+        Option<String>,
+        String,
+        String,
+        Option<String>,
+    );
+
     let mut seen: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
     let mut frontier: VecDeque<(String, usize)> = VecDeque::new();
@@ -897,19 +911,7 @@ pub fn causal_chain(
             continue;
         }
         // Hydrate the row itself.
-        let row: Option<(
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            i64,
-            Option<String>,
-            String,
-            String,
-            Option<String>,
-        )> = store
+        let row: Option<ObservationRow> = store
             .conn
             .query_row(
                 "SELECT id, observer, observed, content, level, source_ids, times_derived, \

@@ -10,7 +10,6 @@
 //! the MCP server to query that registry rather than redeclare schemas.
 
 use std::borrow::Cow;
-use std::future::Future;
 use std::sync::Arc;
 
 use rmcp::{
@@ -135,33 +134,29 @@ impl ServerHandler for ShardMcpServer {
             )
     }
 
-    fn list_tools(
+    async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
-        async move {
-            Ok(ListToolsResult {
-                tools: Self::list_curated_tools(),
-                next_cursor: None,
-                ..Default::default()
-            })
-        }
+    ) -> Result<ListToolsResult, McpError> {
+        Ok(ListToolsResult {
+            tools: Self::list_curated_tools(),
+            next_cursor: None,
+            ..Default::default()
+        })
     }
 
-    fn call_tool(
+    async fn call_tool(
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
-        async move {
-            let args = request.arguments.map(Value::Object).unwrap_or(Value::Null);
-            match self.dispatch(&request.name, args).await {
-                Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
-                Err(e) => {
-                    let msg = e.to_string();
-                    Ok(CallToolResult::error(vec![Content::text(msg)]))
-                }
+    ) -> Result<CallToolResult, McpError> {
+        let args = request.arguments.map(Value::Object).unwrap_or(Value::Null);
+        match self.dispatch(&request.name, args).await {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => {
+                let msg = e.to_string();
+                Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
         }
     }

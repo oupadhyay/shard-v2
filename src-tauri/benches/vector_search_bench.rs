@@ -1,12 +1,12 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rand::Rng;
+use rand::RngExt;
 use shard_lib::memories::{Chunk, SourceType};
 use shard_lib::vector_store::VectorStore;
 use tempfile::tempdir;
 
 fn generate_random_embedding(dim: usize) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
-    (0..dim).map(|_| rng.gen::<f32>()).collect()
+    let mut rng = rand::rng();
+    (0..dim).map(|_| rng.random::<f32>()).collect()
 }
 
 fn benchmark_search(c: &mut Criterion) {

@@ -45,7 +45,7 @@ fn test_estimate_message_tokens() {
     let msg = make_message("user", 400);
     let tokens = estimate_message_tokens(&msg);
     assert!(
-        tokens >= 100 && tokens <= 110,
+        (100..=110).contains(&tokens),
         "Expected ~103 tokens, got {}",
         tokens
     );
@@ -57,7 +57,7 @@ fn test_estimate_history_tokens() {
     let tokens = estimate_history_tokens(&history);
     // (400 + 10) / 4 + (800 + 10) / 4 = 103 + 203 = 306
     assert!(
-        tokens >= 300 && tokens <= 320,
+        (300..=320).contains(&tokens),
         "Expected ~306 tokens, got {}",
         tokens
     );
@@ -87,7 +87,7 @@ fn test_should_compact_with_artificial_limit() {
 
     // But we can test that token estimation is working correctly
     assert!(
-        tokens >= 950 && tokens <= 1100,
+        (950..=1100).contains(&tokens),
         "Expected ~1000 tokens, got {}",
         tokens
     );

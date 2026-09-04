@@ -36,28 +36,31 @@ fn user(s: &str) -> ChatMessage {
 }
 
 fn config_with_gemini() -> crate::config::AppConfig {
-    let mut c = crate::config::AppConfig::default();
-    c.gemini_api_key = Some("test-gemini".into());
-    c.selected_model = Some("gemini-3.1-flash-lite-preview".into());
-    c.enable_tools = Some(false); // keep request body lean
-    c
+    crate::config::AppConfig {
+        gemini_api_key: Some("test-gemini".into()),
+        selected_model: Some("gemini-3.1-flash-lite-preview".into()),
+        enable_tools: Some(false),
+        ..Default::default()
+    }
 }
 
 fn config_with_openrouter() -> crate::config::AppConfig {
-    let mut c = crate::config::AppConfig::default();
-    c.openrouter_api_key = Some("test-openrouter".into());
-    c.selected_model = Some("google/gemma-4-31b-it:free".into());
-    c.enable_tools = Some(false);
-    c
+    crate::config::AppConfig {
+        openrouter_api_key: Some("test-openrouter".into()),
+        selected_model: Some("google/gemma-4-31b-it:free".into()),
+        enable_tools: Some(false),
+        ..Default::default()
+    }
 }
 
 fn config_with_groq() -> crate::config::AppConfig {
-    let mut c = crate::config::AppConfig::default();
-    c.groq_api_key = Some("test-groq".into());
-    c.openrouter_api_key = Some("test-openrouter".into()); // for fallback
-    c.selected_model = Some("gpt-oss-120b (Groq)".into());
-    c.enable_tools = Some(false);
-    c
+    crate::config::AppConfig {
+        groq_api_key: Some("test-groq".into()),
+        openrouter_api_key: Some("test-openrouter".into()),
+        selected_model: Some("gpt-oss-120b (Groq)".into()),
+        enable_tools: Some(false),
+        ..Default::default()
+    }
 }
 
 // ============================================================================
@@ -69,7 +72,7 @@ mod classify_intent {
 
     #[tokio::test]
     async fn yes_response_returns_true() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -92,7 +95,7 @@ mod classify_intent {
 
     #[tokio::test]
     async fn no_response_returns_false() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -115,7 +118,7 @@ mod classify_intent {
 
     #[tokio::test]
     async fn http_failure_returns_err() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -134,7 +137,7 @@ mod classify_intent {
     async fn missing_text_field_returns_false() {
         // The function returns false when the response shape doesn't contain
         // a candidates[0].content.parts[0].text path.
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -161,7 +164,7 @@ mod gemini_turn {
     /// HTTP non-success → emits agent-error event AND returns Err.
     #[tokio::test]
     async fn http_failure_emits_error_and_returns_err() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let cap = captured();
@@ -199,7 +202,7 @@ mod gemini_turn {
     /// assistant message; returns Ok(false) (no tool calls means final).
     #[tokio::test]
     async fn text_response_emits_chunks_and_pushes_assistant_message() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let cap = captured();
@@ -241,7 +244,7 @@ mod gemini_turn {
             .await;
 
         // No tool calls → Ok(false), assistant message pushed with concatenated text.
-        assert_eq!(r.unwrap(), false);
+        assert!(!r.unwrap());
         assert_eq!(history.len(), 2);
         let assistant = history.last().unwrap();
         assert_eq!(assistant.role, "assistant");
@@ -310,11 +313,13 @@ mod gemini_turn {
     /// Missing API key short-circuits without any HTTP call.
     #[tokio::test]
     async fn missing_api_key_returns_err_immediately() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
-        let mut config = crate::config::AppConfig::default();
-        config.selected_model = Some("gemini-3.1-flash-lite-preview".into());
+        let config = crate::config::AppConfig {
+            selected_model: Some("gemini-3.1-flash-lite-preview".into()),
+            ..Default::default()
+        };
         let mut history = vec![user("hi")];
         let r = agent
             .process_gemini_turn(
@@ -341,13 +346,15 @@ mod openrouter_turn {
 
     #[tokio::test]
     async fn missing_provider_key_propagates_err() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
         // No openrouter_api_key in config → get_model_provider_config errs.
-        let mut config = crate::config::AppConfig::default();
-        config.selected_model = Some("google/gemma-4-31b-it:free".into());
+        let config = crate::config::AppConfig {
+            selected_model: Some("google/gemma-4-31b-it:free".into()),
+            ..Default::default()
+        };
         let mut history = vec![user("hi")];
         let r = agent
             .process_openrouter_turn(
@@ -368,7 +375,7 @@ mod openrouter_turn {
 
     #[tokio::test]
     async fn text_only_stream_pushes_assistant_message_and_returns_ok_false() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let cap = captured();
@@ -414,7 +421,7 @@ mod openrouter_turn {
 
     #[tokio::test]
     async fn empty_stream_returns_ok_false_and_does_not_push() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -448,7 +455,7 @@ mod openrouter_turn {
 
     #[tokio::test]
     async fn http_failure_non_quota_returns_err_and_emits_error_event() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let cap = captured();
@@ -478,7 +485,7 @@ mod openrouter_turn {
 
     #[tokio::test]
     async fn groq_quota_error_with_openrouter_key_falls_back() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let cap = captured();
@@ -531,7 +538,7 @@ mod openrouter_turn {
 
     #[tokio::test]
     async fn groq_quota_without_openrouter_key_returns_err() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -541,10 +548,12 @@ mod openrouter_turn {
             .mount(&env.server)
             .await;
 
-        let mut config = crate::config::AppConfig::default();
-        config.groq_api_key = Some("test-groq".into());
+        let config = crate::config::AppConfig {
+            groq_api_key: Some("test-groq".into()),
+            selected_model: Some("gpt-oss-120b (Groq)".into()),
+            ..Default::default()
+        };
         // NOTE: no openrouter_api_key.
-        config.selected_model = Some("gpt-oss-120b (Groq)".into());
 
         let mut history = vec![user("hi")];
         let r = agent

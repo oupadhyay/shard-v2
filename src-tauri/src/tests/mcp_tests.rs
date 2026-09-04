@@ -26,7 +26,9 @@ use std::time::Duration;
 // Delegate to the single canonical `$HOME` lock so MCP tests serialize against
 // agent/heartbeat/persona tests too — they all mutate the same process-global
 // `$HOME` and otherwise race on the shared on-disk DB.
-use crate::tests::agent_helpers::home_lock as mcp_test_lock;
+use crate::tests::agent_helpers::{
+    home_lock as mcp_test_lock, home_lock_async as mcp_test_lock_async,
+};
 
 /// Redirect `$HOME` to a tempdir so `dirs::data_local_dir()` resolves
 /// inside the sandbox. The MCP module derives every on-disk path from
@@ -253,7 +255,7 @@ fn edit_file_refuses_api_key_in_config() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_clients_serialized() {
-    let _lock = mcp_test_lock();
+    let _lock = mcp_test_lock_async().await;
     let _jail = HomeJail::new();
 
     let server = std::sync::Arc::new(ShardMcpServer::new());

@@ -111,7 +111,7 @@ mod agent_new {
 
     #[tokio::test]
     async fn empty_db_creates_fresh_session_with_empty_history() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         assert_eq!(agent.get_message_count().await, 0);
@@ -133,7 +133,7 @@ mod agent_new {
 
     #[tokio::test]
     async fn db_with_messages_restores_latest_session_history() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         // First agent: seeds one user + one assistant message in a session.
         {
@@ -158,7 +158,7 @@ mod reset_for_delete {
 
     #[tokio::test]
     async fn rotates_session_id_clears_history_and_backup() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         seed(&agent, vec![user("a"), assistant("b")]).await;
@@ -181,7 +181,7 @@ mod rewind {
 
     #[tokio::test]
     async fn empty_history_is_noop() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         agent.rewind_history().await;
@@ -190,7 +190,7 @@ mod rewind {
 
     #[tokio::test]
     async fn pops_assistant_messages_until_user_message() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         seed(
@@ -214,7 +214,7 @@ mod rewind {
 
     #[tokio::test]
     async fn collapses_consecutive_trailing_assistant_messages() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         seed(
@@ -242,7 +242,7 @@ mod save_and_clear {
 
     #[tokio::test]
     async fn rotates_session_id_and_populates_backup() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         seed(&agent, vec![user("hello")]).await;
@@ -260,7 +260,7 @@ mod save_and_clear {
     async fn unchanged_history_does_not_alter_last_archived_hash_above_zero() {
         // When current_hash == last_archived_hash, should_archive=false and
         // last_archived_hash is set to 0 (per the impl).
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         // Seed and pre-set last_archived_hash to match.
@@ -278,7 +278,7 @@ mod save_and_clear {
 
     #[tokio::test]
     async fn changed_history_updates_last_archived_hash() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         seed(&agent, vec![user("changed-content")]).await;
@@ -298,7 +298,7 @@ mod save_and_clear {
 
     #[tokio::test]
     async fn cleared_state_is_persisted_to_db() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         seed(&agent, vec![user("a"), assistant("b")]).await;
@@ -319,7 +319,7 @@ mod save_and_clear {
 
     #[tokio::test]
     async fn uploaded_files_are_drained() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         // Inject some "uploaded files" so we can verify they're cleared.
@@ -343,7 +343,7 @@ mod restore {
 
     #[tokio::test]
     async fn returns_err_when_no_backup() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let result = agent.restore_history().await;
@@ -353,7 +353,7 @@ mod restore {
 
     #[tokio::test]
     async fn restores_history_session_id_and_consumes_backup() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         seed(&agent, vec![user("snapshot-content")]).await;
@@ -382,7 +382,7 @@ mod load_session {
 
     #[tokio::test]
     async fn empty_session_yields_empty_history() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let bogus_sid = uuid::Uuid::new_v4().to_string();
@@ -397,7 +397,7 @@ mod load_session {
 
     #[tokio::test]
     async fn populated_session_loads_in_order() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         seed(
@@ -430,7 +430,7 @@ mod persist {
 
     #[tokio::test]
     async fn persist_history_replaces_messages_for_session() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         seed(&agent, vec![user("first"), assistant("only")]).await;
@@ -459,7 +459,7 @@ mod persist {
 
     #[tokio::test]
     async fn tool_messages_round_trip_with_tool_call_id() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let history = vec![
@@ -509,13 +509,15 @@ mod katex_retry {
 
     #[tokio::test]
     async fn disabled_via_config_is_noop() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         seed(&agent, vec![user("u"), assistant("$broken")]).await;
 
-        let mut config = crate::config::AppConfig::default();
-        config.retry_on_katex = Some(false);
+        let config = crate::config::AppConfig {
+            retry_on_katex: Some(false),
+            ..Default::default()
+        };
 
         let r = agent
             .retry_with_katex_hint(&env.handle, vec!["e".into()], &config)
@@ -529,7 +531,7 @@ mod katex_retry {
 
     #[tokio::test]
     async fn empty_history_is_noop() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -546,7 +548,7 @@ mod katex_retry {
         // Only assistant/model messages trigger the pop+retry branch; if the
         // last msg is a user message, the function returns Ok(()) without
         // mutating history.
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         seed(&agent, vec![user("hello")]).await;
@@ -574,7 +576,7 @@ mod images_persist {
 
     #[tokio::test]
     async fn image_attachments_survive_db_round_trip() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let with_image = ChatMessage {

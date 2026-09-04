@@ -65,7 +65,7 @@ fn dependencies_block_until_satisfied() {
         &store,
         None,
         "child needs parent done",
-        &[parent.clone()],
+        std::slice::from_ref(&parent),
         10, // higher priority but blocked by dep
         None,
         None,
@@ -165,7 +165,8 @@ fn cyclic_dependency_rejected_at_insert() {
             rusqlite::params![serde_json::json!([&a]).to_string(), a],
         )
         .unwrap();
-    let err = insert_action(&store, None, "b", &[a.clone()], 0, None, None).unwrap_err();
+    let err =
+        insert_action(&store, None, "b", std::slice::from_ref(&a), 0, None, None).unwrap_err();
     assert!(err.contains("cyclic"));
 }
 

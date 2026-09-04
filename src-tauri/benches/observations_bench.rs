@@ -22,7 +22,7 @@ fn make_test_embedding(seed: f32) -> Vec<f32> {
     let mut x = seed;
     for _ in 0..768 {
         // Chaotic update to introduce variation; constants chosen arbitrarily but fixed.
-        x = (x * 1.324_717_957_f32 + 0.123_456_79_f32).sin();
+        x = (x * 1.324_718_f32 + 0.123_456_79_f32).sin();
         embedding.push(x);
     }
     embedding
@@ -46,11 +46,11 @@ fn populate_store(store: &VectorStore, count: usize) -> Vec<String> {
     }
 
     // Add derivations so get_top_derived has data
-    for i in 0..(count / 10) {
+    for (i, source_id) in ids.iter().take(count / 10).enumerate() {
         let derived = make_observation(
             &format!("Derived insight {} from base observations", i),
             ObservationLevel::Deductive,
-            vec![ids[i].clone()],
+            vec![source_id.clone()],
             None,
         );
         insert_observation(store, &derived, None).unwrap();

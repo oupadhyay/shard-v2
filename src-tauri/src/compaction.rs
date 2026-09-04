@@ -457,7 +457,7 @@ mod tests {
         let msg = make_message("user", 400);
         let tokens = estimate_message_tokens(&msg);
         assert!(
-            tokens >= 100 && tokens <= 110,
+            (100..=110).contains(&tokens),
             "Expected ~103 tokens, got {}",
             tokens
         );
@@ -469,7 +469,7 @@ mod tests {
         let tokens = estimate_history_tokens(&history);
         // (400 + 10) / 4 + (800 + 10) / 4 = 103 + 203 = 306
         assert!(
-            tokens >= 300 && tokens <= 320,
+            (300..=320).contains(&tokens),
             "Expected ~306 tokens, got {}",
             tokens
         );
@@ -513,7 +513,7 @@ mod tests {
 
         // Just verify token count is reasonable
         assert!(
-            tokens >= 120 && tokens <= 140,
+            (120..=140).contains(&tokens),
             "Expected ~128 tokens, got {}",
             tokens
         );

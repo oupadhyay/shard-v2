@@ -176,16 +176,14 @@ impl MemoryStore {
         }
 
         // Sort by importance (ascending) so we remove lowest first
-        self.memories
-            .sort_by(|a, b| a.importance.cmp(&b.importance));
+        self.memories.sort_by_key(|memory| memory.importance);
 
         while self.total_tokens() > max_tokens && !self.memories.is_empty() {
             self.memories.remove(0);
         }
 
         // Re-sort by created_at for consistent ordering
-        self.memories
-            .sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        self.memories.sort_by_key(|memory| memory.created_at);
     }
 
     /// Format memories as markdown for injection into system prompt
@@ -1063,7 +1061,7 @@ pub async fn rebuild_chunk_index<R: Runtime>(
         let existing_sources = vector_store
             .get_unique_sources()
             .map_err(|e| format!("Failed to get sources: {}", e))?;
-        HashSet::from_iter(existing_sources.into_iter())
+        HashSet::from_iter(existing_sources)
     };
     // Note: vector_store is dropped here before any .await
     let mut processed_sources: HashSet<(SourceType, String)> = HashSet::new();
@@ -1201,7 +1199,7 @@ pub async fn rebuild_chunk_index<R: Runtime>(
     );
 
     // Step B: Generate embeddings in parallel
-    let generated_chunks: Vec<Option<Chunk>> = futures::stream::iter(chunks_to_embed.into_iter())
+    let generated_chunks: Vec<Option<Chunk>> = futures::stream::iter(chunks_to_embed)
         .map(|(s_type, s_name, idx, raw)| {
             let client = http_client.clone();
             let embedding_config = crate::gemini_embedding::GeminiEmbeddingConfig {
@@ -1217,7 +1215,7 @@ pub async fn rebuild_chunk_index<R: Runtime>(
                     "Insight"
                 },
                 s_name,
-                &raw.text.chars().take(1000).collect::<String>()
+                raw.text.chars().take(1000).collect::<String>()
             );
 
             async move {
@@ -1476,7 +1474,7 @@ pub fn migrate_memories_to_observations<R: Runtime>(
             Ok(()) => {
                 log::info!(
                     "[Migration] Migrated memory to observation: {}",
-                    &memory.content
+                    memory.content
                 );
                 created += 1;
             }
@@ -1508,8 +1506,8 @@ mod tests {
             topics: map.keys().cloned().collect(),
         };
 
-        assert!(index.topics.contains(&"Topic A".to_string()));
-        assert!(index.topics.contains(&"Topic B".to_string()));
+        assert!(index.topics.contains("Topic A"));
+        assert!(index.topics.contains("Topic B"));
         assert_eq!(index.topics.len(), 2);
     }
 }

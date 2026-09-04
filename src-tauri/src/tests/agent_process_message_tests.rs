@@ -37,16 +37,15 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 fn config_gemini() -> crate::config::AppConfig {
-    let mut c = crate::config::AppConfig::default();
-    c.gemini_api_key = Some("test-gemini".into());
-    c.selected_model = Some("gemini-3.1-flash-lite-preview".into());
-    c.enable_tools = Some(false);
-    c.enable_compaction = Some(false); // keep tests deterministic
-    c.research_mode = Some(false);
-    // Block all background interaction-logging that would otherwise call out
-    // to the embedding endpoint. Incognito_mode controls the same gate.
-    c.incognito_mode = Some(true);
-    c
+    crate::config::AppConfig {
+        gemini_api_key: Some("test-gemini".into()),
+        selected_model: Some("gemini-3.1-flash-lite-preview".into()),
+        enable_tools: Some(false),
+        enable_compaction: Some(false),
+        research_mode: Some(false),
+        incognito_mode: Some(true),
+        ..Default::default()
+    }
 }
 
 /// Mount a single content.delta SSE response for the Gemini Interactions API.
@@ -72,7 +71,7 @@ async fn mount_gemini_text(env: &TestEnv, text: &str) {
 
 #[tokio::test]
 async fn b11_non_cron_message_emits_user_message_event() {
-    let _g = agent_test_lock();
+    let _g = agent_test_lock().await;
     let env = TestEnv::new().await;
     let agent = Agent::new(env.handle.clone());
     let cap = captured();
@@ -101,7 +100,7 @@ async fn b11_non_cron_message_emits_user_message_event() {
 
 #[tokio::test]
 async fn b10_cron_message_does_not_emit_user_message_event() {
-    let _g = agent_test_lock();
+    let _g = agent_test_lock().await;
     let env = TestEnv::new().await;
     let agent = Agent::new(env.handle.clone());
     let cap = captured();
@@ -141,7 +140,7 @@ async fn b10_cron_message_does_not_emit_user_message_event() {
 
 #[tokio::test]
 async fn single_turn_text_response_completes_with_two_messages() {
-    let _g = agent_test_lock();
+    let _g = agent_test_lock().await;
     let env = TestEnv::new().await;
     let agent = Agent::new(env.handle.clone());
     mount_gemini_text(&env, "the answer").await;
@@ -176,7 +175,7 @@ async fn single_turn_text_response_completes_with_two_messages() {
 
 #[tokio::test]
 async fn b12_incognito_skips_embeddings_and_archive() {
-    let _g = agent_test_lock();
+    let _g = agent_test_lock().await;
     let env = TestEnv::new().await;
     let agent = Agent::new(env.handle.clone());
     mount_gemini_text(&env, "got it").await;
@@ -211,7 +210,7 @@ async fn b12_incognito_skips_embeddings_and_archive() {
 
 #[tokio::test]
 async fn auto_archive_skipped_in_incognito_even_when_threshold_crossed() {
-    let _g = agent_test_lock();
+    let _g = agent_test_lock().await;
     let env = TestEnv::new().await;
     let agent = Agent::new(env.handle.clone());
     mount_gemini_text(&env, "reply").await;

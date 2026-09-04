@@ -59,7 +59,7 @@ fn bench_memory_search_cold_and_warm(c: &mut Criterion) {
     // pays the full setup cost.
     c.bench_function("mcp_memory_search_cold", |b| {
         b.iter_batched(
-            || HomeJail::new(),
+            HomeJail::new,
             |_jail| {
                 let _ = handle_memory_search(&json!({ "query": "octopus", "limit": 5 }));
             },

@@ -11,8 +11,6 @@
 //! (e.g. `memory_search`'s embedding generation, `crystallize_sketch`,
 //! `web_search`) is intentionally absent from the curated MCP subset.
 
-use std::sync::Arc;
-
 use serde_json::{json, Value};
 
 use crate::actions;
@@ -35,11 +33,9 @@ pub const CURATED_TOOL_NAMES: &[&str] = &[
     "action_plan",
 ];
 
-/// Open the shared SQLite store. Wrapped in `Arc` so the calling server
-/// can cache the handle across tool calls if it wants — every handler in
-/// this module opens fresh, since rusqlite connections are cheap to open
-/// against a WAL-mode DB.
-pub fn open_store() -> Result<Arc<VectorStore>, String> {
+/// Open the shared SQLite store. Every handler opens fresh, since rusqlite
+/// connections are cheap to open against a WAL-mode DB.
+pub fn open_store() -> Result<VectorStore, String> {
     let path = shard_db_path()?;
     if let Some(parent) = path.parent() {
         if !parent.exists() {
@@ -48,7 +44,7 @@ pub fn open_store() -> Result<Arc<VectorStore>, String> {
     }
     let store = VectorStore::open(&path)
         .map_err(|e| format!("Failed to open vector store at {:?}: {}", path, e))?;
-    Ok(Arc::new(store))
+    Ok(store)
 }
 
 // ─── memory_search ────────────────────────────────────────────────────────
