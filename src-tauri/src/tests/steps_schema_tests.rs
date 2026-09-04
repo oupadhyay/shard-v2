@@ -290,10 +290,10 @@ mod tests {
         let events = process_interactions_event(&event, &mut full_text, &mut full_reasoning);
 
         assert_eq!(events.len(), 1);
-        if let AgentEvent::InteractionToolCall { signature, .. } = &events[0] {
-            assert_eq!(signature.as_deref(), Some("sig_xyz"));
+        if let AgentEvent::InteractionThoughtSignature(signature) = &events[0] {
+            assert_eq!(signature, "sig_xyz");
         } else {
-            panic!("Expected InteractionToolCall with signature");
+            panic!("Expected InteractionThoughtSignature");
         }
     }
 
@@ -427,10 +427,10 @@ mod tests {
         let events = process_interactions_event(&event, &mut full_text, &mut full_reasoning);
 
         assert_eq!(events.len(), 1);
-        if let AgentEvent::InteractionToolCall { signature, .. } = &events[0] {
-            assert_eq!(signature.as_deref(), Some("abc123..."));
+        if let AgentEvent::InteractionThoughtSignature(signature) = &events[0] {
+            assert_eq!(signature, "abc123...");
         } else {
-            panic!("Expected InteractionToolCall with signature");
+            panic!("Expected InteractionThoughtSignature");
         }
     }
 

@@ -1,11 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-    ".",
-    "crates/shard-external-tools",
-    "crates/shard-provider",
-    "crates/shard-tool-api",
-]
+members = ["."]
 default-members = ["."]
 
 [package]
@@ -23,9 +18,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-shard-external-tools = { path = "crates/shard-external-tools" }
-shard-provider = { path = "crates/shard-provider" }
-shard-tool-api = { path = "crates/shard-tool-api" }
+shard-external-tools = { git = "https://github.com/oupadhyay/shard-external-tools", rev = "b0fc45572caf17af2e8f46fb3f0a181f084ef9dd" }
+shard-provider = { git = "https://github.com/oupadhyay/shard-provider", rev = "fb466f4528ad879ef8d2aceae50501b0bcf023fb" }
+shard-tool-api = { git = "https://github.com/oupadhyay/shard-tool-api", rev = "aea826a9e64b3035843aa8800f2f6c0f5fbe8b9a" }
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }

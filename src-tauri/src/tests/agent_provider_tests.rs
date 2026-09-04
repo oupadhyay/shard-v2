@@ -253,6 +253,60 @@ mod gemini_turn {
         assert!(snapshot.responses.contains(&" world".to_string()));
     }
 
+    #[tokio::test]
+    async fn thought_signature_is_attached_to_following_tool_call() {
+        let _g = agent_test_lock();
+        let env = TestEnv::new().await;
+        let agent = Agent::new(env.handle.clone());
+
+        let body = gemini_sse(&[
+            json!({
+                "event_type": "step.start",
+                "index": 0,
+                "step": {"type": "thought", "signature": "sig_xyz"}
+            }),
+            json!({
+                "event_type": "step.delta",
+                "index": 1,
+                "delta": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "name": "test_unknown_tool",
+                    "arguments": {"query": "Shard"}
+                }
+            }),
+        ]);
+
+        Mock::given(method("POST"))
+            .and(path("/v1beta/interactions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body),
+            )
+            .mount(&env.server)
+            .await;
+
+        let mut history = vec![user("use a tool")];
+        let should_continue = agent
+            .process_gemini_turn(
+                &env.handle,
+                &config_with_gemini(),
+                &mut history,
+                1,
+                &TurnContext::default(),
+            )
+            .await
+            .unwrap();
+
+        assert!(should_continue);
+        let tool_call = &history[1].tool_calls.as_ref().unwrap()[0];
+        assert_eq!(tool_call.id, "fc_1");
+        assert_eq!(tool_call.thought_signature.as_deref(), Some("sig_xyz"));
+        assert_eq!(history[2].role, "tool");
+        assert_eq!(history[2].tool_call_id.as_deref(), Some("fc_1"));
+    }
+
     /// Missing API key short-circuits without any HTTP call.
     #[tokio::test]
     async fn missing_api_key_returns_err_immediately() {

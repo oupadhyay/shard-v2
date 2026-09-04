@@ -7344,6 +7344,7 @@ dependencies = [
 [[package]]
 name = "shard-external-tools"
 version = "0.1.0"
+source = "git+https://github.com/oupadhyay/shard-external-tools?rev=b0fc45572caf17af2e8f46fb3f0a181f084ef9dd#b0fc45572caf17af2e8f46fb3f0a181f084ef9dd"
 dependencies = [
  "log",
  "quick-xml 0.37.5",
@@ -7356,13 +7357,13 @@ dependencies = [
  "time 0.3.47",
  "tokio 1.48.0",
  "urlencoding",
- "wiremock",
  "yahoo_finance_api",
 ]
 
 [[package]]
 name = "shard-provider"
 version = "0.1.0"
+source = "git+https://github.com/oupadhyay/shard-provider?rev=fb466f4528ad879ef8d2aceae50501b0bcf023fb#fb466f4528ad879ef8d2aceae50501b0bcf023fb"
 dependencies = [
  "base64 0.22.1",
  "log",
@@ -7370,14 +7371,13 @@ dependencies = [
  "serde",
  "serde_json",
  "shard-tool-api",
- "tokio 1.48.0",
  "uuid 1.18.1",
- "wiremock",
 ]
 
 [[package]]
 name = "shard-tool-api"
 version = "0.1.0"
+source = "git+https://github.com/oupadhyay/shard-tool-api?rev=aea826a9e64b3035843aa8800f2f6c0f5fbe8b9a#aea826a9e64b3035843aa8800f2f6c0f5fbe8b9a"
 dependencies = [
  "serde",
  "serde_json",
