@@ -1682,7 +1682,7 @@ Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
                         .collect();
 
                     let results: Vec<(usize, Option<Vec<f32>>)> =
-                        futures::stream::iter(novel_facts.into_iter())
+                        futures::stream::iter(novel_facts)
                             .map(|(idx, fact_text)| {
                                 let client = http_client.clone();
                                 let key_opt = key_arc.clone();
@@ -1728,7 +1728,7 @@ Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
                         .map_err(|e| format!("Failed to open vector store: {}", e))?;
                     let mut created = 0usize;
 
-                    for (fact, precomputed) in facts.iter().zip(precomputed_embeddings.into_iter()) {
+                    for (fact, precomputed) in facts.iter().zip(precomputed_embeddings) {
                         // Check for duplicate by content hash
                         let hash = crate::vector_store::compute_content_hash(&fact.fact);
                         let exists: bool = store
@@ -1741,7 +1741,7 @@ Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
                             .unwrap_or(0) > 0;
 
                         if exists {
-                            log::debug!("[Deriver] Skipping duplicate: {}", &fact.fact);
+                            log::debug!("[Deriver] Skipping duplicate: {}", fact.fact);
                             continue;
                         }
 
@@ -1764,7 +1764,7 @@ Return at most 15 facts. If no user facts are found, return {{"facts": []}}."#,
                             embedding.as_deref(),
                         ) {
                             Ok(()) => {
-                                log::info!("[Deriver] Created observation: {}", &fact.fact);
+                                log::info!("[Deriver] Created observation: {}", fact.fact);
                                 created += 1;
                             }
                             Err(e) => log::warn!("[Deriver] Failed to insert observation: {}", e),
@@ -1999,7 +1999,7 @@ Rules:
                                     }
                                     _ => {}
                                 }
-                                log::info!("[Dream] Created {:?} observation: {}", level, &dream_obs.content);
+                                log::info!("[Dream] Created {:?} observation: {}", level, dream_obs.content);
                             }
                             Err(e) => log::warn!("[Dream] Failed to insert: {}", e),
                         }

@@ -1,20 +1,20 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use shard_lib::agent::{construct_gemini_messages, ChatMessage, FunctionCall, ToolCall};
+use shard_lib::agent::construct_gemini_messages;
+use shard_lib::llm_provider::{ProviderFunctionCall, ProviderMessage, ProviderToolCall};
 
 /// Build a synthetic chat history with interleaved user, assistant (with tool
 /// calls), and tool-response messages.
-fn build_history(tool_rounds: usize) -> Vec<ChatMessage> {
+fn build_history(tool_rounds: usize) -> Vec<ProviderMessage> {
     let mut history = Vec::with_capacity(1 + tool_rounds * 3);
 
     // Initial user message
-    history.push(ChatMessage {
+    history.push(ProviderMessage {
         role: "user".into(),
         content: Some("Hello, what's the weather?".into()),
         reasoning: None,
         tool_calls: None,
         tool_call_id: None,
         images: None,
-        is_cron: None,
     });
 
     for i in 0..tool_rounds {
@@ -22,14 +22,14 @@ fn build_history(tool_rounds: usize) -> Vec<ChatMessage> {
         let func_name = format!("tool_{i}");
 
         // Assistant with a tool call
-        history.push(ChatMessage {
+        history.push(ProviderMessage {
             role: "assistant".into(),
             content: Some(format!("Let me check {func_name}...")),
             reasoning: None,
-            tool_calls: Some(vec![ToolCall {
+            tool_calls: Some(vec![ProviderToolCall {
                 id: call_id.clone(),
                 tool_type: "function".into(),
-                function: FunctionCall {
+                function: ProviderFunctionCall {
                     name: func_name,
                     arguments: r#"{"q":"test"}"#.into(),
                 },
@@ -37,29 +37,26 @@ fn build_history(tool_rounds: usize) -> Vec<ChatMessage> {
             }]),
             tool_call_id: None,
             images: None,
-            is_cron: None,
         });
 
         // Tool response
-        history.push(ChatMessage {
+        history.push(ProviderMessage {
             role: "tool".into(),
             content: Some(format!(r#"{{"result": "response_{i}"}}"#)),
             reasoning: None,
             tool_calls: None,
             tool_call_id: Some(call_id),
             images: None,
-            is_cron: None,
         });
 
         // Assistant follow-up
-        history.push(ChatMessage {
+        history.push(ProviderMessage {
             role: "assistant".into(),
             content: Some(format!("Here is the result for round {i}.")),
             reasoning: None,
             tool_calls: None,
             tool_call_id: None,
             images: None,
-            is_cron: None,
         });
     }
 

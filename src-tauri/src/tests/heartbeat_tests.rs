@@ -6,7 +6,7 @@
  * in-memory/tempdir fixtures.
  */
 use crate::heartbeat::*;
-use crate::tests::agent_helpers::{home_lock, HomeJail};
+use crate::tests::agent_helpers::{home_lock_async, HomeJail};
 use tauri::Manager;
 
 // ============================================================================
@@ -508,7 +508,7 @@ fn test_normalize_heartbeat_slug_edge_cases() {
 
 #[tokio::test]
 async fn test_execute_approved_draft_reviewed_check() {
-    let _home_lock = home_lock();
+    let _home_lock = home_lock_async().await;
     let _home_jail = HomeJail::new();
     let app = tauri::test::mock_app();
     let handle = app.handle();
@@ -558,7 +558,7 @@ async fn test_execute_approved_draft_reviewed_check() {
 
 #[tokio::test]
 async fn test_execute_draft_gated_tool_validation() {
-    let _home_lock = home_lock();
+    let _home_lock = home_lock_async().await;
     let _home_jail = HomeJail::new();
     let app = tauri::test::mock_app();
     let handle = app.handle();
@@ -584,7 +584,7 @@ async fn test_execute_draft_gated_tool_validation() {
 
 #[tokio::test]
 async fn test_crystallize_sketch_draft_gated() {
-    let _home_lock = home_lock();
+    let _home_lock = home_lock_async().await;
     let _home_jail = HomeJail::new();
     let app = tauri::test::mock_app();
     let handle = app.handle();

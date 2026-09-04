@@ -8,19 +8,19 @@
  * `impl<R: tauri::Runtime> Agent<R>` lives in one of the submodules below.
  *
  * Module layout:
- *   - [`gemini`]       — Gemini / Interactions provider wire types, request
- *                        shaping, and stream parsers.
- *   - [`host`]         — `Agent`, `TurnContext`, and `Agent::new`.
- *   - [`openrouter`]   — OpenAI-compatible request helpers + `to_multimodal_messages`.
- *   - [`provider`]     — Provider-neutral DTOs used at extraction seams.
- *   - [`hash`]         — `calculate_history_hash`.
- *   - [`state`]        — history mutators + SQLite session persistence.
- *   - [`retry`]        — frontend-triggered KaTeX retry path.
- *   - [`youtube_summary`] — long-transcript summarization (chunked).
- *   - [`research`]     — Gemini-based intent classifier for research mode.
- *   - [`tools`]        — `execute_tool` cache wrapper + tool dispatch.
- *   - [`turns`]        — per-turn streaming handlers (Gemini + OpenRouter).
- *   - [`process`]      — `process_message` orchestrator.
+ * - [`gemini`]       — Gemini / Interactions provider wire types, request
+ *   shaping, and stream parsers.
+ * - [`host`]         — `Agent`, `TurnContext`, and `Agent::new`.
+ * - [`openrouter`]   — OpenAI-compatible request helpers + `to_multimodal_messages`.
+ * - [`provider`]     — Provider-neutral DTOs used at extraction seams.
+ * - [`hash`]         — `calculate_history_hash`.
+ * - [`state`]        — history mutators + SQLite session persistence.
+ * - [`retry`]        — frontend-triggered KaTeX retry path.
+ * - [`youtube_summary`] — long-transcript summarization (chunked).
+ * - [`research`]     — Gemini-based intent classifier for research mode.
+ * - [`tools`]        — `execute_tool` cache wrapper + tool dispatch.
+ * - [`turns`]        — per-turn streaming handlers (Gemini + OpenRouter).
+ * - [`process`]      — `process_message` orchestrator.
  */
 pub(crate) mod adapters;
 mod gemini;

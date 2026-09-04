@@ -492,17 +492,4 @@ mod tests {
         let result = parse_analysis_response("this is not json");
         assert!(result.is_err());
     }
-
-    #[test]
-    fn test_debounce_constants() {
-        // Verify constants are reasonable
-        assert!(
-            CAPTURE_DEBOUNCE_MS >= 1000,
-            "Debounce should be at least 1s"
-        );
-        assert!(
-            CACHE_TTL_MS >= CAPTURE_DEBOUNCE_MS,
-            "Cache TTL should be >= debounce"
-        );
-    }
 }

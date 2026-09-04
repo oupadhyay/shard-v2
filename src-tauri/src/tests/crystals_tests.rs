@@ -24,7 +24,7 @@ use tempfile::tempdir;
 /// Tests that touch the global personas dir / Tauri runtime must serialize on
 /// the single canonical `$HOME` lock so they don't race agent/mcp/heartbeat
 /// tests that mutate the same process-global `$HOME`.
-use crate::tests::agent_helpers::home_lock as personas_test_lock;
+use crate::tests::agent_helpers::home_lock_async as personas_test_lock_async;
 
 fn open() -> (VectorStore, tempfile::TempDir) {
     let dir = tempdir().unwrap();
@@ -133,7 +133,7 @@ fn slug_collision_truncates_to_fit_regex() {
     // 41-char slug + collision should trim base so total stays ≤ 41.
     let long = "a".to_string() + &"b".repeat(40); // 41 chars
     assert_eq!(long.len(), 41);
-    let s = pick_unique_slug(&long, &[long.clone()]).unwrap();
+    let s = pick_unique_slug(&long, std::slice::from_ref(&long)).unwrap();
     assert!(
         s.len() <= 41,
         "expected ≤41 chars after collision-retry, got {} ({})",
@@ -248,9 +248,7 @@ impl Drop for HomeJail {
 /// Stub LLM (no Tauri) — exercises the pure synthesis path so test 1 doesn't
 /// require wiremock just to assert that the assembled markdown parses.
 fn fake_crystallize_markdown(sketch_id: &str) -> String {
-    let body = format!(
-        "---\ndescription: A reusable recipe\ncategory: crystal\nrequired_tools:\n  - action_plan\n  - action_next\n---\n\n# Recipe\n\n1. Plan the work\n2. Execute it\n"
-    );
+    let body = "---\ndescription: A reusable recipe\ncategory: crystal\nrequired_tools:\n  - action_plan\n  - action_next\n---\n\n# Recipe\n\n1. Plan the work\n2. Execute it\n".to_string();
     stamp_source_sketch_id(&body, sketch_id)
 }
 
@@ -279,9 +277,9 @@ fn parse_meta_inline(content: &str) -> InlineMeta {
     let mut description = None;
     let mut required_tools = Vec::new();
     let mut category = None;
-    if content.starts_with("---\n") {
-        if let Some(end) = content[4..].find("\n---").map(|i| i + 4) {
-            let fm = &content[4..end];
+    if let Some(frontmatter) = content.strip_prefix("---\n") {
+        if let Some(end) = frontmatter.find("\n---") {
+            let fm = &frontmatter[..end];
             let mut in_rt = false;
             for line in fm.lines() {
                 let t = line.trim();
@@ -319,7 +317,7 @@ fn parse_meta_inline(content: &str) -> InlineMeta {
 
 #[tokio::test]
 async fn crystallized_persona_appears_in_list_personas() {
-    let _lock = personas_test_lock();
+    let _lock = personas_test_lock_async().await;
     let _jail = HomeJail::new();
 
     // Write a fake crystallised persona straight to the personas dir and
@@ -345,7 +343,7 @@ async fn crystallized_persona_appears_in_list_personas() {
 async fn crystallization_writes_through_self_files_event() {
     use tauri::{Listener, Manager};
 
-    let _lock = personas_test_lock();
+    let _lock = personas_test_lock_async().await;
     let _jail = HomeJail::new();
 
     // Build a mock Tauri app so write_persona_draft → edit_allowed_file

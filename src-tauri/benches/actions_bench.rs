@@ -20,7 +20,7 @@ fn open_store() -> (VectorStore, tempfile::TempDir) {
 /// priority so the frontier walk surfaces them in order. Returns once all
 /// rows are inserted; nothing is marked done so every node remains pending.
 fn populate(store: &VectorStore, n: usize, depth: usize) {
-    let chains = (n + depth - 1) / depth;
+    let chains = n.div_ceil(depth);
     for chain in 0..chains {
         let mut prev: Option<String> = None;
         for level in 0..depth {
@@ -73,7 +73,7 @@ fn bench_pending_sketch_summary(c: &mut Criterion) {
                 Some(&parent),
                 &format!("step-{}-{}", i, level),
                 &deps,
-                -(level as i32),
+                -level,
                 None,
                 None,
             )

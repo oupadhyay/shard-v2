@@ -177,6 +177,5 @@ pub fn sweep_durable(store: &VectorStore, older_than: chrono::Duration) -> Resul
             "DELETE FROM dedup_window WHERE last_seen < ?1",
             params![cutoff],
         )
-        .map(|n| n as usize)
         .map_err(|e| format!("dedup sweep failed: {}", e))
 }

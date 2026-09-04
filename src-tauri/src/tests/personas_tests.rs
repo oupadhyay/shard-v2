@@ -6,14 +6,13 @@ mod tests {
     };
     use crate::tests::agent_helpers::{home_lock, HomeJail};
     use std::fs;
-    use std::sync::MutexGuard;
+    use tokio::sync::MutexGuard;
 
     /// Guard for tests that read/write the shared personas dir: holds the
     /// canonical process-wide `$HOME` lock and redirects `$HOME` to a fresh
     /// tempdir so `get_personas_dir()` resolves to an isolated sandbox. Without
     /// this, concurrent tests mutating `$HOME` make these write→list→assert
     /// sequences flaky.
-    #[must_use]
     fn fs_guard() -> (MutexGuard<'static, ()>, HomeJail) {
         let lock = home_lock();
         let jail = HomeJail::new();

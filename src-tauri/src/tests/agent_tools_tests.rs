@@ -20,9 +20,10 @@ fn config() -> crate::config::AppConfig {
 }
 
 fn config_incognito() -> crate::config::AppConfig {
-    let mut c = crate::config::AppConfig::default();
-    c.incognito_mode = Some(true);
-    c
+    crate::config::AppConfig {
+        incognito_mode: Some(true),
+        ..Default::default()
+    }
 }
 
 // ============================================================================
@@ -34,7 +35,7 @@ mod cache_wrapper {
 
     #[tokio::test]
     async fn cache_hit_short_circuits_uncached_call() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -52,7 +53,7 @@ mod cache_wrapper {
 
     #[tokio::test]
     async fn unknown_tool_returns_known_error_message_and_is_not_cached() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let args = json!({});
@@ -67,7 +68,7 @@ mod cache_wrapper {
 
     #[tokio::test]
     async fn error_results_are_not_cached() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -90,7 +91,7 @@ mod cache_wrapper {
 
     #[tokio::test]
     async fn ok_result_is_cached_for_cacheable_tool() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         // Pre-seed cache directly to prove the cached lookup path is what
@@ -114,7 +115,7 @@ mod incognito {
 
     #[tokio::test]
     async fn save_memory_blocked_in_incognito() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let r = agent
@@ -130,7 +131,7 @@ mod incognito {
 
     #[tokio::test]
     async fn update_topic_summary_blocked_in_incognito() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let r = agent
@@ -146,7 +147,7 @@ mod incognito {
 
     #[tokio::test]
     async fn refresh_memories_blocked_in_incognito() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let r = agent
@@ -170,7 +171,7 @@ mod memory_search {
 
     #[tokio::test]
     async fn empty_query_with_no_time_filter_returns_argument_error() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let r = agent
@@ -181,7 +182,7 @@ mod memory_search {
 
     #[tokio::test]
     async fn missing_gemini_key_returns_dedicated_error() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let r = agent
@@ -205,7 +206,7 @@ mod memory_get {
 
     #[tokio::test]
     async fn missing_path_and_session_id_returns_argument_error() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let r = agent
@@ -224,7 +225,7 @@ mod wake_me_up_in {
 
     #[tokio::test]
     async fn zero_duration_rejected() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let r = agent
@@ -240,7 +241,7 @@ mod wake_me_up_in {
 
     #[tokio::test]
     async fn over_24_hours_rejected() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let r = agent
@@ -256,7 +257,7 @@ mod wake_me_up_in {
 
     #[tokio::test]
     async fn empty_context_rejected() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let r = agent
@@ -293,7 +294,7 @@ mod personas {
 
     #[tokio::test]
     async fn list_personas_with_empty_dir() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let r = agent
@@ -305,7 +306,7 @@ mod personas {
 
     #[tokio::test]
     async fn list_personas_lists_seeded_files() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         write_persona(&env, "writer", "# Writer\nBe concise.");
         write_persona(&env, "researcher", "# Researcher\nBe thorough.");
@@ -319,7 +320,7 @@ mod personas {
 
     #[tokio::test]
     async fn load_persona_unknown_returns_not_found() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
         let r = agent
@@ -335,7 +336,7 @@ mod personas {
 
     #[tokio::test]
     async fn load_then_unload_persona_round_trip_updates_active_skills() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         write_persona(&env, "writer", "be brief");
         let agent = Agent::new(env.handle.clone());
@@ -449,7 +450,7 @@ mod self_files_dispatch {
 
     #[tokio::test]
     async fn read_file_empty_when_config_missing() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -473,7 +474,7 @@ mod self_files_dispatch {
 
     #[tokio::test]
     async fn read_file_returns_contents_when_present() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         write_config_toml(&env, "selected_model = \"gpt-oss-120b\"\n");
         let agent = Agent::new(env.handle.clone());
@@ -492,7 +493,7 @@ mod self_files_dispatch {
 
     #[tokio::test]
     async fn read_file_rejects_empty_path() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -505,7 +506,7 @@ mod self_files_dispatch {
 
     #[tokio::test]
     async fn read_file_rejects_unknown_path() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -523,7 +524,7 @@ mod self_files_dispatch {
 
     #[tokio::test]
     async fn read_file_rejects_directory_traversal() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -543,7 +544,7 @@ mod self_files_dispatch {
 
     #[tokio::test]
     async fn edit_file_creates_initial_content_from_empty() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
@@ -572,7 +573,7 @@ mod self_files_dispatch {
 
     #[tokio::test]
     async fn edit_file_round_trip_replace() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         write_config_toml(&env, "selected_model = \"old-model\"\n");
         let agent = Agent::new(env.handle.clone());
@@ -596,7 +597,7 @@ mod self_files_dispatch {
 
     #[tokio::test]
     async fn edit_file_blocks_api_key_in_old_str() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         write_config_toml(&env, "gemini_api_key = \"placeholder\"\n");
         let agent = Agent::new(env.handle.clone());
@@ -620,7 +621,7 @@ mod self_files_dispatch {
 
     #[tokio::test]
     async fn edit_file_blocks_api_key_in_new_str() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         write_config_toml(&env, "selected_model = \"x\"\n");
         let agent = Agent::new(env.handle.clone());
@@ -646,7 +647,7 @@ mod self_files_dispatch {
 
     #[tokio::test]
     async fn edit_file_rejects_ambiguous_old_str_without_replace_all() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         write_config_toml(&env, "foo = 1\nfoo = 2\n");
         let agent = Agent::new(env.handle.clone());
@@ -672,7 +673,7 @@ mod self_files_dispatch {
 
     #[tokio::test]
     async fn edit_file_replace_all_succeeds_with_multiple_matches() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         // Use a real config field so the result still passes the AppConfig
         // compile check; the substring `foo` appears twice for replace_all.
@@ -701,7 +702,7 @@ mod self_files_dispatch {
 
     #[tokio::test]
     async fn edit_file_emits_file_edited_event_with_outcome_payload() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         write_config_toml(&env, "selected_model = \"alpha\"\n");
 

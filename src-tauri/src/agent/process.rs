@@ -537,10 +537,10 @@ impl<R: tauri::Runtime> Agent<R> {
 
             // 2. Log assistant response
             if let Some(last_msg) = history.last() {
-                if (last_msg.role == "model" || last_msg.role == "assistant")
-                    && last_msg.content.is_some()
-                {
-                    let content = last_msg.content.as_ref().unwrap();
+                if let (true, Some(content)) = (
+                    last_msg.role == "model" || last_msg.role == "assistant",
+                    last_msg.content.as_ref(),
+                ) {
                     let response_embedding = if let Some(api_key) = &config.gemini_api_key {
                         let embedding_config = crate::gemini_embedding::GeminiEmbeddingConfig {
                             endpoint_url: crate::endpoints::gemini_embedding(),

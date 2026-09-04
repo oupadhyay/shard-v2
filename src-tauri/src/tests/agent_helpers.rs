@@ -4,8 +4,9 @@
 //!
 //!   1. `tauri::test::mock_app()` resolves `app_data_dir` against `$HOME` via
 //!      `dirs`. If two tests run in parallel and each sets `$HOME` to its own
-//!      tempdir, they race. We serialize all agent tests with [`AGENT_TEST_LOCK`]
-//!      and rebuild the global `crate::endpoints` overrides for each test.
+//!      tempdir, they race. We serialize all agent tests with the shared lock
+//!      returned by [`agent_test_lock`] and rebuild the global `crate::endpoints`
+//!      overrides for each test.
 //!
 //!   2. The agent emits Tauri events; tests that need to assert on them install
 //!      listeners up-front. [`Captured`] and [`register_listeners`] mirror what
@@ -15,8 +16,8 @@
 //! Typical test shape:
 //!
 //! ```ignore
-//! let _g = AGENT_TEST_LOCK.lock().unwrap();
-//! let env = TestEnv::new();   // tempdir, HOME, mock server, endpoints override
+//! let _g = agent_test_lock().await;
+//! let env = TestEnv::new().await; // tempdir, HOME, mock server, endpoints override
 //! let agent = Agent::new(env.handle.clone());
 //! // ...mount wiremock expectations on env.server, then call agent.process_message(...)
 //! ```
@@ -26,7 +27,9 @@
 // per-helper dead-code warnings until then.
 #![allow(dead_code)]
 
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
 use tauri::{AppHandle, Listener};
 use wiremock::MockServer;
@@ -40,20 +43,24 @@ use crate::endpoints::{self, Endpoints};
 /// group and lets tests in different groups clobber each other's `$HOME` (and
 /// therefore each other's on-disk SQLite DB), which is the historical source
 /// of flaky "no such table" failures.
-pub fn home_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let m = LOCK.get_or_init(|| Mutex::new(()));
-    // Recover from poisoning so a panicking test doesn't break every other test.
-    match m.lock() {
-        Ok(g) => g,
-        Err(poisoned) => poisoned.into_inner(),
-    }
+fn shared_home_lock() -> &'static AsyncMutex<()> {
+    static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| AsyncMutex::new(()))
+}
+
+pub fn home_lock() -> AsyncMutexGuard<'static, ()> {
+    shared_home_lock().blocking_lock()
+}
+
+pub async fn home_lock_async() -> AsyncMutexGuard<'static, ()> {
+    shared_home_lock().lock().await
 }
 
 /// Process-wide lock around `$HOME` mutation + endpoint overrides. Every
-/// agent test must hold this for its full duration. Alias for [`home_lock`].
-pub fn agent_test_lock() -> MutexGuard<'static, ()> {
-    home_lock()
+/// agent test must hold this for its full duration. Async alias for the shared
+/// lock also used by [`home_lock`].
+pub async fn agent_test_lock() -> AsyncMutexGuard<'static, ()> {
+    home_lock_async().await
 }
 
 /// RAII guard that redirects `$HOME` to a fresh tempdir for the duration of a
@@ -267,7 +274,7 @@ mod helper_smoke {
 
     #[tokio::test]
     async fn test_env_builds_and_overrides_endpoints() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         // The override should now point at the wiremock server.
         let interactions = endpoints::gemini_interactions();

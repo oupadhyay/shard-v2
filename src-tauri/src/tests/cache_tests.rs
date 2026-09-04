@@ -3,7 +3,6 @@
  *
  * Tests for the tool call caching system.
  */
-
 #[cfg(test)]
 mod tests {
     use crate::cache::{get_ttl_for_tool, make_cache_key};

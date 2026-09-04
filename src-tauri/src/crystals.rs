@@ -237,12 +237,12 @@ pub fn stamp_source_sketch_id(markdown: &str, sketch_id: &str) -> String {
     if markdown.contains(&needle) {
         return markdown.to_string();
     }
-    if markdown.starts_with("---\n") {
+    if let Some(markdown_body) = markdown.strip_prefix("---\n") {
         // Insert just after the opening `---`.
         let mut out = String::from("---\n");
         out.push_str(&needle);
         out.push('\n');
-        out.push_str(&markdown[4..]);
+        out.push_str(markdown_body);
         return out;
     }
     // Wrap with minimal frontmatter.
