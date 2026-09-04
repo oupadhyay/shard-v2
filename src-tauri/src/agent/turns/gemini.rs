@@ -218,6 +218,9 @@ impl<R: tauri::Runtime> Agent<R> {
                             AgentEvent::ReasoningChunk(text) => {
                                 app_handle.emit("agent-reasoning-chunk", text).ok();
                             }
+                            AgentEvent::InteractionThoughtSignature(signature) => {
+                                current_signature = Some(signature);
+                            }
                             AgentEvent::InteractionToolCall {
                                 id,
                                 name,
