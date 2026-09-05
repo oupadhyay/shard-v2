@@ -3,7 +3,7 @@
 //! Production code reads each URL via the helpers in this module; defaults
 //! match the historic hard-coded constants exactly so behaviour is unchanged.
 //!
-//! Tests can call [`set_overrides`] (gated behind `#[cfg(test)]`) to point
+//! Tests can call `set_overrides` (enabled for tests and the `eval` feature) to point
 //! every endpoint at a `wiremock::MockServer` instance, allowing the agent
 //! and its helpers to be exercised end-to-end without any real network IO.
 //!
@@ -135,16 +135,16 @@ pub fn clear_overrides() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use crate::tests::agent_helpers::home_lock;
 
-    // Serialize tests in this module; they all touch the global override slot.
-    static SERIAL: Mutex<()> = Mutex::new(());
+    // Share the agent tests' process-wide lock: a module-local lock would let
+    // these tests clear another test's mock endpoint during an HTTP request.
 
     /// Defaults must match the production constants byte-for-byte.
     /// This is the parity guarantee for Phase 0.
     #[test]
     fn defaults_match_production_constants() {
-        let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let _g = home_lock();
         clear_overrides();
         assert_eq!(
             gemini_interactions(),
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn override_then_clear_round_trip() {
-        let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let _g = home_lock();
         let eps = Endpoints {
             gemini_interactions: "http://localhost:1/interactions".to_string(),
             ..Endpoints::default()

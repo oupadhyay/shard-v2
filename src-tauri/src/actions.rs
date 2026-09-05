@@ -11,9 +11,9 @@
 //!    are all `done`. Soft-blocked actions (status=blocked) need explicit
 //!    `unblock`/`update_status` before they re-enter the frontier.
 //!  * A "sketch" is a parent action with N children — `plan(title, steps)`
-//!    creates that shape atomically and threads chain dependencies so steps
+//!    creates that shape and threads chain dependencies so steps
 //!    execute in order by default. Callers wanting a parallel sketch can pass
-//!    empty deps via [`plan_with_deps`].
+//!    empty deps via [`insert_action`].
 
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};

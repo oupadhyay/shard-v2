@@ -258,7 +258,7 @@ mod gemini_turn {
 
     #[tokio::test]
     async fn thought_signature_is_attached_to_following_tool_call() {
-        let _g = agent_test_lock();
+        let _g = agent_test_lock().await;
         let env = TestEnv::new().await;
         let agent = Agent::new(env.handle.clone());
 
