@@ -6,7 +6,7 @@
 //! structured outcome (before / after / unified diff) for both the tool result
 //! and a `file-edited` Tauri event consumed by the frontend diff viewer.
 //!
-//! Adding a new editable file = add an entry to [`ALLOWED_FILES`]. Heartbeat
+//! Adding a new editable file starts with [`validate_logical_path`]. Heartbeat
 //! spec files and (later) implementation source files plug in here, so we
 //! don't grow a new tool per surface.
 //!

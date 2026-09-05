@@ -29,7 +29,7 @@ use super::handlers::{
 };
 
 /// MCP server handler — pure routing over [`crate::tool_registry`] and
-/// [`super::handlers`]. Cloneable so `rmcp::serve_server` can pass it
+/// the internal `handlers` module. Cloneable so `rmcp::serve_server` can pass it
 /// across the spawned reader / writer tasks.
 #[derive(Clone)]
 pub struct ShardMcpServer {
