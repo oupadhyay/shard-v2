@@ -24,7 +24,22 @@ Shard is a high-performance, privacy-focused AI assistant built with **Tauri 2**
 | **IPC**      | Tauri commands + event emitter                   | `#[tauri::command]` ↔ `invoke<T>()`                                      |
 | **Data**     | `~/Library/Application Support/dev.ojasw.shard/` | `memories.sqlite`, `tool_cache.json`, `personas/`, `last_run.json`         |
 
-See [`AGENTS.md`](./AGENTS.md) for the full module-level architecture reference.
+The backend consumes three standalone crates at pinned GitHub revisions:
+
+- [`shard-tool-api`](https://github.com/oupadhyay/shard-tool-api): neutral tool contracts.
+- [`shard-external-tools`](https://github.com/oupadhyay/shard-external-tools): portable external tools and YouTube acquisition/rendering.
+- [`shard-provider`](https://github.com/oupadhyay/shard-provider): Gemini transports and OpenAI-compatible vision transport.
+
+The Git cutover is complete; no in-tree crate copies remain. Shard retains
+UI, persistence, hooks/cache, model selection, retry/fallback and workflow
+policy. Both transport/tool crates depend on the same tool-api revision, never
+on each other. Future portable changes land and pass validation in their owning
+repository first, then Shard updates its immutable Git pin and lockfile.
+
+See [`docs/SPLIT_OWNERSHIP.md`](./docs/SPLIT_OWNERSHIP.md) for the ownership map,
+initial revisions and retained compatibility modules, and [`AGENTS.md`](./AGENTS.md)
+for build guidance and the native GUI regression matrix. Host workspace tests
+do not run the standalone Git dependencies' unit tests.
 
 ## 🚀 Getting Started
 
@@ -78,7 +93,8 @@ Shard is configured entirely through the in-app Settings modal:
 
 | Document                                           | Purpose                                                              |
 |----------------------------------------------------|----------------------------------------------------------------------|
-| [`AGENTS.md`](./AGENTS.md)                         | Full architecture reference (modules, tools, memory, retrieval, CSS) |
+| [`AGENTS.md`](./AGENTS.md)                         | Ownership rules, build commands and native GUI regression matrix |
+| [`docs/SPLIT_OWNERSHIP.md`](./docs/SPLIT_OWNERSHIP.md) | Completed repository split, revision updates and compatibility boundaries |
 | [`docs/BENCH.md`](./docs/BENCH.md)                 | Benchmark suite descriptions and run commands                        |
 | [`docs/BENCH_RESULTS.md`](./docs/BENCH_RESULTS.md) | Historical benchmark measurements                                    |
 | [`docs/RETRIEVAL.md`](./docs/RETRIEVAL.md)         | Hybrid search strategy (sqlite-vec + FTS5)                           |
