@@ -95,6 +95,11 @@ not hide unrelated baseline failures or manufacture passing results.
 
 ## Updating Split Revisions
 
+The `Split revision updates` workflow proposes coordinated draft PRs daily;
+see `docs/SPLIT_OWNERSHIP.md` for its credential setup, waiting states, and
+review checklist. It does not auto-merge or replace native GUI verification.
+Do not manually edit its `automation/split-revisions` branches.
+
 Use immutable Git commit SHAs, not moving branches. When updating
 `shard-tool-api`, update the host and every consuming split crate together so
 Cargo resolves one nominal type source. Then regenerate `src-tauri/Cargo.lock`
