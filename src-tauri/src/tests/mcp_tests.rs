@@ -78,6 +78,7 @@ fn list_tools_returns_curated_subset() {
 
     // Heartbeat-only / draft-gated tools MUST NOT be exposed.
     for forbidden in &[
+        "edit_file",
         "create_heartbeat",
         "edit_heartbeat",
         "delete_heartbeat",
@@ -154,7 +155,7 @@ fn memory_search_missing_query_errors() {
 // ─── 3. edit_file via MCP writes through self_files ───────────────────────
 
 #[test]
-fn edit_file_via_mcp_writes_through_self_files() {
+fn edit_file_via_mcp_requires_shard_approval() {
     let _lock = mcp_test_lock();
     let _jail = HomeJail::new();
 
@@ -167,20 +168,15 @@ fn edit_file_via_mcp_writes_through_self_files() {
         "old_str": "original",
         "new_str": "patched",
     }))
-    .unwrap();
+    .unwrap_err();
 
-    assert!(result.contains("Edited"), "got: {result}");
+    assert!(result.contains("approval"), "got: {result}");
     let after = std::fs::read_to_string(&cfg).unwrap();
-    assert!(after.contains("patched"), "file should reflect edit");
-
-    // And it should land in file_events — confirm by calling file_history.
-    let summary = handle_file_history(&json!({ "path": "config.toml", "limit": 5 })).unwrap();
-    assert!(summary.contains("config.toml"));
-    assert!(summary.contains("edit"));
+    assert!(after.contains("original"), "file must remain untouched");
 }
 
 #[test]
-fn edit_file_creates_new_persona_via_allowlist() {
+fn edit_file_cannot_create_persona_without_approval() {
     let _lock = mcp_test_lock();
     let _jail = HomeJail::new();
 
@@ -190,11 +186,10 @@ fn edit_file_creates_new_persona_via_allowlist() {
         "old_str": "",
         "new_str": body,
     }))
-    .unwrap();
+    .unwrap_err();
 
     let abs = resolve_allowed_path_no_tauri("personas/mcp-author.md").unwrap();
-    let on_disk = std::fs::read_to_string(&abs).unwrap();
-    assert_eq!(on_disk, body);
+    assert!(!abs.exists());
 }
 
 // ─── 4. allow-list refusal ────────────────────────────────────────────────
@@ -218,10 +213,7 @@ fn edit_file_outside_allowlist_refused() {
         }))
         .unwrap_err();
         assert!(
-            err.contains("not allow-listed")
-                || err.contains("must end")
-                || err.contains("may only")
-                || err.contains("must start"),
+            err.contains("approval"),
             "expected allow-list refusal for `{bad}`, got: {err}"
         );
     }
@@ -248,7 +240,7 @@ fn edit_file_refuses_api_key_in_config() {
         "new_str": "gemini_api_key = \"secret\"",
     }))
     .unwrap_err();
-    assert!(err.to_lowercase().contains("api_key"), "got: {err}");
+    assert!(err.contains("approval"), "got: {err}");
 }
 
 // ─── 5. concurrent clients serialized ─────────────────────────────────────
@@ -304,17 +296,17 @@ async fn concurrent_clients_serialized() {
             successes += 1;
         }
     }
-    assert_eq!(successes, n, "every serialized edit should land");
+    assert_eq!(successes, 0, "no concurrent call can authorize an edit");
     assert_eq!(
         max_observed.load(std::sync::atomic::Ordering::SeqCst),
         1,
         "write_lock must serialize concurrent edits — observed ≥2 in flight"
     );
 
-    // And every persona should be on disk.
+    // No persona should be on disk.
     for i in 0..n {
         let abs = resolve_allowed_path_no_tauri(&format!("personas/concur-{i}.md")).unwrap();
-        assert!(abs.exists(), "persona {i} missing on disk");
+        assert!(!abs.exists(), "unauthorized persona {i} on disk");
     }
 }
 

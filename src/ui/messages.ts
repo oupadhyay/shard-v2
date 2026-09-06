@@ -601,6 +601,15 @@ export function shouldSkipStreamingChunk(lastElement: Element | null, chunk: str
 /**
  * Render a proactive message with optional approve/reject buttons
  */
+export function draftStatusText(msg: Partial<ProactiveMessage>): string {
+  if (msg.approved === false) return "Rejected — not executed";
+  if (msg.execution_status === "succeeded") return "Approved — execution succeeded";
+  if (msg.execution_status === "failed") return "Approved — execution failed; effects may be partial. Inspect before trying a new action.";
+  if (msg.execution_status === "unknown" || msg.approved === true)
+    return `${msg.approved === true ? "Approved" : "Approval unconfirmed"} — outcome unconfirmed; execution may be in progress or interrupted. Do not retry; inspect effects.`;
+  return msg.needs_approval ? "Reviewed — approval and outcome unconfirmed" : "Dismissed";
+}
+
 export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, msg: ProactiveMessage) {
   const msgDiv = document.createElement("div");
   msgDiv.className = "message proactive-message";
@@ -615,7 +624,9 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
   titleContainer.style.gap = "8px";
   
   const icon = msg.needs_approval ? "⚡" : "🤖";
-  const title = msg.needs_approval ? "Proactive Action Required" : "Scheduled Task";
+  const title = msg.needs_approval
+    ? (msg.reviewed_at ? "Reviewed Action" : "Action Awaiting Approval")
+    : "Scheduled Task";
   titleContainer.innerHTML = `<span>${icon}</span><span style="letter-spacing: 0.5px; text-transform: uppercase; font-size: 11px;">${title}</span>`;
   
   headerDiv.appendChild(titleContainer);
@@ -690,11 +701,22 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
       rejectBtn.disabled = true;
       try {
         await invoke("approve_draft", { messageId: msg.id });
-        actionsDiv.innerHTML = `<div class="proactive-status">${CHECK_ICON} Approved</div>`;
+        titleContainer.querySelector("span:last-child")!.textContent = "Reviewed Action";
+        actionsDiv.textContent = "Approved — execution succeeded";
       } catch (e) {
         logger.error("Failed to approve:", e);
-        approveBtn.disabled = false;
-        rejectBtn.disabled = false;
+        try {
+          const state = await invoke<Partial<ProactiveMessage>>("get_draft_status", { messageId: msg.id });
+          if (!state.reviewed_at) {
+            approveBtn.disabled = false;
+            rejectBtn.disabled = false;
+          } else {
+            titleContainer.querySelector("span:last-child")!.textContent = "Reviewed Action";
+            actionsDiv.textContent = draftStatusText({ ...msg, ...state });
+          }
+        } catch {
+          actionsDiv.textContent = "Could not confirm approval or execution. Do not retry; reopen Shard and inspect the action.";
+        }
       }
     });
 
@@ -703,11 +725,11 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
       rejectBtn.disabled = true;
       try {
         await invoke("reject_draft", { messageId: msg.id });
+        titleContainer.querySelector("span:last-child")!.textContent = "Reviewed Action";
         actionsDiv.innerHTML = `<div class="proactive-status" style="color: #f87171;">${CROSS_ICON} Rejected</div>`;
       } catch (e) {
         logger.error("Failed to reject:", e);
-        approveBtn.disabled = false;
-        rejectBtn.disabled = false;
+        actionsDiv.textContent = "Could not confirm rejection. Reopen Shard to check the saved decision.";
       }
     });
 
@@ -718,14 +740,19 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
     // Already reviewed
     const actionsDiv = document.createElement("div");
     actionsDiv.className = "proactive-actions";
-    if (msg.approved === true) {
-      actionsDiv.innerHTML = `<div class="proactive-status">${CHECK_ICON} Approved on ${new Date(msg.reviewed_at).toLocaleString()}</div>`;
-    } else if (msg.approved === false) {
-      actionsDiv.innerHTML = `<div class="proactive-status" style="color: #f87171;">${CROSS_ICON} Rejected on ${new Date(msg.reviewed_at).toLocaleString()}</div>`;
-    } else {
-      actionsDiv.innerHTML = `<div class="proactive-status">Dismissed</div>`;
-    }
+    actionsDiv.textContent = draftStatusText(msg);
     msgDiv.appendChild(actionsDiv);
+    if (msg.execution_result) {
+      const details = document.createElement("details");
+      details.className = "tool-output";
+      const summary = document.createElement("summary");
+      summary.textContent = "Execution result";
+      const result = document.createElement("div");
+      result.className = "tool-args";
+      result.textContent = msg.execution_result;
+      details.append(summary, result);
+      msgDiv.appendChild(details);
+    }
   }
 
   chatArea.appendChild(msgDiv);
@@ -733,4 +760,3 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
     chatArea.scrollTop = chatArea.scrollHeight;
   }
 }
-

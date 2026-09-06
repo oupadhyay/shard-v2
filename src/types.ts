@@ -91,6 +91,8 @@ export interface ProactiveMessage {
   needs_approval: boolean;
   reviewed_at?: string | null;
   approved?: boolean | null;
+  execution_status?: "unknown" | "succeeded" | "failed" | null;
+  execution_result?: string | null;
   created_at: string;
 }
 

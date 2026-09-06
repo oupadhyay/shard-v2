@@ -202,8 +202,8 @@ mod tests {
         assert!(reg.is_draft_gated("delete_heartbeat"));
         assert!(reg.is_draft_gated("edit_heartbeat"));
 
-        // Self-awareness file tools are NOT draft-gated (user is present in chat)
-        assert!(!reg.is_draft_gated("edit_file"));
+        // Presence in chat is not approval of a model-generated file edit.
+        assert!(reg.is_draft_gated("edit_file"));
         assert!(!reg.is_draft_gated("read_file"));
 
         assert!(!reg.is_draft_gated("web_search"));

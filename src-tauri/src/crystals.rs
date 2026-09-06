@@ -515,6 +515,8 @@ fn queue_draft<R: tauri::Runtime>(
         needs_approval: true,
         reviewed_at: None,
         approved: None,
+        execution_status: None,
+        execution_result: None,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     crate::heartbeat::insert_proactive_message(app_handle, &msg)

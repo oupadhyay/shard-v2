@@ -13,7 +13,7 @@
 //! incognito mode.
 
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use super::Agent;
 
@@ -25,6 +25,21 @@ impl<R: tauri::Runtime> Agent<R> {
         args: &Value,
         config: &crate::config::AppConfig,
     ) -> String {
+        // A model-generated tool call is not evidence of explicit consent,
+        // even in an interactive turn. Review the concrete self-change first.
+        if crate::tool_registry::global().is_draft_gated(function_name) {
+            let session = self.session_id.lock().await.clone();
+            return match crate::heartbeat::queue_tool_draft(
+                app_handle,
+                &session,
+                function_name,
+                args,
+                "Review this change to Shard before it runs.",
+            ) {
+                Ok(id) => format!("Action queued for user approval ({id}); it has NOT executed."),
+                Err(e) => format!("Error: Could not queue approval: {e}"),
+            };
+        }
         // Phase 1.1 — pre-tool-use lifecycle hook. Hooks can short-circuit with
         // a synthetic result (`Replace`) or refuse the call (`Abort`).
         let invocation = super::hooks::ToolInvocation {
@@ -539,76 +554,6 @@ impl<R: tauri::Runtime> Agent<R> {
                     Err(e) => format!("Error: {}", e),
                 }
             }
-            "edit_file" => {
-                let path = args["path"].as_str().unwrap_or_default();
-                let old_str = args["old_str"].as_str().unwrap_or("");
-                let new_str = args["new_str"].as_str().unwrap_or("");
-                let replace_all = args["replace_all"].as_bool().unwrap_or(false);
-
-                match crate::self_files::edit_allowed_file(
-                    app_handle,
-                    path,
-                    old_str,
-                    new_str,
-                    replace_all,
-                ) {
-                    Ok(outcome) => {
-                        log::info!(
-                            "[edit_file] {} ({} replacement{})",
-                            outcome.path,
-                            outcome.replacements,
-                            if outcome.replacements == 1 { "" } else { "s" }
-                        );
-
-                        // Structured event for frontend diff viewer / file tree.
-                        let _ = app_handle.emit("file-edited", &outcome);
-
-                        format!(
-                            "Edited `{}` ({} replacement{}).\n\n```diff\n{}\n```",
-                            outcome.path,
-                            outcome.replacements,
-                            if outcome.replacements == 1 { "" } else { "s" },
-                            outcome.unified_diff
-                        )
-                    }
-                    Err(e) => format!("Error: {}", e),
-                }
-            }
-            "rollback_self_edit" => {
-                let path = args["path"].as_str().unwrap_or_default();
-                let event_id = args["event_id"].as_str().filter(|s| !s.is_empty());
-                if let Err(e) = crate::self_files::validate_logical_path(path) {
-                    format!("Error: {}", e)
-                } else {
-                    let store = match crate::memories::get_vector_store(app_handle) {
-                        Ok(s) => s,
-                        Err(e) => return format!("Error: vector store unavailable: {}", e),
-                    };
-                    match crate::file_history::rollback_event(&store, path, event_id) {
-                        Ok((reverted_id, len)) => {
-                            // Emit a `file-edited` event so the diff viewer
-                            // adds a tab for the revert (with a sentinel diff
-                            // indicating the original edit's id).
-                            let _ = app_handle.emit(
-                                "file-edited",
-                                serde_json::json!({
-                                    "path": path,
-                                    "abs_path": "",
-                                    "before": "",
-                                    "after": "",
-                                    "unified_diff": format!("(rolled back to event {})", reverted_id),
-                                    "replacements": 0_usize,
-                                }),
-                            );
-                            format!(
-                                "Rolled back `{}` to event `{}` ({} bytes restored).",
-                                path, reverted_id, len
-                            )
-                        }
-                        Err(e) => format!("Error: {}", e),
-                    }
-                }
-            }
             "action_plan" => {
                 let title = args["title"].as_str().unwrap_or_default();
                 let steps: Vec<&str> = args["steps"]
@@ -682,62 +627,6 @@ impl<R: tauri::Runtime> Agent<R> {
                     match crate::actions::block(&store, id, reason) {
                         Ok(()) => format!("Blocked action {}: {}", id, reason),
                         Err(e) => format!("Error: {}", e),
-                    }
-                }
-            }
-            "crystallize_sketch" => {
-                let sketch_id = args["sketch_id"].as_str().unwrap_or_default();
-                if sketch_id.is_empty() {
-                    "Error: crystallize_sketch requires a sketch_id".to_string()
-                } else {
-                    // Pull the sketch synchronously, then drop the store so
-                    // the LLM await doesn't see a non-`Send` connection.
-                    let loaded = {
-                        let store = match crate::memories::get_vector_store(app_handle) {
-                            Ok(s) => s,
-                            Err(e) => return format!("Error: vector store unavailable: {}", e),
-                        };
-                        crate::crystals::load_sketch(&store, sketch_id)
-                    };
-                    match loaded {
-                        Err(e) => format!("Error: {}", e),
-                        Ok((parent, children)) => {
-                            let existing = crate::personas::list_available_personas();
-                            let http_client = reqwest::Client::new();
-                            match crate::crystals::crystallize(
-                                &http_client,
-                                config,
-                                &parent,
-                                &children,
-                                &existing,
-                            )
-                            .await
-                            {
-                                Ok(draft) => {
-                                    match crate::crystals::write_persona_draft(app_handle, &draft) {
-                                        Ok(outcome) => {
-                                            if let Ok(store) =
-                                                crate::memories::get_vector_store(app_handle)
-                                            {
-                                                let _ = crate::crystals::mark_crystallized(
-                                                    &store, sketch_id,
-                                                );
-                                            }
-                                            format!(
-                                            "Crystallised sketch `{}` into persona `{}` ({} bytes written to {}).\n\n```diff\n{}\n```",
-                                            sketch_id,
-                                            draft.slug,
-                                            outcome.after.len(),
-                                            outcome.abs_path,
-                                            outcome.unified_diff
-                                        )
-                                        }
-                                        Err(e) => format!("Error writing persona draft: {}", e),
-                                    }
-                                }
-                                Err(e) => format!("Error: {}", e),
-                            }
-                        }
                     }
                 }
             }

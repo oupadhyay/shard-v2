@@ -479,6 +479,8 @@ pub struct ProactiveMessage {
     pub reviewed_at: Option<String>,
     /// None = pending, Some(true) = approved, Some(false) = rejected.
     pub approved: Option<bool>,
+    pub execution_status: Option<String>,
+    pub execution_result: Option<String>,
     pub created_at: String,
 }
 
@@ -497,7 +499,16 @@ pub fn ensure_proactive_queue_table<R: Runtime>(app_handle: &AppHandle<R>) -> Re
                 reviewed_at TEXT,
                 approved INTEGER,
                 created_at TEXT NOT NULL
-            );",
+            );
+            CREATE TABLE IF NOT EXISTS proactive_execution (
+                message_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                result TEXT
+            );
+            INSERT OR IGNORE INTO proactive_execution (message_id, status)
+            SELECT id, 'unknown' FROM proactive_queue
+            WHERE draft_payload IS NOT NULL AND reviewed_at IS NOT NULL AND approved IS NOT 0
+              AND NOT EXISTS (SELECT 1 FROM proactive_execution WHERE message_id = proactive_queue.id);",
         )
         .map_err(|e| format!("Failed to create proactive_queue table: {}", e))
 }
@@ -526,25 +537,28 @@ pub fn insert_proactive_message<R: Runtime>(
     Ok(())
 }
 
-/// Get unreviewed proactive messages (for frontend polling / badge counts).
-pub fn get_unreviewed_messages<R: Runtime>(
+/// Get pending notifications and durable draft outcomes, scoped before limiting.
+pub fn get_proactive_messages<R: Runtime>(
     app_handle: &AppHandle<R>,
     limit: usize,
+    session: Option<&str>,
 ) -> Result<Vec<ProactiveMessage>, String> {
     let store = crate::memories::get_vector_store(app_handle)?;
     let mut stmt = store
         .conn
         .prepare(
-            "SELECT id, heartbeat_session, content, draft_payload, needs_approval, reviewed_at, approved, created_at
-             FROM proactive_queue
-             WHERE reviewed_at IS NULL
-             ORDER BY created_at DESC
+            "SELECT id, heartbeat_session, content, draft_payload, needs_approval, reviewed_at, approved, created_at,
+                    e.status, e.result
+             FROM proactive_queue LEFT JOIN proactive_execution e ON e.message_id = id
+             WHERE (reviewed_at IS NULL OR draft_payload IS NOT NULL)
+               AND (?2 IS NULL OR heartbeat_session = ?2)
+             ORDER BY reviewed_at IS NULL DESC, e.status = 'unknown' DESC, created_at DESC
              LIMIT ?1",
         )
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
     let messages = stmt
-        .query_map(rusqlite::params![limit as i64], |row| {
+        .query_map(rusqlite::params![limit as i64, session], |row| {
             Ok(ProactiveMessage {
                 id: row.get(0)?,
                 heartbeat_session: row.get(1)?,
@@ -554,31 +568,62 @@ pub fn get_unreviewed_messages<R: Runtime>(
                 reviewed_at: row.get(5)?,
                 approved: row.get::<_, Option<i32>>(6)?.map(|v| v != 0),
                 created_at: row.get(7)?,
+                execution_status: row.get(8)?,
+                execution_result: row.get(9)?,
             })
         })
         .map_err(|e| format!("Failed to query proactive messages: {}", e))?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to decode proactive message: {}", e))?;
 
     Ok(messages)
 }
 
-/// Mark a proactive message as reviewed (with optional approval for drafts).
+/// Dismiss a notification or reject a draft. Approval must use the atomic executor.
 pub fn review_proactive_message<R: Runtime>(
     app_handle: &AppHandle<R>,
     message_id: &str,
     approved: Option<bool>,
 ) -> Result<(), String> {
+    if approved == Some(true) {
+        return Err("Approval must use execute_approved_draft".to_string());
+    }
     let store = crate::memories::get_vector_store(app_handle)?;
     let now = Utc::now().to_rfc3339();
-    store
+    let changed = store
         .conn
         .execute(
-            "UPDATE proactive_queue SET reviewed_at = ?1, approved = ?2 WHERE id = ?3",
+            "UPDATE proactive_queue SET reviewed_at = ?1, approved = ?2 WHERE id = ?3 AND reviewed_at IS NULL AND (?2 IS NOT NULL OR needs_approval = 0)",
             rusqlite::params![now, approved.map(|a| a as i32), message_id],
         )
         .map_err(|e| format!("Failed to review proactive message: {}", e))?;
+    if changed != 1 {
+        return Err("Draft has already been reviewed or does not exist".to_string());
+    }
     Ok(())
+}
+
+pub fn draft_status<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    id: &str,
+) -> Result<serde_json::Value, String> {
+    let store = crate::memories::get_vector_store(app_handle)?;
+    store
+        .conn
+        .query_row(
+            "SELECT reviewed_at, approved, status, result FROM proactive_queue
+         LEFT JOIN proactive_execution ON message_id = id WHERE id = ?1",
+            [id],
+            |row| {
+                Ok(serde_json::json!({
+                    "reviewed_at": row.get::<_, Option<String>>(0)?,
+                    "approved": row.get::<_, Option<bool>>(1)?,
+                    "execution_status": row.get::<_, Option<String>>(2)?,
+                    "execution_result": row.get::<_, Option<String>>(3)?,
+                }))
+            },
+        )
+        .map_err(|e| format!("Could not read draft status: {e}"))
 }
 
 /// Get the count of unreviewed proactive messages for a specific heartbeat session.
@@ -765,11 +810,8 @@ pub async fn process_heartbeat_turn<R: Runtime>(
             let args: serde_json::Value =
                 serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
 
-            // `edit_file` is intentionally NOT draft-gated for heartbeats: it
-            // runs immediately without user approval, but `edit_allowed_file`
-            // applies a compile check (config.toml must parse as AppConfig,
-            // heartbeat specs must parse as a HeartbeatSpec) and rejects the
-            // edit before anything is written if it would break.
+            // Syntax validation is not authorization. Self-file writes use
+            // the same approval boundary as dedicated mutation tools.
             let is_gated = crate::tool_registry::global().is_draft_gated(&tc.name);
 
             if is_gated {
@@ -889,6 +931,8 @@ pub async fn process_heartbeat_turn<R: Runtime>(
             needs_approval: false,
             reviewed_at: None,
             approved: None,
+            execution_status: None,
+            execution_result: None,
             created_at: Utc::now().to_rfc3339(),
         };
 
@@ -928,6 +972,9 @@ async fn execute_safe_tool<R: Runtime>(
     tool_name: &str,
     args: &serde_json::Value,
 ) -> String {
+    if crate::tool_registry::global().is_draft_gated(tool_name) {
+        return "Error: This action requires a user-approved draft.".to_string();
+    }
     if let Some(result) =
         crate::tool_registry::try_execute_external_tool(http_client, config, tool_name, args).await
     {
@@ -1079,47 +1126,6 @@ async fn execute_safe_tool<R: Runtime>(
             let path = args["path"].as_str().unwrap_or_default();
             match crate::self_files::read_allowed_file(app_handle, path) {
                 Ok(contents) => contents,
-                Err(e) => format!("Error: {}", e),
-            }
-        }
-        "edit_file" => {
-            // No user approval required, but `edit_allowed_file` runs a compile
-            // check on the result (config.toml must parse as AppConfig,
-            // heartbeat specs as a HeartbeatSpec). On failure nothing is
-            // written and the error is surfaced back to the model.
-            //
-            // Require the keys to be present (matching the MCP handler) so a
-            // malformed tool-call payload fails fast rather than silently
-            // creating/overwriting a file with empty content. An empty
-            // `old_str` is still allowed — that's how a new file is created.
-            let path = match args.get("path").and_then(|v| v.as_str()) {
-                Some(p) => p,
-                None => return "Error: edit_file requires `path`".to_string(),
-            };
-            let old_str = match args.get("old_str").and_then(|v| v.as_str()) {
-                Some(s) => s,
-                None => return "Error: edit_file requires `old_str`".to_string(),
-            };
-            let new_str = match args.get("new_str").and_then(|v| v.as_str()) {
-                Some(s) => s,
-                None => return "Error: edit_file requires `new_str`".to_string(),
-            };
-            let replace_all = args["replace_all"].as_bool().unwrap_or(false);
-
-            match crate::self_files::edit_allowed_file(
-                app_handle, path, old_str, new_str, replace_all,
-            ) {
-                Ok(outcome) => {
-                    // Structured event for the frontend diff viewer.
-                    let _ = app_handle.emit("file-edited", &outcome);
-                    format!(
-                        "Edited `{}` ({} replacement{}).\n\n```diff\n{}\n```",
-                        outcome.path,
-                        outcome.replacements,
-                        if outcome.replacements == 1 { "" } else { "s" },
-                        outcome.unified_diff
-                    )
-                }
                 Err(e) => format!("Error: {}", e),
             }
         }
@@ -1416,52 +1422,68 @@ pub async fn execute_approved_draft<R: Runtime>(
     app_handle: &AppHandle<R>,
     message_id: &str,
 ) -> Result<String, String> {
-    // 1. Claim the draft execution atomically in SQLite
+    // Persist the decision and an unconfirmed outcome together BEFORE effects.
+    // 'unknown' deliberately covers both in-flight and interrupted execution:
+    // recovery never assumes a crash happened before the side effect.
     let store = crate::memories::get_vector_store(app_handle)?;
-    let now_str = chrono::Utc::now().to_rfc3339();
-    let rows_affected = store
-        .conn
+    let row = {
+        let tx = store
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let now_str = chrono::Utc::now().to_rfc3339();
+        let rows_affected = tx
         .execute(
-            "UPDATE proactive_queue SET reviewed_at = ?1 WHERE id = ?2 AND reviewed_at IS NULL AND draft_payload IS NOT NULL",
+            "UPDATE proactive_queue SET reviewed_at = ?1, approved = 1 WHERE id = ?2 AND reviewed_at IS NULL AND needs_approval = 1 AND draft_payload IS NOT NULL",
             rusqlite::params![now_str, message_id],
         )
         .map_err(|e| format!("Failed to claim draft execution: {}", e))?;
 
-    if rows_affected == 0 {
-        return Err("Draft has already been reviewed or does not exist".to_string());
-    }
+        if rows_affected == 0 {
+            return Err("Draft has already been reviewed or does not exist".to_string());
+        }
 
-    // 2. Fetch the draft payload
-    let row: (Option<String>, String) = store
-        .conn
-        .query_row(
-            "SELECT draft_payload, heartbeat_session FROM proactive_queue WHERE id = ?1",
-            rusqlite::params![message_id],
-            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+        tx.execute(
+            "INSERT INTO proactive_execution (message_id, status) VALUES (?1, 'unknown')",
+            [message_id],
         )
-        .map_err(|e| format!("Draft not found: {}", e))?;
+        .map_err(|e| format!("Failed to persist execution claim: {}", e))?;
+        let row: (String, String) = tx
+            .query_row(
+                "SELECT draft_payload, heartbeat_session FROM proactive_queue WHERE id = ?1",
+                rusqlite::params![message_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|e| format!("Draft not found: {}", e))?;
 
-    let (draft_json_opt, _session) = row;
-    let draft_json = draft_json_opt.ok_or("Message has no draft payload — not a draft action")?;
-    let draft: DraftPayload =
-        serde_json::from_str(&draft_json).map_err(|e| format!("Invalid draft payload: {}", e))?;
-
-    log::info!("[DraftAct] Executing approved draft: {}", draft.name);
-
-    // 3. Execute the tool
-    let result = execute_draft_gated_tool(app_handle, &draft.name, &draft.arguments).await?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit approval: {}", e))?;
+        row
+    };
+    let (draft_json, session) = row;
+    let outcome = match serde_json::from_str::<DraftPayload>(&draft_json) {
+        Ok(draft) => execute_draft_gated_tool(app_handle, &draft.name, &draft.arguments).await,
+        Err(e) => Err(format!("Invalid draft payload: {}", e)),
+    };
+    let status = if outcome.is_ok() {
+        "succeeded"
+    } else {
+        "failed"
+    };
+    let result = match &outcome {
+        Ok(s) | Err(s) => s,
+    };
+    store.conn.execute(
+        "UPDATE proactive_execution SET status = ?1, result = ?2 WHERE message_id = ?3",
+        rusqlite::params![status, result, message_id],
+    ).map_err(|e| format!("Approval saved, but execution outcome could not be saved. Do not retry; inspect effects. {}", e))?;
 
     // 4. Persist the execution & result to the session's chat history
-    let summary = format!(
-        "**Executed Draft Action:** `{}`\n```json\n{}\n```\n**Result:**\n{}",
-        draft.name,
-        serde_json::to_string_pretty(&draft.arguments).unwrap_or_default(),
-        result
-    );
+    let summary = format!("**Approved Draft Action — {}:**\n{}", status, result);
     let now = chrono::Utc::now().to_rfc3339();
     let msg = crate::db::sessions::MessageRow {
         id: uuid::Uuid::new_v4().to_string(),
-        session_id: draft.heartbeat_session.clone(),
+        session_id: session,
         role: "assistant".to_string(),
         content: summary,
         created_at: now,
@@ -1473,10 +1495,7 @@ pub async fn execute_approved_draft<R: Runtime>(
         );
     }
 
-    // 4. Mark as reviewed + approved
-    review_proactive_message(app_handle, message_id, Some(true))?;
-
-    Ok(result)
+    outcome
 }
 
 /// Execute a draft-gated tool (config/heartbeat mutations).
@@ -1487,10 +1506,6 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
     args: &serde_json::Value,
 ) -> Result<String, String> {
     match tool_name {
-        // NOTE: `edit_config` was retired in favor of the generic `edit_file`
-        // self-awareness tool (allow-listed to config.toml). `edit_file` is
-        // not draft-gated and is dispatched via the normal Agent tool loop,
-        // so it never reaches this function.
         "create_heartbeat" => {
             let name = args["name"].as_str().ok_or("Missing 'name' argument")?;
             let schedule = args["schedule"]
@@ -1697,8 +1712,12 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
         }
         "edit_file" => {
             let path = args["path"].as_str().ok_or("Missing 'path' argument")?;
-            let old_str = args["old_str"].as_str().unwrap_or("");
-            let new_str = args["new_str"].as_str().unwrap_or("");
+            let old_str = args["old_str"]
+                .as_str()
+                .ok_or("Missing 'old_str' argument")?;
+            let new_str = args["new_str"]
+                .as_str()
+                .ok_or("Missing 'new_str' argument")?;
             let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
             let outcome = crate::self_files::edit_allowed_file(
@@ -1733,29 +1752,49 @@ pub fn create_draft_for_tool_call<R: Runtime>(
     tool_args: &serde_json::Value,
     justification: &str,
 ) -> Result<String, String> {
+    queue_tool_draft(
+        app_handle,
+        &spec.session,
+        tool_name,
+        tool_args,
+        justification,
+    )
+}
+
+/// The shared interactive/background authorization boundary for self changes.
+pub fn queue_tool_draft<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    session: &str,
+    tool_name: &str,
+    tool_args: &serde_json::Value,
+    justification: &str,
+) -> Result<String, String> {
+    ensure_proactive_queue_table(app_handle)?;
     let draft = DraftPayload {
         name: tool_name.to_string(),
         arguments: tool_args.clone(),
         justification: justification.to_string(),
-        heartbeat_session: spec.session.clone(),
+        heartbeat_session: session.to_string(),
     };
 
     let draft_json =
         serde_json::to_string(&draft).map_err(|e| format!("Failed to serialize draft: {}", e))?;
 
     let content = format!(
-        "**Heartbeat `{}` requests approval for `{}`:**\n\n{}",
-        spec.session, tool_name, justification
+        "**Session `{}` requests approval for `{}`:**\n\n{}",
+        session, tool_name, justification
     );
 
     let msg = ProactiveMessage {
         id: uuid::Uuid::new_v4().to_string(),
-        heartbeat_session: spec.session.clone(),
+        heartbeat_session: session.to_string(),
         content,
         draft_payload: Some(draft_json),
         needs_approval: true,
         reviewed_at: None,
         approved: None,
+        execution_status: None,
+        execution_result: None,
         created_at: Utc::now().to_rfc3339(),
     };
 
@@ -1766,7 +1805,7 @@ pub fn create_draft_for_tool_call<R: Runtime>(
     log::info!(
         "[DraftAct] Created draft for tool '{}' in heartbeat '{}' (msg_id: {})",
         tool_name,
-        spec.filename,
+        session,
         msg_id
     );
 

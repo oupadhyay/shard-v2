@@ -573,8 +573,9 @@ async fn get_heartbeat_status(
 async fn get_proactive_messages(
     app_handle: AppHandle,
     limit: Option<usize>,
+    session_id: Option<String>,
 ) -> Result<Vec<heartbeat::ProactiveMessage>, String> {
-    heartbeat::get_unreviewed_messages(&app_handle, limit.unwrap_or(20))
+    heartbeat::get_proactive_messages(&app_handle, limit.unwrap_or(20), session_id.as_deref())
 }
 
 #[tauri::command]
@@ -586,6 +587,11 @@ async fn review_proactive_message(app_handle: AppHandle, message_id: String) -> 
 async fn approve_draft(app_handle: AppHandle, message_id: String) -> Result<String, String> {
     // Execute the draft-gated tool and mark as approved
     heartbeat::execute_approved_draft(&app_handle, &message_id).await
+}
+
+#[tauri::command]
+fn get_draft_status(app_handle: AppHandle, message_id: String) -> Result<serde_json::Value, String> {
+    heartbeat::draft_status(&app_handle, &message_id)
 }
 
 #[tauri::command]
@@ -1010,6 +1016,7 @@ pub fn run() {
             get_proactive_messages,
             review_proactive_message,
             approve_draft,
+            get_draft_status,
             reject_draft,
             get_proactive_count,
             get_heartbeat_status

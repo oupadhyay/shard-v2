@@ -254,9 +254,13 @@ impl<R: tauri::Runtime> Agent<R> {
         // from chat history. Best-effort; if the store is unavailable or
         // there are no open sketches, we leave rag_context_str unchanged.
         let rag_context_str = match (
-            crate::memories::get_vector_store(app_handle)
-                .ok()
-                .and_then(|s| crate::actions::pending_sketch_summary_text(&s)),
+            (!incognito)
+                .then(|| {
+                    crate::memories::get_vector_store(app_handle)
+                        .ok()
+                        .and_then(|s| crate::actions::pending_sketch_summary_text(&s))
+                })
+                .flatten(),
             rag_context_str,
         ) {
             (Some(sketches), Some(rag)) => Some(format!("{}\n{}", sketches, rag)),

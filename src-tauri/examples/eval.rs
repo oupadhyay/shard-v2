@@ -527,11 +527,15 @@ fn evaluate_post_assertions<R: tauri::Runtime>(
     };
 
     // Pull every unreviewed message once and reuse for both queue-related
-    // checks. `get_unreviewed_messages` is the public surface heartbeat
+    // checks. `get_proactive_messages` is the public surface heartbeat
     // exposes; querying proactive_queue through it keeps us out of the
     // VectorStore's private `conn` field.
     let _ = shard_lib::heartbeat::ensure_proactive_queue_table(handle);
-    let unreviewed = shard_lib::heartbeat::get_unreviewed_messages(handle, 256).unwrap_or_default();
+    let unreviewed: Vec<_> = shard_lib::heartbeat::get_proactive_messages(handle, 256, None)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m.reviewed_at.is_none())
+        .collect();
 
     if let Some(min) = pa.proactive_queue_min_unreviewed {
         let count = unreviewed.iter().filter(|m| m.needs_approval).count();
