@@ -7344,7 +7344,7 @@ dependencies = [
 [[package]]
 name = "shard-external-tools"
 version = "0.1.0"
-source = "git+https://github.com/oupadhyay/shard-external-tools?rev=b0fc45572caf17af2e8f46fb3f0a181f084ef9dd#b0fc45572caf17af2e8f46fb3f0a181f084ef9dd"
+source = "git+https://github.com/oupadhyay/shard-external-tools?rev=f6a94e3e2deb302ec57c8cfdcd153825552e1be4#f6a94e3e2deb302ec57c8cfdcd153825552e1be4"
 dependencies = [
  "log",
  "quick-xml 0.37.5",
@@ -7363,7 +7363,7 @@ dependencies = [
 [[package]]
 name = "shard-provider"
 version = "0.1.0"
-source = "git+https://github.com/oupadhyay/shard-provider?rev=fb466f4528ad879ef8d2aceae50501b0bcf023fb#fb466f4528ad879ef8d2aceae50501b0bcf023fb"
+source = "git+https://github.com/oupadhyay/shard-provider?rev=e4ed0efaa00b53e571b1eedb5b6786d3b93dc6d6#e4ed0efaa00b53e571b1eedb5b6786d3b93dc6d6"
 dependencies = [
  "base64 0.22.1",
  "log",
@@ -7377,7 +7377,7 @@ dependencies = [
 [[package]]
 name = "shard-tool-api"
 version = "0.1.0"
-source = "git+https://github.com/oupadhyay/shard-tool-api?rev=aea826a9e64b3035843aa8800f2f6c0f5fbe8b9a#aea826a9e64b3035843aa8800f2f6c0f5fbe8b9a"
+source = "git+https://github.com/oupadhyay/shard-tool-api?rev=ae70fa0e8145e3b72e3523005a12e2f14dcbd7c4#ae70fa0e8145e3b72e3523005a12e2f14dcbd7c4"
 dependencies = [
  "serde",
  "serde_json",

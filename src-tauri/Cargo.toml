@@ -18,9 +18,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-shard-external-tools = { git = "https://github.com/oupadhyay/shard-external-tools", rev = "b0fc45572caf17af2e8f46fb3f0a181f084ef9dd" }
-shard-provider = { git = "https://github.com/oupadhyay/shard-provider", rev = "fb466f4528ad879ef8d2aceae50501b0bcf023fb" }
-shard-tool-api = { git = "https://github.com/oupadhyay/shard-tool-api", rev = "aea826a9e64b3035843aa8800f2f6c0f5fbe8b9a" }
+shard-external-tools = { git = "https://github.com/oupadhyay/shard-external-tools", rev = "f6a94e3e2deb302ec57c8cfdcd153825552e1be4" }
+shard-provider = { git = "https://github.com/oupadhyay/shard-provider", rev = "e4ed0efaa00b53e571b1eedb5b6786d3b93dc6d6" }
+shard-tool-api = { git = "https://github.com/oupadhyay/shard-tool-api", rev = "ae70fa0e8145e3b72e3523005a12e2f14dcbd7c4" }
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
