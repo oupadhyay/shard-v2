@@ -1,0 +1,97 @@
+name: Split revision updates
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/split-revisions.yml'
+      - 'scripts/*split*revisions*.py'
+  schedule:
+    - cron: '23 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: split-revision-updates-${{ github.event_name == 'pull_request' && github.ref || 'writer' }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s scripts -p 'test_split_revisions.py' -v
+
+  propose:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        consumer: [shard-provider, shard-external-tools, shard-v2]
+    steps:
+      - name: Require cross-repository credential
+        env:
+          TOKEN: ${{ secrets.SPLIT_SYNC_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo 'Configure SPLIT_SYNC_TOKEN as documented in docs/SPLIT_OWNERSHIP.md.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          path: automation
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: oupadhyay/${{ matrix.consumer }}
+          ref: main
+          path: target
+          token: ${{ secrets.SPLIT_SYNC_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          repository: oupadhyay/shard-tool-api
+          ref: main
+          path: sources/shard-tool-api
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: oupadhyay/shard-provider
+          ref: main
+          path: sources/shard-provider
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: oupadhyay/shard-external-tools
+          ref: main
+          path: sources/shard-external-tools
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test updater
+        run: python3 -m unittest discover -s automation/scripts -p 'test_split_revisions.py' -v
+      - name: Prepare coordinated revision update
+        run: |
+          echo 'No revision update needed.' > "$RUNNER_TEMP/split-pr.md"
+          python3 automation/scripts/update-split-revisions.py \
+            '${{ matrix.consumer }}' target sources "$RUNNER_TEMP/split-pr.md"
+      - name: Open or refresh review PR
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          token: ${{ secrets.SPLIT_SYNC_TOKEN }}
+          path: target
+          base: main
+          branch: automation/split-revisions
+          draft: true
+          title: 'chore: update pinned split revisions'
+          commit-message: 'chore: update pinned split revisions'
+          body-path: ${{ runner.temp }}/split-pr.md
+      - name: Report blocked update
+        if: failure()
+        run: |
+          echo '### Split update needs attention' >> "$GITHUB_STEP_SUMMARY"
+          echo 'See the failed step. A host pin mismatch means the standalone tool-api update PRs must merge first; the next daily run retries automatically. Other errors need investigation. No auto-merge is performed.' >> "$GITHUB_STEP_SUMMARY"

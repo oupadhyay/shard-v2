@@ -88,3 +88,52 @@ Do not recreate in-tree crate copies. Host GUI testing must preserve hooks,
 cache, persistence, YouTube short/long rendering and heartbeat restrictions,
 Gemini streaming/tool calls, Files lifecycle, memory search, and vision fallback.
 Linux Tauri/WebKit coverage does not validate macOS-only native behavior.
+
+## Automated revision PRs
+
+The `Split revision updates` GitHub Actions workflow checks daily at 08:23 UTC
+and can also be run manually from Actions. It prepares one maintained draft PR
+per consumer on `automation/split-revisions`; it never merges anything.
+
+- Provider and external-tools PRs update tool-api to its merged `main` SHA,
+  including their lockfiles and dependency-audit revision constants.
+- A host PR is prepared only once both standalone `main` manifests use the
+  latest tool-api SHA. All three host pins update together, with a resolved
+  Cargo metadata check rejecting duplicate or unexpected split sources.
+- Misaligned pins fail the host job with a clear waiting message; independent
+  standalone jobs continue. Merge their reviewed PRs, and the next daily run
+  automatically retries the host update. Failed runs appear in Actions and
+  use GitHub's workflow notification preferences; there is no separate bot inbox.
+- PR bodies contain compare links and explicit automated/native GUI checklists.
+  Draft status is intentional: review CI and record GUI evidence (or justify
+  a docs-only exemption) before marking ready. No runtime compatibility is
+  inferred just from successful lockfile resolution.
+- This tracks every merged revision, including docs-only commits, rather than
+  attempting to guess whether a source change is relevant. No direct pushes to
+  `main` occur. Do not manually edit the automation-owned PR branch.
+
+### One-time setup
+
+1. Merge the workflow and updater into `shard-v2/main`.
+2. Create a fine-grained GitHub PAT for the same owner, limited to
+   `shard-v2`, `shard-provider`, and `shard-external-tools`, with **Contents:
+   read/write** and **Pull requests: read/write** (Metadata read is implicit).
+   Source snapshots currently use the public sibling repositories. If these
+   become private, add authenticated source checkout/Cargo Git access first.
+3. Store it as the **Actions repository secret `SPLIT_SYNC_TOKEN` in shard-v2**.
+   Never paste the credential into a PR, issue, file, or agent conversation.
+   Use an appropriate expiration and rotate it before expiry; missing or expired
+   credentials make the workflow fail visibly rather than silently stop.
+4. Run **Actions → Split revision updates → Run workflow**, using `main`, to
+   verify the first proposal. Review the standalone PRs before the host PR.
+
+The normal `GITHUB_TOKEN` cannot write sibling repositories; a dedicated token
+also lets generated PRs trigger normal CI. The updater never runs with this
+write credential on `pull_request` events. Workflow runs use only reviewed
+source `main` snapshots, not code from an incoming dependency PR.
+
+Test the updater without credentials or network access:
+
+```bash
+python3 -m unittest discover -s scripts -p test_split_revisions.py -v
+```
