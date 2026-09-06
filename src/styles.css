@@ -1043,6 +1043,64 @@ body {
   color: var(--text-primary);
 }
 
+.persona-draft-review {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
+}
+
+.persona-draft-review p,
+.attention-meta,
+.attention-plan span,
+.attention-error {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.persona-draft-review pre,
+.attention-item pre {
+  margin: 8px 0 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  font: 12px/1.55 "SF Mono", Menlo, monospace;
+}
+
+.attention-panel {
+  flex: 0 0 auto;
+  margin: 8px 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.attention-panel > summary {
+  padding: 8px 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.attention-body {
+  max-height: min(32vh, 280px);
+  overflow: auto;
+  padding: 0 4px 8px;
+}
+
+.attention-item,
+.attention-plan {
+  padding: 8px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.attention-item { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.attention-item p { margin: 8px 0; }
+.attention-plan { display: flex; flex-direction: column; gap: 4px; }
+.attention-error { padding: 8px 0; color: var(--accent-warning); }
+
 .proactive-actions {
   display: flex;
   gap: 10px;
@@ -2254,4 +2312,3 @@ body {
 
 /* When streaming completes, drop the animation to avoid replaying on scroll. */
 .diff-stream-done .diff-line { animation: none; }
-

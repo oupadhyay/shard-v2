@@ -570,6 +570,11 @@ async fn get_heartbeat_status(
 // ============================================================================
 
 #[tauri::command]
+fn get_attention_items(app_handle: AppHandle) -> Result<heartbeat::AttentionItems, String> {
+    heartbeat::get_attention_items(&app_handle)
+}
+
+#[tauri::command]
 async fn get_proactive_messages(
     app_handle: AppHandle,
     limit: Option<usize>,
@@ -590,7 +595,10 @@ async fn approve_draft(app_handle: AppHandle, message_id: String) -> Result<Stri
 }
 
 #[tauri::command]
-fn get_draft_status(app_handle: AppHandle, message_id: String) -> Result<serde_json::Value, String> {
+fn get_draft_status(
+    app_handle: AppHandle,
+    message_id: String,
+) -> Result<serde_json::Value, String> {
     heartbeat::draft_status(&app_handle, &message_id)
 }
 
@@ -1014,6 +1022,7 @@ pub fn run() {
             retry_with_katex_hint,
             capture_screen_context,
             get_proactive_messages,
+            get_attention_items,
             review_proactive_message,
             approve_draft,
             get_draft_status,

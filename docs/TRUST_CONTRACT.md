@@ -18,8 +18,10 @@ Short wake-up timers retain their existing behavior; their eventual background
 self-changes still pass through approval.
 
 Approval authorizes the operation and arguments shown, not every future change
-by that tool. Crystallization by sketch ID generates a persona after approval;
-it is approval of that operation, not a preview of the final generated prose.
+by that tool. Crystallization generates persona text before asking for approval.
+The stored proposal contains the full text and target file. Approval saves that
+text without another model call. Older sketch-only proposals fail without saving;
+the user must request a new draft with text to review.
 Rollback without an event ID means the latest restorable event at execution.
 Allow-list and syntax validation still apply where the existing executor uses
 them; validation alone is never approval.
@@ -54,6 +56,19 @@ available through proactive-message reads; badge counts still count pending
 review only. There is no exactly-once guarantee across SQLite and filesystem or
 network effects, and no automatic recovery replay.
 
+## Unfinished work stays visible
+
+Both windows show a cross-session **Needs attention** section for failed and
+unknown actions and unfinished saved plans. It refreshes when chat loads, a turn
+ends, an action is reviewed, a proposal arrives, or the window gains focus. These
+items are read-only: opening this section never retries an action. A failed read
+keeps the last loaded items and shows an error. At most 100 failed/unknown actions
+are shown at once. Completed and cancelled plan steps need no follow-up; blocked
+steps do. A completed parent does not hide unfinished steps.
+
+This view covers stored action plans, not every promise in conversation prose.
+It does not infer that a plan succeeded from the assistant's wording.
+
 ## Reduced automatic memory, not private chat
 
 The compatible stored key is still `incognito_mode`; the user-facing label is
@@ -73,3 +88,31 @@ privacy provenance. No historical data is deleted or retention policy changed.
 Genuinely private sessions would require a separate product decision about
 history/attachment persistence, provider behavior, explicit tools, background
 work, and transitions between modes. This control makes none of those promises.
+
+## Review and native checks (September 2026)
+
+* `cargo test --workspace -- --test-threads=1`: 544 tests passed. The normal
+  parallel run hit the existing endpoint-override race in
+  `agent_provider_tests::gemini_turn::http_failure_emits_error_and_returns_err`.
+  The endpoint unit tests use a separate lock from the agent test harness.
+* `cargo check --workspace --all-targets`: passed.
+* `npm test -- --run`: 175 tests passed. `npm run build`: passed.
+* Native Linux Tauri/WebKit ran under Xvfb and Openbox with a separate temporary
+  HOME and XDG directories. Seeded SQLite proposals were exercised through the
+  actual app, not mocked IPC: mouse approval saved the exact persona text;
+  rejection wrote no file; a sketch-only legacy proposal failed without model
+  generation; repeat approval was refused. Failed/unknown states and an unfinished
+  plan remained visible in both windows and after app restart. Legacy unknown
+  approval stayed null. The attention section had no replay buttons.
+* Native screenshots of persona review, attention, and privacy settings were
+  inspected. The dedicated chat area starts below the attention section; both
+  views fit without horizontal overflow. Persona generation before approval is
+  covered separately by a wiremock test that asserts exactly one provider request.
+* Native startup exposed a CommonJS default-export mismatch in the Markdown
+  plugin. The import now handles its wrapper; this was needed to load the actual
+  app, not just pass tests. GUI checks used the production frontend build through
+  Vite preview with `tauri dev`.
+
+No live provider keys were configured in the isolated GUI profile. Live chat,
+live external tools, and macOS NSPanel/vibrancy/Spaces behavior were not verified.
+The frontend design-study branch is separate and was not merged into this work.

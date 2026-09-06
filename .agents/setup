@@ -28,6 +28,12 @@ apt_packages=(
   patchelf
   pkg-config
   wget
+  # Native GUI regression checks in Linux orbs.
+  dbus-x11
+  openbox
+  x11-utils
+  xdotool
+  xvfb
 )
 
 missing_packages=()

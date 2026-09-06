@@ -543,6 +543,32 @@ pub fn get_proactive_messages<R: Runtime>(
     limit: usize,
     session: Option<&str>,
 ) -> Result<Vec<ProactiveMessage>, String> {
+    query_proactive_messages(app_handle, limit, session, false)
+}
+
+#[derive(Serialize)]
+pub struct AttentionItems {
+    pub actions: Vec<ProactiveMessage>,
+    pub plans: Vec<crate::actions::SketchSummary>,
+}
+
+pub fn get_attention_items<R: Runtime>(
+    app_handle: &AppHandle<R>,
+) -> Result<AttentionItems, String> {
+    ensure_proactive_queue_table(app_handle)?;
+    let store = crate::memories::get_vector_store(app_handle)?;
+    Ok(AttentionItems {
+        actions: query_proactive_messages(app_handle, 100, None, true)?,
+        plans: crate::actions::pending_sketch_summary(&store)?,
+    })
+}
+
+fn query_proactive_messages<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    limit: usize,
+    session: Option<&str>,
+    attention_only: bool,
+) -> Result<Vec<ProactiveMessage>, String> {
     let store = crate::memories::get_vector_store(app_handle)?;
     let mut stmt = store
         .conn
@@ -552,26 +578,30 @@ pub fn get_proactive_messages<R: Runtime>(
              FROM proactive_queue LEFT JOIN proactive_execution e ON e.message_id = id
              WHERE (reviewed_at IS NULL OR draft_payload IS NOT NULL)
                AND (?2 IS NULL OR heartbeat_session = ?2)
+               AND (?3 = 0 OR e.status IN ('unknown', 'failed'))
              ORDER BY reviewed_at IS NULL DESC, e.status = 'unknown' DESC, created_at DESC
              LIMIT ?1",
         )
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
     let messages = stmt
-        .query_map(rusqlite::params![limit as i64, session], |row| {
-            Ok(ProactiveMessage {
-                id: row.get(0)?,
-                heartbeat_session: row.get(1)?,
-                content: row.get(2)?,
-                draft_payload: row.get(3)?,
-                needs_approval: row.get::<_, i32>(4)? != 0,
-                reviewed_at: row.get(5)?,
-                approved: row.get::<_, Option<i32>>(6)?.map(|v| v != 0),
-                created_at: row.get(7)?,
-                execution_status: row.get(8)?,
-                execution_result: row.get(9)?,
-            })
-        })
+        .query_map(
+            rusqlite::params![limit as i64, session, attention_only],
+            |row| {
+                Ok(ProactiveMessage {
+                    id: row.get(0)?,
+                    heartbeat_session: row.get(1)?,
+                    content: row.get(2)?,
+                    draft_payload: row.get(3)?,
+                    needs_approval: row.get::<_, i32>(4)? != 0,
+                    reviewed_at: row.get(5)?,
+                    approved: row.get::<_, Option<i32>>(6)?.map(|v| v != 0),
+                    created_at: row.get(7)?,
+                    execution_status: row.get(8)?,
+                    execution_result: row.get(9)?,
+                })
+            },
+        )
         .map_err(|e| format!("Failed to query proactive messages: {}", e))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to decode proactive message: {}", e))?;
@@ -823,7 +853,15 @@ pub async fn process_heartbeat_turn<R: Runtime>(
                     serde_json::to_string_pretty(&args).unwrap_or_else(|_| tc.arguments.clone())
                 );
 
-                match create_draft_for_tool_call(app_handle, spec, &tc.name, &args, &justification)
+                match prepare_tool_draft(
+                    app_handle,
+                    &spec.session,
+                    &tc.name,
+                    &args,
+                    &justification,
+                    &config,
+                )
+                .await
                 {
                     Ok(msg_id) => {
                         log::info!(
@@ -1647,68 +1685,45 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
             ))
         }
         "crystallize_sketch" => {
-            if let Some(sketch_id) = args["sketch_id"].as_str() {
-                if sketch_id.is_empty() {
-                    return Err(
-                        "Error: crystallize_sketch requires a non-empty sketch_id".to_string()
-                    );
-                }
-                let config = crate::config::load_config(app_handle)?;
-                let store = crate::memories::get_vector_store(app_handle)?;
-                let (parent, children) = crate::crystals::load_sketch(&store, sketch_id)?;
-                let existing = crate::personas::list_available_personas();
-                let http_client = reqwest::Client::new();
-                let draft = crate::crystals::crystallize(
-                    &http_client,
-                    &config,
-                    &parent,
-                    &children,
-                    &existing,
-                )
-                .await?;
-
-                let outcome = crate::crystals::write_persona_draft(app_handle, &draft)?;
-                let _ = crate::crystals::mark_crystallized(&store, sketch_id);
-
-                Ok(format!(
-                    "Crystallized sketch `{}` into draft persona `{}` ({} bytes written to {}).",
-                    sketch_id,
-                    draft.logical_path,
-                    outcome.after.len(),
-                    outcome.abs_path
-                ))
-            } else {
-                let logical_path = args["logical_path"]
-                    .as_str()
-                    .ok_or("Missing 'logical_path' or 'sketch_id' argument")?;
-                let markdown = args["markdown"]
-                    .as_str()
-                    .ok_or("Missing 'markdown' argument")?;
-                let source_sketch_id = args["source_sketch_id"]
-                    .as_str()
-                    .ok_or("Missing 'source_sketch_id' argument")?;
-
-                crate::self_files::validate_logical_path(logical_path)?;
-                let outcome = crate::self_files::edit_allowed_file(
-                    app_handle,
-                    logical_path,
-                    "",
-                    markdown,
-                    false,
-                )?;
-                let _ = app_handle.emit("file-edited", &outcome);
-
-                if let Ok(store) = crate::memories::get_vector_store(app_handle) {
-                    let _ = crate::crystals::mark_crystallized(&store, source_sketch_id);
-                }
-
-                Ok(format!(
-                    "Crystallized sketch `{}` into draft persona `{}` ({} bytes written).",
-                    source_sketch_id,
-                    logical_path,
-                    outcome.after.len()
-                ))
+            // Legacy sketch-only approvals must never generate unseen text.
+            if args.get("sketch_id").is_some() {
+                return Err("This older proposal has no text to review. Request a new persona draft; nothing was saved.".to_string());
             }
+            let logical_path = args["logical_path"]
+                .as_str()
+                .ok_or("Missing 'logical_path' argument")?;
+            let markdown = args["markdown"]
+                .as_str()
+                .ok_or("Missing 'markdown' argument")?;
+            let source_sketch_id = args["source_sketch_id"]
+                .as_str()
+                .ok_or("Missing 'source_sketch_id' argument")?;
+
+            if !matches!(
+                crate::self_files::classify_logical_path(logical_path)?,
+                crate::self_files::AllowedPath::Persona { .. }
+            ) {
+                return Err("A persona draft must target a persona file".to_string());
+            }
+            let outcome = crate::self_files::edit_allowed_file(
+                app_handle,
+                logical_path,
+                "",
+                markdown,
+                false,
+            )?;
+            let _ = app_handle.emit("file-edited", &outcome);
+
+            if let Ok(store) = crate::memories::get_vector_store(app_handle) {
+                let _ = crate::crystals::mark_crystallized(&store, source_sketch_id);
+            }
+
+            Ok(format!(
+                "Crystallized sketch `{}` into draft persona `{}` ({} bytes written).",
+                source_sketch_id,
+                logical_path,
+                outcome.after.len()
+            ))
         }
         "edit_file" => {
             let path = args["path"].as_str().ok_or("Missing 'path' argument")?;
@@ -1743,22 +1758,40 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
     }
 }
 
-/// Create a draft proactive message for a gated tool call and insert it into the queue.
-/// Returns the draft's proactive message ID.
-pub fn create_draft_for_tool_call<R: Runtime>(
+/// Generate persona text before asking for consent, then freeze it in the draft.
+pub async fn prepare_tool_draft<R: Runtime>(
     app_handle: &AppHandle<R>,
-    spec: &HeartbeatSpec,
+    session: &str,
     tool_name: &str,
     tool_args: &serde_json::Value,
     justification: &str,
+    config: &crate::config::AppConfig,
 ) -> Result<String, String> {
-    queue_tool_draft(
-        app_handle,
-        &spec.session,
-        tool_name,
-        tool_args,
-        justification,
-    )
+    let mut args = tool_args.clone();
+    if tool_name == "crystallize_sketch" {
+        let sketch_id = tool_args["sketch_id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("A non-empty sketch_id is required")?;
+        let (parent, children) = {
+            let store = crate::memories::get_vector_store(app_handle)?;
+            crate::crystals::load_sketch(&store, sketch_id)?
+        };
+        let draft = crate::crystals::crystallize(
+            &reqwest::Client::new(),
+            config,
+            &parent,
+            &children,
+            &crate::personas::list_available_personas(),
+        )
+        .await?;
+        args = serde_json::json!({
+            "logical_path": draft.logical_path,
+            "markdown": draft.markdown,
+            "source_sketch_id": draft.source_sketch_id,
+        });
+    }
+    queue_tool_draft(app_handle, session, tool_name, &args, justification)
 }
 
 /// The shared interactive/background authorization boundary for self changes.

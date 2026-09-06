@@ -29,13 +29,16 @@ impl<R: tauri::Runtime> Agent<R> {
         // even in an interactive turn. Review the concrete self-change first.
         if crate::tool_registry::global().is_draft_gated(function_name) {
             let session = self.session_id.lock().await.clone();
-            return match crate::heartbeat::queue_tool_draft(
+            return match crate::heartbeat::prepare_tool_draft(
                 app_handle,
                 &session,
                 function_name,
                 args,
                 "Review this change to Shard before it runs.",
-            ) {
+                config,
+            )
+            .await
+            {
                 Ok(id) => format!("Action queued for user approval ({id}); it has NOT executed."),
                 Err(e) => format!("Error: Could not queue approval: {e}"),
             };

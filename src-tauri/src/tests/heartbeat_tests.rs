@@ -745,3 +745,178 @@ async fn test_crystallize_sketch_draft_gated() {
     // Clean up
     let _ = std::fs::remove_file(&path);
 }
+
+#[tokio::test]
+async fn persona_approval_saves_only_reviewed_text_and_refuses_legacy_generation() {
+    let _lock = home_lock_async().await;
+    let _jail = HomeJail::new();
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+    let path =
+        crate::self_files::resolve_allowed_path(handle, "personas/reviewed-text.md").unwrap();
+    let markdown = "# Personal travel\n\nAsk before booking.\n";
+    let args = serde_json::json!({
+        "logical_path": "personas/reviewed-text.md", "markdown": markdown,
+        "source_sketch_id": "source"
+    });
+    let id = queue_tool_draft(
+        handle,
+        "chat",
+        "crystallize_sketch",
+        &args,
+        "Review the exact text",
+    )
+    .unwrap();
+    assert!(!path.exists(), "Queueing must not save the persona");
+    let queued = get_proactive_messages(handle, 20, Some("chat")).unwrap();
+    let payload: DraftPayload =
+        serde_json::from_str(queued[0].draft_payload.as_ref().unwrap()).unwrap();
+    assert_eq!(payload.arguments["markdown"], markdown);
+    execute_approved_draft(handle, &id).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), markdown);
+    assert!(execute_approved_draft(handle, &id).await.is_err());
+
+    let legacy = queue_tool_draft(
+        handle,
+        "chat",
+        "crystallize_sketch",
+        &serde_json::json!({"sketch_id":"source"}),
+        "legacy",
+    )
+    .unwrap();
+    assert!(execute_approved_draft(handle, &legacy)
+        .await
+        .unwrap_err()
+        .contains("no text to review"));
+    assert_eq!(
+        draft_status(handle, &legacy).unwrap()["execution_status"],
+        "failed"
+    );
+
+    let mut wrong_target = args.clone();
+    wrong_target["logical_path"] = serde_json::json!("config.toml");
+    assert!(
+        execute_draft_gated_tool(handle, "crystallize_sketch", &wrong_target)
+            .await
+            .unwrap_err()
+            .contains("persona file")
+    );
+
+    let rejected = queue_tool_draft(handle, "chat", "crystallize_sketch", &args, "reject").unwrap();
+    review_proactive_message(handle, &rejected, Some(false)).unwrap();
+    assert!(execute_approved_draft(handle, &rejected).await.is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), markdown);
+}
+
+#[tokio::test]
+async fn attention_resurfaces_cross_session_failures_and_unfinished_plans() {
+    let _lock = home_lock_async().await;
+    let _jail = HomeJail::new();
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+    let failed = queue_tool_draft(
+        handle,
+        "old-session",
+        "edit_file",
+        &serde_json::json!({}),
+        "failure",
+    )
+    .unwrap();
+    assert!(execute_approved_draft(handle, &failed).await.is_err());
+    let store = crate::memories::get_vector_store(handle).unwrap();
+    let unknown = queue_tool_draft(
+        handle,
+        "another-session",
+        "edit_file",
+        &serde_json::json!({}),
+        "legacy",
+    )
+    .unwrap();
+    store
+        .conn
+        .execute(
+            "UPDATE proactive_queue SET reviewed_at = 'legacy' WHERE id = ?1",
+            [&unknown],
+        )
+        .unwrap();
+    let plans = crate::actions::plan(
+        &store,
+        "Compare apartments",
+        &["Gather listings", "Compare rent"],
+        Some("old-session"),
+    )
+    .unwrap();
+    // A model marking the parent done does not prove its steps finished.
+    crate::actions::complete(&store, &plans[0], None).unwrap();
+    crate::actions::block(&store, &plans[1], "Listings unavailable").unwrap();
+    let items = get_attention_items(handle).unwrap();
+    assert_eq!(items.actions.len(), 2);
+    assert!(items
+        .actions
+        .iter()
+        .any(|m| m.id == failed && m.execution_status.as_deref() == Some("failed")));
+    assert!(items
+        .actions
+        .iter()
+        .any(|m| m.id == unknown && m.approved.is_none()));
+    assert_eq!(items.plans[0].root_id, plans[0]);
+    for step in &plans[1..] {
+        crate::actions::update_status(
+            &store,
+            step,
+            crate::actions::ActionStatus::Cancelled,
+            None,
+            None,
+        )
+        .unwrap();
+    }
+    assert!(get_attention_items(handle).unwrap().plans.is_empty());
+}
+
+#[tokio::test]
+async fn persona_generation_happens_before_review_not_during_approval() {
+    use crate::tests::agent_helpers::TestEnv;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+    let _lock = home_lock_async().await;
+    let env = TestEnv::new().await;
+    let handle = &env.handle;
+    let store = crate::memories::get_vector_store(handle).unwrap();
+    let ids =
+        crate::actions::plan(&store, "Travel review", &["Compare trains"], Some("chat")).unwrap();
+    crate::actions::complete(&store, &ids[1], None).unwrap();
+    let config = crate::config::AppConfig {
+        background_model: Some("gpt-oss-120b (Groq)".to_string()),
+        groq_api_key: Some("test-only".to_string()),
+        ..Default::default()
+    };
+    Mock::given(method("POST")).and(path("/groq/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices":[{"message":{"role":"assistant","content":"# Travel review\nAsk before booking."},"finish_reason":"stop"}]
+        }))).expect(1).mount(&env.server).await;
+    let id = prepare_tool_draft(
+        handle,
+        "chat",
+        "crystallize_sketch",
+        &serde_json::json!({"sketch_id":ids[0]}),
+        "Review text",
+        &config,
+    )
+    .await
+    .unwrap();
+    let rows = get_proactive_messages(handle, 20, Some("chat")).unwrap();
+    let draft: DraftPayload =
+        serde_json::from_str(rows[0].draft_payload.as_ref().unwrap()).unwrap();
+    assert!(draft.arguments.get("sketch_id").is_none());
+    let path = crate::self_files::resolve_allowed_path(
+        handle,
+        draft.arguments["logical_path"].as_str().unwrap(),
+    )
+    .unwrap();
+    assert!(!path.exists());
+    let reviewed = draft.arguments["markdown"].as_str().unwrap();
+    assert!(reviewed.contains("Ask before booking."));
+    execute_approved_draft(handle, &id).await.unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), reviewed);
+    assert_eq!(env.server.received_requests().await.unwrap().len(), 1);
+}
