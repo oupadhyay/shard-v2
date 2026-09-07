@@ -6,6 +6,90 @@ A full rewrite is **not** planned. The P0 rewrite question (originally at the to
 
 Vercel AI SDK was evaluated and rejected: it would force the agent loop into TypeScript, losing the Rust streaming/cache/sandbox/observations stack and the entire benches suite.
 
+## Trust Repair: Remaining Work and Test Gaps
+
+The trust repair adds review for self-changes, separate approval and execution
+states, exact persona-text approval, truthful memory settings, and a **Needs
+attention** section. See [TRUST_CONTRACT.md](./TRUST_CONTRACT.md) for the current
+rules and test evidence. These notes do not mean the changes have been released.
+
+### Remaining behavior and product decisions
+
+- [ ] **Fix the rollback target at review time.** Without an `event_id`, rollback
+  still selects the latest restorable edit when it runs. Store a fixed event and
+  show the content to restore before approval. Test a newer edit arriving between
+  review and execution.
+- [ ] **Define how users resolve failed or unknown actions.** They stay visible
+  and cannot retry automatically. Add a way to record that the user checked the
+  effects, without changing the saved approval or pretending the action succeeded.
+  Keep failure, partial effects, and an unknown outcome distinct.
+- [ ] **Handle larger attention queues.** Only 100 failed/unknown actions are
+  returned at once. Add navigation or filtering before claiming the view shows
+  every unresolved action.
+- [ ] **Track commitments beyond saved plans.** The attention view shows durable
+  action plans, including unfinished steps under a completed parent. It does not
+  detect every promise in chat. Define when a promise becomes a tracked commitment
+  and how the user can correct or cancel it; do not infer completion from prose.
+- [ ] **Decide whether to add real private sessions.** Reduce Automatic Memory
+  is not private chat: history and attachments remain saved, existing conversation
+  context goes to the provider, explicit memory reads remain possible, and separate
+  scheduled/background/MCP activity continues. Define retention, in-flight work,
+  and transitions before adding a stronger privacy claim.
+- [ ] **Check the trust UI with the new ambient design.** The separate design
+  study is still a prototype and was not merged or tested with this backend.
+  Preserve exact-text review, unknown/failed outcomes, and access to attention
+  items when adopting its simpler opening screen.
+
+### Tests that failed or need follow-up
+
+- [ ] **Fix the shared endpoint test race.** A normal parallel Rust run failed
+  in `agent_provider_tests::gemini_turn::http_failure_emits_error_and_returns_err`.
+  Endpoint unit tests use a different lock from the agent tests while changing
+  the same global overrides. Use one isolation rule, then run the full parallel
+  suite repeatedly. The serial pass below does not prove this race is fixed.
+- [ ] **Check diff-viewer test cleanup.** An intermediate frontend run reported
+  asynchronous timer errors after test teardown. The final run passed; no timer
+  cleanup fix was made. Confirm that repeated runs leave no pending callbacks.
+- [ ] **Run native chat with live providers and tools.** The isolated GUI profile
+  had no API keys. Normal streaming, cancellation during a live response, provider
+  fallback, tool-call events/results, and one live external tool remain untested
+  in the app. Unit tests and local HTTP mocks are not a substitute for this check.
+- [ ] **Run real scheduled self-changes end to end.** Check chat and background
+  proposals, persona generation, approval/rejection, and exact saved contents
+  using a configured provider. Native approval checks used seeded SQLite drafts;
+  generation-before-approval was checked with a local HTTP mock.
+- [ ] **Test process interruption during native execution.** Storage failures,
+  duplicate claims, legacy unknown rows, and no replay have automated coverage.
+  Native checks covered a normal restart and seeded unknown state, not killing
+  the process at each approval/write/result-save boundary. Confirm that uncertain
+  effects remain unknown and are never replayed automatically.
+- [ ] **Run the macOS native matrix.** Linux cannot verify NSPanel, vibrancy,
+  transparency over real wallpapers, focus, global shortcuts, Spaces, or switching
+  between ambient and dedicated windows on macOS.
+- [ ] **Check the normal Vite hot-reload path.** Native testing used `tauri dev`
+  with the production frontend served by Vite preview. The Markdown import startup
+  bug was fixed and verified there; the usual Vite development-server path still
+  needs a separate native check.
+- [ ] **Run the remaining release checks.** Strict Clippy, strict rustdoc, a
+  packaged native build, and the full live native regression matrix were not run
+  for this follow-up. Record their results before release.
+
+### Verified in this repair
+
+- `cargo test --workspace -- --test-threads=1`: **544 passed**.
+- `cargo check --workspace --all-targets`: **passed**. Cargo still warns that
+  `screenshots v0.6.0` contains code a future Rust version will reject; the existing
+  screen-capture migration task below remains relevant.
+- `npm test -- --run`: **175 passed**; `npm run build`: **passed**.
+- Targeted Rust formatting and `git diff --check`: **passed**. Orb setup ran twice.
+- Real Linux Tauri/WebKit under Xvfb/Openbox: persona approval saved the exact
+  reviewed text; rejection saved no file; an old proposal without reviewable text
+  failed safely; repeat approval was refused. Failed/unknown outcomes and unfinished
+  plans survived restart and appeared in both windows, without replay buttons.
+- Native persona, attention, and memory-setting screenshots were inspected.
+  DOM checks confirmed no horizontal overflow and that the attention section did
+  not overlap the dedicated chat area. Test data used a separate temporary profile.
+
 ## Recently Completed
 
 - ✅ **Memory system rewritten with Honcho/Hermes + RRF learnings** — see [observations.rs](../src-tauri/src/observations.rs) (peer-centric DAG, peer cards, working representation), [retrieval.rs](../src-tauri/src/retrieval.rs) (BM25 + RRF fusion), [context.rs](../src-tauri/src/context.rs) (budgeted context assembly), [tool_registry.rs](../src-tauri/src/tool_registry.rs) (Hermes-style centralized registry).
