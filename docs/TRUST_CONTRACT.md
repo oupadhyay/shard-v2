@@ -91,10 +91,11 @@ work, and transitions between modes. This control makes none of those promises.
 
 ## Review and native checks (September 2026)
 
-* `cargo test --workspace -- --test-threads=1`: 544 tests passed. The normal
-  parallel run hit the existing endpoint-override race in
+* Before rebase, `cargo test --workspace -- --test-threads=1`: 544 tests passed.
+  The normal parallel run hit the endpoint-override race in
   `agent_provider_tests::gemini_turn::http_failure_emits_error_and_returns_err`.
-  The endpoint unit tests use a separate lock from the agent test harness.
+  The final rebase brought in the shared-lock fix from main (PR #126).
+  After rebase, normal parallel `cargo test --workspace`: 544 tests passed.
 * `cargo check --workspace --all-targets`: passed.
 * `npm test -- --run`: 175 tests passed. `npm run build`: passed.
 * Native Linux Tauri/WebKit ran under Xvfb and Openbox with a separate temporary
@@ -115,4 +116,6 @@ work, and transitions between modes. This control makes none of those promises.
 
 No live provider keys were configured in the isolated GUI profile. Live chat,
 live external tools, and macOS NSPanel/vibrancy/Spaces behavior were not verified.
+Native evidence above predates the final rebase and its updated split-crate pins;
+automated checks were repeated, but native GUI checks on those pins remain open.
 The frontend design-study branch is separate and was not merged into this work.

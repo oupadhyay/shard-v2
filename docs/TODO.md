@@ -42,11 +42,12 @@ rules and test evidence. These notes do not mean the changes have been released.
 
 ### Tests that failed or need follow-up
 
-- [ ] **Fix the shared endpoint test race.** A normal parallel Rust run failed
+- [x] **Bring in the shared endpoint test fix.** A normal parallel Rust run failed
   in `agent_provider_tests::gemini_turn::http_failure_emits_error_and_returns_err`.
-  Endpoint unit tests use a different lock from the agent tests while changing
-  the same global overrides. Use one isolation rule, then run the full parallel
-  suite repeatedly. The serial pass below does not prove this race is fixed.
+  The initial checkout lacked the shared lock. Before opening the PR, this branch
+  was rebased onto current `main`, which includes the fix from PR #126. The normal
+  parallel suite now passes. Keep this history so the earlier failure is not
+  mistaken for an unresolved failure in the submitted branch.
 - [ ] **Check diff-viewer test cleanup.** An intermediate frontend run reported
   asynchronous timer errors after test teardown. The final run passed; no timer
   cleanup fix was made. Confirm that repeated runs leave no pending callbacks.
@@ -66,6 +67,10 @@ rules and test evidence. These notes do not mean the changes have been released.
 - [ ] **Run the macOS native matrix.** Linux cannot verify NSPanel, vibrancy,
   transparency over real wallpapers, focus, global shortcuts, Spaces, or switching
   between ambient and dedicated windows on macOS.
+- [ ] **Repeat native checks on the updated dependency pins.** The GUI evidence
+  below was collected before the final rebase. Current `main` also brought newer
+  split-crate pins; automated checks were rerun after the rebase, but the native
+  GUI matrix was not repeated on those exact pins.
 - [ ] **Check the normal Vite hot-reload path.** Native testing used `tauri dev`
   with the production frontend served by Vite preview. The Markdown import startup
   bug was fixed and verified there; the usual Vite development-server path still
@@ -76,7 +81,8 @@ rules and test evidence. These notes do not mean the changes have been released.
 
 ### Verified in this repair
 
-- `cargo test --workspace -- --test-threads=1`: **544 passed**.
+- `cargo test --workspace -- --test-threads=1`: **544 passed** before rebase;
+  normal parallel `cargo test --workspace`: **544 passed** after rebase.
 - `cargo check --workspace --all-targets`: **passed**. Cargo still warns that
   `screenshots v0.6.0` contains code a future Rust version will reject; the existing
   screen-capture migration task below remains relevant.
