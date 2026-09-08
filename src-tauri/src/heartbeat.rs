@@ -16,9 +16,10 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex as StdMutex;
+use std::sync::{Mutex as StdMutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 // ============================================================================
@@ -42,6 +43,9 @@ pub struct HeartbeatSpec {
     /// Optional daily run cap (default: 10).
     #[serde(default = "default_max_runs_per_day")]
     pub max_runs_per_day: Option<u32>,
+    /// Paused routines remain persisted but do not start future turns.
+    #[serde(default)]
+    pub paused: bool,
     /// The prompt template body.
     pub prompt: String,
     /// Source filename (for logging).
@@ -57,25 +61,70 @@ fn default_max_runs_per_day() -> Option<u32> {
     Some(10)
 }
 
+pub(crate) fn scheduler_cron_expression(schedule: &str) -> String {
+    if schedule.split_whitespace().count() == 5 {
+        format!("0 {}", schedule)
+    } else {
+        schedule.to_string()
+    }
+}
+
+fn heartbeat_write_lock() -> &'static StdMutex<()> {
+    static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| StdMutex::new(()))
+}
+
+fn write_heartbeat_file(path: &std::path::Path, content: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Heartbeat file has no parent directory".to_string())?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|e| format!("Failed to create temporary heartbeat file: {}", e))?;
+    temporary
+        .write_all(content)
+        .and_then(|_| temporary.as_file_mut().sync_all())
+        .map_err(|e| format!("Failed to write temporary heartbeat file: {}", e))?;
+    temporary
+        .persist(path)
+        .map_err(|e| format!("Failed to replace heartbeat file: {}", e.error))?;
+    Ok(())
+}
+
 /// Status info for a heartbeat (returned to frontend dashboard).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatStatusInfo {
     pub filename: String,
+    /// Human-readable next occurrence retained for existing callers.
+    pub schedule: String,
+    pub cron: String,
+    pub session: String,
+    pub persona: Option<String>,
+    pub max_tool_calls: u32,
+    pub max_runs_per_day: Option<u32>,
+    pub paused: bool,
+    pub prompt: String,
+    pub prompt_preview: String,
+    /// Hash of the persisted TOML used for stale-edit protection.
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatInput {
     pub schedule: String,
     pub session: String,
     pub persona: Option<String>,
     pub max_tool_calls: u32,
     pub max_runs_per_day: Option<u32>,
-    pub prompt_preview: String,
+    pub prompt: String,
 }
 
 /// Returns status info for all loaded heartbeat specs.
 pub fn get_heartbeat_status_list<R: Runtime>(
     app_handle: &AppHandle<R>,
 ) -> Vec<HeartbeatStatusInfo> {
-    load_heartbeat_specs(app_handle)
+    load_heartbeat_specs_with_revisions(app_handle)
         .into_iter()
-        .map(|spec| {
+        .map(|(spec, revision)| {
             let preview = if spec.prompt.len() > 80 {
                 let boundary = spec.prompt.floor_char_boundary(80);
                 format!("{}...", &spec.prompt[..boundary])
@@ -84,11 +133,7 @@ pub fn get_heartbeat_status_list<R: Runtime>(
             };
 
             // Format next occurrence for UI preview
-            let cron_expr = if spec.schedule.split_whitespace().count() == 5 {
-                format!("0 {}", spec.schedule)
-            } else {
-                spec.schedule.clone()
-            };
+            let cron_expr = scheduler_cron_expression(&spec.schedule);
             let schedule_preview = if let Ok(schedule) = cron_expr.parse::<cron::Schedule>() {
                 if let Some(next) = schedule.upcoming(chrono::Local).next() {
                     // E.g., "Tomorrow at 11:05 PM" or "Mar 17 at 11:05 PM"
@@ -111,11 +156,15 @@ pub fn get_heartbeat_status_list<R: Runtime>(
             HeartbeatStatusInfo {
                 filename: spec.filename,
                 schedule: schedule_preview,
+                cron: spec.schedule,
                 session: spec.session,
                 persona: spec.persona,
                 max_tool_calls: spec.max_tool_calls,
                 max_runs_per_day: spec.max_runs_per_day,
+                paused: spec.paused,
+                prompt: spec.prompt,
                 prompt_preview: preview,
+                revision,
             }
         })
         .collect()
@@ -152,11 +201,7 @@ pub fn parse_heartbeat_spec(content: &str, filename: &str) -> Result<HeartbeatSp
     }
 
     // Cron validation with 5-field fallback support
-    let cron_to_validate = if spec.schedule.split_whitespace().count() == 5 {
-        format!("0 {}", spec.schedule)
-    } else {
-        spec.schedule.clone()
-    };
+    let cron_to_validate = scheduler_cron_expression(&spec.schedule);
     if let Err(e) = cron_to_validate.parse::<cron::Schedule>() {
         return Err(format!(
             "Heartbeat spec '{}' has an invalid cron schedule '{}': {}",
@@ -289,6 +334,15 @@ pub fn migrate_legacy_heartbeat_files<R: Runtime>(app_handle: &AppHandle<R>) {
 
 /// Scans the heartbeats directory and returns all valid specs.
 pub fn load_heartbeat_specs<R: Runtime>(app_handle: &AppHandle<R>) -> Vec<HeartbeatSpec> {
+    load_heartbeat_specs_with_revisions(app_handle)
+        .into_iter()
+        .map(|(spec, _)| spec)
+        .collect()
+}
+
+fn load_heartbeat_specs_with_revisions<R: Runtime>(
+    app_handle: &AppHandle<R>,
+) -> Vec<(HeartbeatSpec, String)> {
     migrate_legacy_heartbeat_files(app_handle);
 
     let dir = match get_heartbeats_dir(app_handle) {
@@ -317,13 +371,13 @@ pub fn load_heartbeat_specs<R: Runtime>(app_handle: &AppHandle<R>) -> Vec<Heartb
             match fs::read_to_string(&path) {
                 Ok(content) => match parse_heartbeat_spec(&content, &filename) {
                     Ok(spec) => {
-                        log::info!(
+                        log::debug!(
                             "[Heartbeat] Loaded spec '{}' (schedule: {}, session: {})",
                             filename,
                             spec.schedule,
                             spec.session
                         );
-                        specs.push(spec);
+                        specs.push((spec, crate::vector_store::compute_content_hash(&content)));
                     }
                     Err(e) => log::warn!("[Heartbeat] Skipping invalid spec '{}': {}", filename, e),
                 },
@@ -333,6 +387,132 @@ pub fn load_heartbeat_specs<R: Runtime>(app_handle: &AppHandle<R>) -> Vec<Heartb
     }
 
     specs
+}
+
+fn load_heartbeat_spec<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    name: &str,
+) -> Result<(HeartbeatSpec, String), String> {
+    crate::self_files::validate_heartbeat_slug(name)?;
+    let path = get_heartbeats_dir(app_handle)?.join(format!("{}.toml", name));
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read heartbeat '{}': {}", name, e))?;
+    let spec = parse_heartbeat_spec(&content, name)?;
+    let revision = crate::vector_store::compute_content_hash(&content);
+    Ok((spec, revision))
+}
+
+fn serialize_heartbeat_spec(spec: &HeartbeatSpec) -> Result<String, String> {
+    toml::to_string_pretty(spec).map_err(|e| format!("Failed to serialize heartbeat: {}", e))
+}
+
+fn persist_heartbeat_spec<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    spec: &HeartbeatSpec,
+) -> Result<HeartbeatStatusInfo, String> {
+    crate::self_files::validate_heartbeat_slug(&spec.filename)?;
+    let content = serialize_heartbeat_spec(spec)?;
+    parse_heartbeat_spec(&content, &spec.filename)?;
+    let path = get_heartbeats_dir(app_handle)?.join(format!("{}.toml", spec.filename));
+    write_heartbeat_file(&path, content.as_bytes())?;
+    get_heartbeat_status_list(app_handle)
+        .into_iter()
+        .find(|status| status.filename == spec.filename)
+        .ok_or_else(|| "Heartbeat was written but could not be reloaded".to_string())
+}
+
+fn require_heartbeat_revision(actual: &str, expected: &str) -> Result<(), String> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err("Routine changed since it was opened; reload before saving".to_string())
+    }
+}
+
+/// Direct-user management path. Model-initiated mutations continue to use the
+/// draft-gated registry and call the same persistence primitives only after
+/// approval.
+pub fn create_heartbeat<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    name: &str,
+    input: HeartbeatInput,
+) -> Result<HeartbeatStatusInfo, String> {
+    let _write_guard = heartbeat_write_lock()
+        .lock()
+        .map_err(|_| "Routine write lock is unavailable".to_string())?;
+    crate::self_files::validate_heartbeat_slug(name)?;
+    let path = get_heartbeats_dir(app_handle)?.join(format!("{}.toml", name));
+    if path.exists() {
+        return Err(format!("Heartbeat '{}' already exists", name));
+    }
+    persist_heartbeat_spec(
+        app_handle,
+        &HeartbeatSpec {
+            schedule: input.schedule,
+            session: input.session,
+            persona: input.persona,
+            max_tool_calls: input.max_tool_calls,
+            max_runs_per_day: input.max_runs_per_day,
+            paused: false,
+            prompt: input.prompt,
+            filename: name.to_string(),
+        },
+    )
+}
+
+pub fn update_heartbeat<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    name: &str,
+    expected_revision: &str,
+    input: HeartbeatInput,
+) -> Result<HeartbeatStatusInfo, String> {
+    let _write_guard = heartbeat_write_lock()
+        .lock()
+        .map_err(|_| "Routine write lock is unavailable".to_string())?;
+    let (current, revision) = load_heartbeat_spec(app_handle, name)?;
+    require_heartbeat_revision(&revision, expected_revision)?;
+    persist_heartbeat_spec(
+        app_handle,
+        &HeartbeatSpec {
+            schedule: input.schedule,
+            session: input.session,
+            persona: input.persona,
+            max_tool_calls: input.max_tool_calls,
+            max_runs_per_day: input.max_runs_per_day,
+            paused: current.paused,
+            prompt: input.prompt,
+            filename: name.to_string(),
+        },
+    )
+}
+
+pub fn set_heartbeat_paused<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    name: &str,
+    expected_revision: &str,
+    paused: bool,
+) -> Result<HeartbeatStatusInfo, String> {
+    let _write_guard = heartbeat_write_lock()
+        .lock()
+        .map_err(|_| "Routine write lock is unavailable".to_string())?;
+    let (mut spec, revision) = load_heartbeat_spec(app_handle, name)?;
+    require_heartbeat_revision(&revision, expected_revision)?;
+    spec.paused = paused;
+    persist_heartbeat_spec(app_handle, &spec)
+}
+
+pub fn delete_heartbeat<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    name: &str,
+    expected_revision: &str,
+) -> Result<(), String> {
+    let _write_guard = heartbeat_write_lock()
+        .lock()
+        .map_err(|_| "Routine write lock is unavailable".to_string())?;
+    let (_, revision) = load_heartbeat_spec(app_handle, name)?;
+    require_heartbeat_revision(&revision, expected_revision)?;
+    let path = get_heartbeats_dir(app_handle)?.join(format!("{}.toml", name));
+    fs::remove_file(path).map_err(|e| format!("Failed to delete heartbeat '{}': {}", name, e))
 }
 
 // ============================================================================
@@ -1129,6 +1309,7 @@ async fn execute_safe_tool<R: Runtime>(
                     persona: None,
                     max_tool_calls: 3,
                     max_runs_per_day: None,
+                    paused: false,
                     prompt: ctx,
                     filename: "dynamic-alarm".to_string(),
                 };
@@ -1331,17 +1512,6 @@ pub fn start_heartbeat_engine<R: Runtime>(app_handle: AppHandle<R>) {
             return;
         }
 
-        let specs = load_heartbeat_specs(&app_handle);
-        if specs.is_empty() {
-            log::info!("[Heartbeat] No heartbeat specs found. Engine idle.");
-            return;
-        }
-
-        log::info!(
-            "[Heartbeat] Starting engine with {} heartbeat spec(s)",
-            specs.len()
-        );
-
         // Load global cooldown from config
         let global_cooldown = crate::config::load_config(&app_handle)
             .ok()
@@ -1352,89 +1522,167 @@ pub fn start_heartbeat_engine<R: Runtime>(app_handle: AppHandle<R>) {
 
         match tokio_cron_scheduler::JobScheduler::new().await {
             Ok(sched) => {
-                for spec in specs {
-                    let app_h = app_handle.clone();
-                    let limiter = rate_limiter.clone();
-                    let schedule = spec.schedule.clone();
-                    let spec_clone = spec.clone();
-
-                    let job = tokio_cron_scheduler::Job::new_async_tz(
-                        schedule.as_str(),
-                        chrono::Local,
-                        move |_uuid, mut _l| {
-                            let app_h2 = app_h.clone();
-                            let limiter2 = limiter.clone();
-                            let spec2 = spec_clone.clone();
-                            Box::pin(async move {
-                                log::info!("[Heartbeat] Tick for spec '{}'", spec2.filename);
-
-                                // Rate limit check
-                                if limiter2.should_skip(&spec2) {
-                                    return;
-                                }
-
-                                match process_heartbeat_turn(&app_h2, &spec2).await {
-                                    Ok(_) => {
-                                        limiter2.record_run(&spec2.session);
-                                        log::info!(
-                                            "[Heartbeat] '{}' completed successfully",
-                                            spec2.filename
-                                        );
-                                    }
-                                    Err(e) => {
-                                        if e.contains("429")
-                                            || e.contains("quota")
-                                            || e.contains("rate")
-                                        {
-                                            limiter2.record_quota_error(&spec2.session);
-                                        }
-                                        log::error!(
-                                            "[Heartbeat] '{}' failed: {}",
-                                            spec2.filename,
-                                            e
-                                        );
-                                    }
-                                }
-                            })
-                        },
-                    );
-
-                    match job {
-                        Ok(j) => {
-                            if let Err(e) = sched.add(j).await {
-                                log::error!(
-                                    "[Heartbeat] Failed to schedule '{}': {}",
-                                    spec.filename,
-                                    e
-                                );
-                            } else {
-                                log::info!(
-                                    "[Heartbeat] Scheduled '{}' with cron: '{}'",
-                                    spec.filename,
-                                    spec.schedule
-                                );
-                            }
-                        }
-                        Err(e) => log::error!(
-                            "[Heartbeat] Invalid cron '{}' for '{}': {}",
-                            spec.schedule,
-                            spec.filename,
-                            e
-                        ),
-                    }
-                }
-
                 if let Err(e) = sched.start().await {
                     log::error!("[Heartbeat] Failed to start scheduler: {}", e);
                 } else {
                     log::info!("[Heartbeat] Scheduler started successfully");
-                    // Keep the task alive
-                    std::future::pending::<()>().await;
+                    let mut registered: HashMap<String, (String, uuid::Uuid)> = HashMap::new();
+
+                    // The same scheduler is reconciled with persisted specs so
+                    // direct-user and approved model CRUD takes effect without a
+                    // restart. It does not cancel turns already in progress.
+                    loop {
+                        let specs = load_heartbeat_specs(&app_handle);
+                        let names: std::collections::HashSet<_> =
+                            specs.iter().map(|spec| spec.filename.clone()).collect();
+
+                        let removed: Vec<_> = registered
+                            .keys()
+                            .filter(|name| !names.contains(*name))
+                            .cloned()
+                            .collect();
+                        for name in removed {
+                            if let Some((schedule, id)) = registered.remove(&name) {
+                                if let Err(e) = sched.remove(&id).await {
+                                    log::warn!(
+                                        "[Heartbeat] Failed to unschedule '{}': {}",
+                                        name,
+                                        e
+                                    );
+                                    registered.insert(name, (schedule, id));
+                                }
+                            }
+                        }
+
+                        for spec in specs {
+                            let schedule_changed = registered
+                                .get(&spec.filename)
+                                .map(|(schedule, _)| schedule != &spec.schedule)
+                                .unwrap_or(true);
+                            if !schedule_changed {
+                                continue;
+                            }
+                            if let Some((old_schedule, id)) = registered.remove(&spec.filename) {
+                                if let Err(e) = sched.remove(&id).await {
+                                    log::warn!(
+                                        "[Heartbeat] Failed to replace schedule for '{}': {}",
+                                        spec.filename,
+                                        e
+                                    );
+                                    registered.insert(spec.filename.clone(), (old_schedule, id));
+                                    continue;
+                                }
+                            }
+
+                            let app_h = app_handle.clone();
+                            let limiter = rate_limiter.clone();
+                            let name = spec.filename.clone();
+                            let registered_schedule = spec.schedule.clone();
+                            let scheduler_expression =
+                                scheduler_cron_expression(&registered_schedule);
+                            let closure_name = name.clone();
+                            let closure_schedule = registered_schedule.clone();
+                            let job = tokio_cron_scheduler::Job::new_async_tz(
+                                scheduler_expression.as_str(),
+                                chrono::Local,
+                                move |_uuid, mut _l| {
+                                    let app_h2 = app_h.clone();
+                                    let limiter2 = limiter.clone();
+                                    let name2 = closure_name.clone();
+                                    let schedule2 = closure_schedule.clone();
+                                    Box::pin(async move {
+                                        let spec = match runnable_heartbeat_spec(
+                                            &app_h2, &name2, &schedule2,
+                                        ) {
+                                            Ok(Some(spec)) => spec,
+                                            Ok(None) => return,
+                                            Err(e) => {
+                                                log::warn!(
+                                                    "[Heartbeat] Skipping tick for '{}': {}",
+                                                    name2,
+                                                    e
+                                                );
+                                                return;
+                                            }
+                                        };
+                                        log::info!("[Heartbeat] Tick for spec '{}'", spec.filename);
+                                        if limiter2.should_skip(&spec) {
+                                            return;
+                                        }
+
+                                        match process_heartbeat_turn(&app_h2, &spec).await {
+                                            Ok(_) => {
+                                                limiter2.record_run(&spec.session);
+                                                log::info!(
+                                                    "[Heartbeat] '{}' completed successfully",
+                                                    spec.filename
+                                                );
+                                            }
+                                            Err(e) => {
+                                                if e.contains("429")
+                                                    || e.contains("quota")
+                                                    || e.contains("rate")
+                                                {
+                                                    limiter2.record_quota_error(&spec.session);
+                                                }
+                                                log::error!(
+                                                    "[Heartbeat] '{}' failed: {}",
+                                                    spec.filename,
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    })
+                                },
+                            );
+
+                            match job {
+                                Ok(job) => match sched.add(job).await {
+                                    Ok(id) => {
+                                        log::info!(
+                                            "[Heartbeat] Scheduled '{}' with cron: '{}'",
+                                            name,
+                                            registered_schedule
+                                        );
+                                        registered.insert(name, (registered_schedule, id));
+                                    }
+                                    Err(e) => log::error!(
+                                        "[Heartbeat] Failed to schedule '{}': {}",
+                                        name,
+                                        e
+                                    ),
+                                },
+                                Err(e) => log::error!(
+                                    "[Heartbeat] Invalid cron '{}' for '{}': {}",
+                                    registered_schedule,
+                                    name,
+                                    e
+                                ),
+                            }
+                        }
+
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
                 }
             }
             Err(e) => log::error!("[Heartbeat] Failed to create JobScheduler: {}", e),
         }
     });
+}
+
+/// Reload immediately before beginning a turn. A pause arriving after this
+/// check applies to the next run; the current turn is already in flight and is
+/// deliberately not cancelled.
+pub(crate) fn runnable_heartbeat_spec<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    name: &str,
+    registered_schedule: &str,
+) -> Result<Option<HeartbeatSpec>, String> {
+    let (spec, _) = load_heartbeat_spec(app_handle, name)?;
+    if spec.paused || spec.schedule != registered_schedule {
+        return Ok(None);
+    }
+    Ok(Some(spec))
 }
 
 // ============================================================================
@@ -1553,71 +1801,37 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
                 .as_str()
                 .ok_or("Missing 'session' argument")?;
             let prompt = args["prompt"].as_str().ok_or("Missing 'prompt' argument")?;
-            let persona = args["persona"].as_str();
-            let max_tool_calls = args["max_tool_calls"].as_u64();
+            let persona = args["persona"].as_str().map(str::to_string);
+            let max_tool_calls = args["max_tool_calls"].as_u64().unwrap_or(5) as u32;
+            let max_runs_per_day = args["max_runs_per_day"].as_u64().map(|value| value as u32);
 
-            crate::self_files::validate_heartbeat_slug(name)?;
-            let safe_name = name.to_string();
-
-            let dir = get_heartbeats_dir(app_handle)?;
-            let filepath = dir.join(format!("{}.toml", safe_name));
-            if filepath.exists() {
-                return Err(format!("Heartbeat '{}' already exists", safe_name));
-            }
-
-            let mut toml_content =
-                format!("schedule = \"{}\"\nsession = \"{}\"\n", schedule, session);
-            if let Some(p) = persona {
-                toml_content.push_str(&format!("persona = \"{}\"\n", p));
-            }
-            if let Some(m) = max_tool_calls {
-                toml_content.push_str(&format!("max_tool_calls = {}\n", m));
-            }
-            toml_content.push_str(&format!("prompt = \"\"\"{}\"\"\"\n", prompt));
-
-            // Validate generated TOML structure before writing
-            parse_heartbeat_spec(&toml_content, &safe_name)?;
-
-            fs::write(&filepath, &toml_content)
-                .map_err(|e| format!("Failed to write heartbeat: {}", e))?;
+            create_heartbeat(
+                app_handle,
+                name,
+                HeartbeatInput {
+                    schedule: schedule.to_string(),
+                    session: session.to_string(),
+                    persona,
+                    max_tool_calls,
+                    max_runs_per_day: max_runs_per_day.or_else(default_max_runs_per_day),
+                    prompt: prompt.to_string(),
+                },
+            )?;
 
             Ok(format!(
                 "Created heartbeat '{}' (schedule: {})",
-                safe_name, schedule
+                name, schedule
             ))
         }
         "delete_heartbeat" => {
             let name = args["name"].as_str().ok_or("Missing 'name' argument")?;
-
-            crate::self_files::validate_heartbeat_slug(name)?;
-            let safe_name = name.to_string();
-
-            let dir = get_heartbeats_dir(app_handle)?;
-            let filepath = dir.join(format!("{}.toml", safe_name));
-            if !filepath.exists() {
-                return Err(format!("Heartbeat '{}' not found", safe_name));
-            }
-
-            fs::remove_file(&filepath).map_err(|e| format!("Failed to delete heartbeat: {}", e))?;
-
-            Ok(format!("Deleted heartbeat '{}'", safe_name))
+            let (_, revision) = load_heartbeat_spec(app_handle, name)?;
+            delete_heartbeat(app_handle, name, &revision)?;
+            Ok(format!("Deleted heartbeat '{}'", name))
         }
         "edit_heartbeat" => {
             let name = args["name"].as_str().ok_or("Missing 'name' argument")?;
-
-            crate::self_files::validate_heartbeat_slug(name)?;
-            let safe_name = name.to_string();
-
-            let dir = get_heartbeats_dir(app_handle)?;
-            let filepath = dir.join(format!("{}.toml", safe_name));
-            if !filepath.exists() {
-                return Err(format!("Heartbeat '{}' not found", safe_name));
-            }
-
-            // Read existing spec
-            let content = fs::read_to_string(&filepath)
-                .map_err(|e| format!("Failed to read heartbeat: {}", e))?;
-            let mut spec = parse_heartbeat_spec(&content, &safe_name)?;
+            let (mut spec, revision) = load_heartbeat_spec(app_handle, name)?;
 
             // Apply edits
             if let Some(s) = args["schedule"].as_str() {
@@ -1637,26 +1851,21 @@ pub(crate) async fn execute_draft_gated_tool<R: Runtime>(
                 spec.max_tool_calls = m as u32;
             }
 
-            // Rewrite the file as TOML
-            let mut output = format!(
-                "schedule = \"{}\"\nsession = \"{}\"\n",
-                spec.schedule, spec.session
-            );
-            if let Some(ref p) = spec.persona {
-                output.push_str(&format!("persona = \"{}\"\n", p));
-            }
-            if spec.max_tool_calls != 5 {
-                output.push_str(&format!("max_tool_calls = {}\n", spec.max_tool_calls));
-            }
-            output.push_str(&format!("prompt = \"\"\"{}\"\"\"\n", spec.prompt));
+            update_heartbeat(
+                app_handle,
+                name,
+                &revision,
+                HeartbeatInput {
+                    schedule: spec.schedule,
+                    session: spec.session,
+                    persona: spec.persona,
+                    max_tool_calls: spec.max_tool_calls,
+                    max_runs_per_day: spec.max_runs_per_day,
+                    prompt: spec.prompt,
+                },
+            )?;
 
-            // Validate generated TOML structure before writing
-            parse_heartbeat_spec(&output, &safe_name)?;
-
-            fs::write(&filepath, &output)
-                .map_err(|e| format!("Failed to write heartbeat: {}", e))?;
-
-            Ok(format!("Updated heartbeat '{}'", safe_name))
+            Ok(format!("Updated heartbeat '{}'", name))
         }
         "rollback_self_edit" => {
             let path = args["path"].as_str().unwrap_or_default();

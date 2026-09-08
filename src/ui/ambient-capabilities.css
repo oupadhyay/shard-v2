@@ -1,0 +1,177 @@
+.ambient-capability {
+  color: var(--ambient-text);
+  font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.ambient-capability-intro,
+.ambient-capability-note,
+.ambient-capability-status {
+  color: var(--ambient-text-secondary);
+  margin: 0 0 12px;
+}
+
+.ambient-capability-status {
+  align-items: center;
+  border-block: 1px solid var(--ambient-border);
+  display: flex;
+  justify-content: space-between;
+  min-height: 36px;
+  padding: 4px 0;
+}
+
+.ambient-capability-status > span:empty::after {
+  content: "\00a0";
+}
+
+.ambient-capability-status[data-tone="error"] {
+  color: var(--ambient-danger);
+}
+
+.ambient-capability-list {
+  display: grid;
+  gap: 0;
+}
+
+.ambient-capability-row {
+  border-bottom: 1px solid var(--ambient-border);
+  min-width: 0;
+  padding: 16px 0;
+}
+
+.ambient-capability-row:first-child {
+  padding-top: 4px;
+}
+
+.ambient-capability-meta {
+  color: var(--ambient-text-muted);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin: 0 0 8px;
+}
+
+.ambient-capability-copy {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.ambient-capability-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ambient-capability button,
+.ambient-capability input,
+.ambient-capability textarea {
+  font: inherit;
+}
+
+.ambient-capability button {
+  background: transparent;
+  border: 1px solid var(--ambient-border-strong);
+  border-radius: 8px;
+  color: var(--ambient-text-secondary);
+  cursor: pointer;
+  min-height: 32px;
+  padding: 5px 10px;
+}
+
+.ambient-capability button:hover:not(:disabled) {
+  background: var(--ambient-elevated);
+  color: var(--ambient-text);
+}
+
+.ambient-capability button:focus-visible,
+.ambient-capability input:focus-visible,
+.ambient-capability textarea:focus-visible {
+  outline: 2px solid var(--ambient-accent);
+  outline-offset: 2px;
+}
+
+.ambient-capability button[data-primary="true"] {
+  background: var(--ambient-accent);
+  border-color: var(--ambient-accent);
+  color: var(--ambient-on-accent);
+}
+
+.ambient-capability button[data-danger="true"] {
+  color: var(--ambient-danger);
+}
+
+.ambient-capability button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.ambient-capability-editor {
+  display: grid;
+  gap: 8px;
+  min-height: 116px;
+}
+
+.ambient-capability label {
+  color: var(--ambient-text-muted);
+  display: grid;
+  font-size: 11px;
+  gap: 6px;
+}
+
+.ambient-capability input,
+.ambient-capability textarea {
+  background: var(--ambient-inset);
+  border: 1px solid var(--ambient-border-strong);
+  border-radius: 8px;
+  color: var(--ambient-text);
+  padding: 8px;
+  resize: vertical;
+  width: 100%;
+}
+
+.ambient-capability-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.ambient-capability-empty {
+  color: var(--ambient-text-secondary);
+  margin: 20px 0;
+  text-align: center;
+}
+
+.ambient-capability-session {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--ambient-border);
+  border-radius: 0;
+  display: block;
+  padding: 12px 0;
+  text-align: left;
+  width: 100%;
+}
+
+.ambient-capability-session-row {
+  align-items: center;
+  border-bottom: 1px solid var(--ambient-border);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.ambient-capability-session-row .ambient-capability-session {
+  border-bottom: 0;
+}
+
+.ambient-capability-session .ambient-capability-copy {
+  color: var(--ambient-text-muted);
+  display: block;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-capability * {
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}

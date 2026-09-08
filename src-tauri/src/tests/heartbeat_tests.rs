@@ -6,7 +6,7 @@
  * in-memory/tempdir fixtures.
  */
 use crate::heartbeat::*;
-use crate::tests::agent_helpers::{home_lock_async, HomeJail};
+use crate::tests::agent_helpers::{home_lock, home_lock_async, HomeJail};
 use tauri::Manager;
 
 // ============================================================================
@@ -50,7 +50,94 @@ prompt = "Good morning check."
     assert!(spec.persona.is_none());
     assert_eq!(spec.max_tool_calls, 5); // default
     assert_eq!(spec.max_runs_per_day, Some(10)); // default
+    assert!(!spec.paused);
     assert_eq!(spec.prompt, "Good morning check.");
+}
+
+#[test]
+fn five_field_cron_is_normalized_for_scheduler_registration() {
+    assert_eq!(scheduler_cron_expression("0 9 * * MON"), "0 0 9 * * MON");
+    assert!(scheduler_cron_expression("0 9 * * MON")
+        .parse::<cron::Schedule>()
+        .is_ok());
+    assert_eq!(
+        scheduler_cron_expression("15 0 9 * * MON"),
+        "15 0 9 * * MON"
+    );
+}
+
+#[test]
+fn routine_management_persists_pause_and_rejects_stale_edits() {
+    let _home_lock = home_lock();
+    let _home_jail = HomeJail::new();
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+
+    let created = create_heartbeat(
+        handle,
+        "sunday-space",
+        HeartbeatInput {
+            schedule: "0 9 * * SUN".to_string(),
+            session: "agent:sunday-space".to_string(),
+            persona: None,
+            max_tool_calls: 3,
+            max_runs_per_day: Some(1),
+            prompt: "Leave an hour open for a walk.".to_string(),
+        },
+    )
+    .unwrap();
+    assert!(!created.paused);
+    assert!(
+        runnable_heartbeat_spec(handle, "sunday-space", &created.cron)
+            .unwrap()
+            .is_some()
+    );
+
+    // Once returned, a turn is considered in flight. Pausing persists and
+    // blocks subsequent ticks without mutating/cancelling that loaded turn.
+    let in_flight = runnable_heartbeat_spec(handle, "sunday-space", &created.cron)
+        .unwrap()
+        .unwrap();
+    let paused = set_heartbeat_paused(handle, "sunday-space", &created.revision, true).unwrap();
+    assert!(paused.paused);
+    assert!(!in_flight.paused);
+    assert!(
+        runnable_heartbeat_spec(handle, "sunday-space", &created.cron)
+            .unwrap()
+            .is_none()
+    );
+    assert!(get_heartbeat_status_list(handle)[0].paused);
+
+    assert!(
+        set_heartbeat_paused(handle, "sunday-space", &created.revision, false)
+            .unwrap_err()
+            .contains("changed since")
+    );
+    let resumed = set_heartbeat_paused(handle, "sunday-space", &paused.revision, false).unwrap();
+    assert!(!resumed.paused);
+
+    let updated = update_heartbeat(
+        handle,
+        "sunday-space",
+        &resumed.revision,
+        HeartbeatInput {
+            schedule: "0 10 * * SUN".to_string(),
+            session: resumed.session,
+            persona: None,
+            max_tool_calls: 3,
+            max_runs_per_day: Some(1),
+            prompt: "Keep Sunday morning unhurried.".to_string(),
+        },
+    )
+    .unwrap();
+    assert_eq!(updated.cron, "0 10 * * SUN");
+    assert!(
+        runnable_heartbeat_spec(handle, "sunday-space", "0 9 * * SUN")
+            .unwrap()
+            .is_none()
+    );
+    delete_heartbeat(handle, "sunday-space", &updated.revision).unwrap();
+    assert!(get_heartbeat_status_list(handle).is_empty());
 }
 
 #[test]
@@ -129,6 +216,7 @@ fn test_rate_limiter_cooldown() {
         persona: None,
         max_tool_calls: 5,
         max_runs_per_day: None,
+        paused: false,
         prompt: "test".to_string(),
         filename: "test".to_string(),
     };
@@ -153,6 +241,7 @@ fn test_rate_limiter_daily_cap() {
         persona: None,
         max_tool_calls: 5,
         max_runs_per_day: Some(2), // Cap at 2 per day
+        paused: false,
         prompt: "test".to_string(),
         filename: "test".to_string(),
     };
@@ -179,6 +268,7 @@ fn test_rate_limiter_backoff() {
         persona: None,
         max_tool_calls: 5,
         max_runs_per_day: None,
+        paused: false,
         prompt: "test".to_string(),
         filename: "test".to_string(),
     };
@@ -200,6 +290,7 @@ fn test_rate_limiter_backoff_clears_on_success() {
         persona: None,
         max_tool_calls: 5,
         max_runs_per_day: None,
+        paused: false,
         prompt: "test".to_string(),
         filename: "test".to_string(),
     };
@@ -222,6 +313,7 @@ fn test_rate_limiter_no_cap_unlimited() {
         persona: None,
         max_tool_calls: 5,
         max_runs_per_day: None, // Explicitly no cap
+        paused: false,
         prompt: "test".to_string(),
         filename: "test".to_string(),
     };
@@ -243,6 +335,7 @@ fn test_rate_limiter_default_cap() {
         persona: None,
         max_tool_calls: 5,
         max_runs_per_day: Some(10), // The new default
+        paused: false,
         prompt: "test".to_string(),
         filename: "test".to_string(),
     };

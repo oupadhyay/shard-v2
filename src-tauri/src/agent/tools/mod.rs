@@ -525,6 +525,7 @@ impl<R: tauri::Runtime> Agent<R> {
                         persona: None,
                         max_tool_calls: 3,
                         max_runs_per_day: None,
+                        paused: false,
                         prompt: ctx,
                         filename: "dynamic-alarm".to_string(),
                     };

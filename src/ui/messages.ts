@@ -443,6 +443,8 @@ export function addMessage(
   content: string,
   images?: ImageAttachment[]
 ) {
+  const shouldFollow = chatArea instanceof HTMLElement
+    && (role === "user" || isNearScrollEnd(chatArea));
   const msgDiv = document.createElement("div");
   const isCron = role === "cron";
   msgDiv.className = `message ${isCron ? "user cron-message" : role}`;
@@ -520,9 +522,15 @@ export function addMessage(
   msgDiv.appendChild(copyBtn);
 
   chatArea.appendChild(msgDiv);
-  if (chatArea instanceof HTMLElement) {
+  if (shouldFollow && chatArea instanceof HTMLElement) {
     chatArea.scrollTop = chatArea.scrollHeight;
   }
+}
+
+/** Whether appending output should keep following the conversation's end. */
+export function isNearScrollEnd(element: HTMLElement, threshold = 48): boolean {
+  return element.clientHeight === 0
+    || element.scrollHeight - element.scrollTop - element.clientHeight <= threshold;
 }
 
 /**
@@ -611,6 +619,7 @@ export function draftStatusText(msg: Partial<ProactiveMessage>): string {
 }
 
 export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, msg: ProactiveMessage) {
+  const shouldFollow = chatArea instanceof HTMLElement && isNearScrollEnd(chatArea);
   const msgDiv = document.createElement("div");
   msgDiv.className = "message proactive-message";
   msgDiv.setAttribute("data-id", msg.id);
@@ -775,7 +784,7 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
   }
 
   chatArea.appendChild(msgDiv);
-  if (chatArea instanceof HTMLElement) {
+  if (shouldFollow && chatArea instanceof HTMLElement) {
     chatArea.scrollTop = chatArea.scrollHeight;
   }
 }
