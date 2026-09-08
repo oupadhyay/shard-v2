@@ -342,13 +342,8 @@ fn test_is_draft_gated() {
     assert!(reg.is_draft_gated("delete_heartbeat"));
     assert!(reg.is_draft_gated("edit_heartbeat"));
 
-    // Self-awareness file tools are NOT draft-gated — exposed in chat and,
-    // for heartbeats, run without approval. `edit_file` is instead gated by a
-    // compile check inside `self_files::edit_allowed_file` (config.toml must
-    // parse as AppConfig, heartbeat specs as a HeartbeatSpec) that rejects a
-    // bad edit before anything is written (see `edit_config_*` tests in
-    // `self_files`).
-    assert!(!reg.is_draft_gated("edit_file"));
+    // Valid syntax is not user authorization.
+    assert!(reg.is_draft_gated("edit_file"));
     assert!(!reg.is_draft_gated("read_file"));
 
     // Safe tools should NOT be gated
@@ -541,11 +536,15 @@ async fn test_execute_approved_draft_reviewed_check() {
         needs_approval: true,
         reviewed_at: None,
         approved: None,
+        execution_status: None,
+        execution_result: None,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
 
     insert_proactive_message(handle, &msg).unwrap();
-    review_proactive_message(handle, message_id, Some(true)).unwrap();
+    assert!(review_proactive_message(handle, message_id, Some(true)).is_err());
+    assert!(review_proactive_message(handle, message_id, None).is_err());
+    review_proactive_message(handle, message_id, Some(false)).unwrap();
 
     // Calling execute_approved_draft on an already reviewed message should return an error!
     let res = execute_approved_draft(handle, message_id).await;
@@ -583,6 +582,138 @@ async fn test_execute_draft_gated_tool_validation() {
 }
 
 #[tokio::test]
+async fn draft_decisions_survive_failure_and_uncertain_persistence() {
+    let _lock = home_lock_async().await;
+    let _jail = HomeJail::new();
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+    ensure_proactive_queue_table(handle).unwrap();
+    let store = crate::memories::get_vector_store(handle).unwrap();
+
+    // Malformed payload: consent survives, validation failure is durable.
+    let id = queue_tool_draft(handle, "test", "edit_file", &serde_json::json!({}), "test").unwrap();
+    store
+        .conn
+        .execute(
+            "UPDATE proactive_queue SET draft_payload = '{' WHERE id = ?1",
+            [&id],
+        )
+        .unwrap();
+    assert!(execute_approved_draft(handle, &id)
+        .await
+        .unwrap_err()
+        .contains("Invalid draft"));
+    let state = draft_status(handle, &id).unwrap();
+    assert_eq!(state["approved"], true);
+    assert_eq!(state["execution_status"], "failed");
+    assert!(execute_approved_draft(handle, &id).await.is_err());
+    assert!(review_proactive_message(handle, &id, Some(false)).is_err());
+
+    // Tool failure is not mistaken for rejection or left only in chat history.
+    let id = queue_tool_draft(handle, "test", "edit_file", &serde_json::json!({}), "test").unwrap();
+    assert!(execute_approved_draft(handle, &id).await.is_err());
+    assert_eq!(
+        draft_status(handle, &id).unwrap()["execution_status"],
+        "failed"
+    );
+
+    // Duplicate clicks share a single durable claim and execute only once.
+    let success_id = queue_tool_draft(
+        handle,
+        "test",
+        "edit_file",
+        &serde_json::json!({
+            "path": "personas/trust-success.md", "old_str": "", "new_str": "# Once\n"
+        }),
+        "test",
+    )
+    .unwrap();
+    let (first, second) = tokio::join!(
+        execute_approved_draft(handle, &success_id),
+        execute_approved_draft(handle, &success_id)
+    );
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    assert_eq!(
+        draft_status(handle, &success_id).unwrap()["execution_status"],
+        "succeeded"
+    );
+
+    // Failed claim persistence rolls the decision back, with no execution.
+    store.conn.execute_batch("CREATE TRIGGER fail_claim BEFORE INSERT ON proactive_execution BEGIN SELECT RAISE(ABORT, 'injected claim failure'); END;").unwrap();
+    let id = queue_tool_draft(handle, "test", "edit_file", &serde_json::json!({}), "test").unwrap();
+    assert!(execute_approved_draft(handle, &id).await.is_err());
+    assert!(draft_status(handle, &id).unwrap()["reviewed_at"].is_null());
+    store
+        .conn
+        .execute_batch("DROP TRIGGER fail_claim;")
+        .unwrap();
+
+    // Side effect succeeds, but result storage fails. Reopening must not replay.
+    let path = crate::self_files::resolve_allowed_path(handle, "personas/trust-test.md").unwrap();
+    let id = queue_tool_draft(
+        handle,
+        "test",
+        "edit_file",
+        &serde_json::json!({
+            "path": "personas/trust-test.md", "old_str": "", "new_str": "# Approved\n"
+        }),
+        "test",
+    )
+    .unwrap();
+    store.conn.execute_batch("CREATE TRIGGER fail_result BEFORE UPDATE ON proactive_execution BEGIN SELECT RAISE(ABORT, 'injected result failure'); END;").unwrap();
+    assert!(execute_approved_draft(handle, &id)
+        .await
+        .unwrap_err()
+        .contains("Do not retry"));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "# Approved\n");
+    assert_eq!(
+        draft_status(handle, &id).unwrap()["execution_status"],
+        "unknown"
+    );
+    store
+        .conn
+        .execute_batch("DROP TRIGGER fail_result;")
+        .unwrap();
+    ensure_proactive_queue_table(handle).unwrap();
+    assert!(execute_approved_draft(handle, &id).await.is_err());
+    assert_eq!(
+        draft_status(handle, &id).unwrap()["execution_status"],
+        "unknown"
+    );
+    assert!(get_proactive_messages(handle, 100, Some("test"))
+        .unwrap()
+        .iter()
+        .any(|m| m.id == id));
+
+    // Legacy claimed rows retain their ambiguous decision and get unknown,
+    // never fabricated success or rejection.
+    let id = queue_tool_draft(handle, "test", "edit_file", &serde_json::json!({}), "test").unwrap();
+    store
+        .conn
+        .execute(
+            "UPDATE proactive_queue SET reviewed_at = 'legacy' WHERE id = ?1",
+            [&id],
+        )
+        .unwrap();
+    ensure_proactive_queue_table(handle).unwrap();
+    let state = draft_status(handle, &id).unwrap();
+    assert!(state["approved"].is_null());
+    assert_eq!(state["execution_status"], "unknown");
+
+    let scoped = queue_tool_draft(
+        handle,
+        "other-session",
+        "edit_file",
+        &serde_json::json!({}),
+        "test",
+    )
+    .unwrap();
+    let messages = get_proactive_messages(handle, 1, Some("other-session")).unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, scoped);
+}
+
+#[tokio::test]
 async fn test_crystallize_sketch_draft_gated() {
     let _home_lock = home_lock_async().await;
     let _home_jail = HomeJail::new();
@@ -613,4 +744,179 @@ async fn test_crystallize_sketch_draft_gated() {
 
     // Clean up
     let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn persona_approval_saves_only_reviewed_text_and_refuses_legacy_generation() {
+    let _lock = home_lock_async().await;
+    let _jail = HomeJail::new();
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+    let path =
+        crate::self_files::resolve_allowed_path(handle, "personas/reviewed-text.md").unwrap();
+    let markdown = "# Personal travel\n\nAsk before booking.\n";
+    let args = serde_json::json!({
+        "logical_path": "personas/reviewed-text.md", "markdown": markdown,
+        "source_sketch_id": "source"
+    });
+    let id = queue_tool_draft(
+        handle,
+        "chat",
+        "crystallize_sketch",
+        &args,
+        "Review the exact text",
+    )
+    .unwrap();
+    assert!(!path.exists(), "Queueing must not save the persona");
+    let queued = get_proactive_messages(handle, 20, Some("chat")).unwrap();
+    let payload: DraftPayload =
+        serde_json::from_str(queued[0].draft_payload.as_ref().unwrap()).unwrap();
+    assert_eq!(payload.arguments["markdown"], markdown);
+    execute_approved_draft(handle, &id).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), markdown);
+    assert!(execute_approved_draft(handle, &id).await.is_err());
+
+    let legacy = queue_tool_draft(
+        handle,
+        "chat",
+        "crystallize_sketch",
+        &serde_json::json!({"sketch_id":"source"}),
+        "legacy",
+    )
+    .unwrap();
+    assert!(execute_approved_draft(handle, &legacy)
+        .await
+        .unwrap_err()
+        .contains("no text to review"));
+    assert_eq!(
+        draft_status(handle, &legacy).unwrap()["execution_status"],
+        "failed"
+    );
+
+    let mut wrong_target = args.clone();
+    wrong_target["logical_path"] = serde_json::json!("config.toml");
+    assert!(
+        execute_draft_gated_tool(handle, "crystallize_sketch", &wrong_target)
+            .await
+            .unwrap_err()
+            .contains("persona file")
+    );
+
+    let rejected = queue_tool_draft(handle, "chat", "crystallize_sketch", &args, "reject").unwrap();
+    review_proactive_message(handle, &rejected, Some(false)).unwrap();
+    assert!(execute_approved_draft(handle, &rejected).await.is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), markdown);
+}
+
+#[tokio::test]
+async fn attention_resurfaces_cross_session_failures_and_unfinished_plans() {
+    let _lock = home_lock_async().await;
+    let _jail = HomeJail::new();
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+    let failed = queue_tool_draft(
+        handle,
+        "old-session",
+        "edit_file",
+        &serde_json::json!({}),
+        "failure",
+    )
+    .unwrap();
+    assert!(execute_approved_draft(handle, &failed).await.is_err());
+    let store = crate::memories::get_vector_store(handle).unwrap();
+    let unknown = queue_tool_draft(
+        handle,
+        "another-session",
+        "edit_file",
+        &serde_json::json!({}),
+        "legacy",
+    )
+    .unwrap();
+    store
+        .conn
+        .execute(
+            "UPDATE proactive_queue SET reviewed_at = 'legacy' WHERE id = ?1",
+            [&unknown],
+        )
+        .unwrap();
+    let plans = crate::actions::plan(
+        &store,
+        "Compare apartments",
+        &["Gather listings", "Compare rent"],
+        Some("old-session"),
+    )
+    .unwrap();
+    // A model marking the parent done does not prove its steps finished.
+    crate::actions::complete(&store, &plans[0], None).unwrap();
+    crate::actions::block(&store, &plans[1], "Listings unavailable").unwrap();
+    let items = get_attention_items(handle).unwrap();
+    assert_eq!(items.actions.len(), 2);
+    assert!(items
+        .actions
+        .iter()
+        .any(|m| m.id == failed && m.execution_status.as_deref() == Some("failed")));
+    assert!(items
+        .actions
+        .iter()
+        .any(|m| m.id == unknown && m.approved.is_none()));
+    assert_eq!(items.plans[0].root_id, plans[0]);
+    for step in &plans[1..] {
+        crate::actions::update_status(
+            &store,
+            step,
+            crate::actions::ActionStatus::Cancelled,
+            None,
+            None,
+        )
+        .unwrap();
+    }
+    assert!(get_attention_items(handle).unwrap().plans.is_empty());
+}
+
+#[tokio::test]
+async fn persona_generation_happens_before_review_not_during_approval() {
+    use crate::tests::agent_helpers::TestEnv;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+    let _lock = home_lock_async().await;
+    let env = TestEnv::new().await;
+    let handle = &env.handle;
+    let store = crate::memories::get_vector_store(handle).unwrap();
+    let ids =
+        crate::actions::plan(&store, "Travel review", &["Compare trains"], Some("chat")).unwrap();
+    crate::actions::complete(&store, &ids[1], None).unwrap();
+    let config = crate::config::AppConfig {
+        background_model: Some("gpt-oss-120b (Groq)".to_string()),
+        groq_api_key: Some("test-only".to_string()),
+        ..Default::default()
+    };
+    Mock::given(method("POST")).and(path("/groq/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices":[{"message":{"role":"assistant","content":"# Travel review\nAsk before booking."},"finish_reason":"stop"}]
+        }))).expect(1).mount(&env.server).await;
+    let id = prepare_tool_draft(
+        handle,
+        "chat",
+        "crystallize_sketch",
+        &serde_json::json!({"sketch_id":ids[0]}),
+        "Review text",
+        &config,
+    )
+    .await
+    .unwrap();
+    let rows = get_proactive_messages(handle, 20, Some("chat")).unwrap();
+    let draft: DraftPayload =
+        serde_json::from_str(rows[0].draft_payload.as_ref().unwrap()).unwrap();
+    assert!(draft.arguments.get("sketch_id").is_none());
+    let path = crate::self_files::resolve_allowed_path(
+        handle,
+        draft.arguments["logical_path"].as_str().unwrap(),
+    )
+    .unwrap();
+    assert!(!path.exists());
+    let reviewed = draft.arguments["markdown"].as_str().unwrap();
+    assert!(reviewed.contains("Ask before booking."));
+    execute_approved_draft(handle, &id).await.unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), reviewed);
+    assert_eq!(env.server.received_requests().await.unwrap().len(), 1);
 }

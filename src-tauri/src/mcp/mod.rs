@@ -16,8 +16,9 @@
 //!     sessions). Pure SQLite, no embedding generation needed.
 //!   * `save_memory` — appends to `MEMORIES.json`.
 //!   * `file_history` — wraps [`crate::file_history::summarize`].
-//!   * `read_file` / `edit_file` — wraps [`crate::self_files`] with the
+//!   * `read_file` — wraps [`crate::self_files`] with the
 //!     same allow-list (`config.toml` + `personas/<slug>.md`).
+//!     Self-file writes are refused: MCP has no Shard approval channel.
 //!   * `action_next` / `action_plan` — wraps [`crate::actions`].
 //!
 //! The server uses `dirs::data_local_dir()` directly to resolve paths

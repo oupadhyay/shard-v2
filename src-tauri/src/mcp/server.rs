@@ -86,6 +86,12 @@ impl ShardMcpServer {
     /// Synchronous dispatch — `tools/call` for one of the curated names.
     /// Returns either the tool's success string or an MCP error.
     async fn dispatch(&self, name: &str, args: Value) -> Result<String, McpError> {
+        if crate::tool_registry::global().is_draft_gated(name) {
+            return Err(McpError::invalid_request(
+                "This action requires approval in Shard; MCP cannot authorize it.",
+                None,
+            ));
+        }
         // Coarse write-side mutex so concurrent stdio clients can't
         // tear allow-listed file edits.
         let _guard = match name {

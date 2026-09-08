@@ -433,6 +433,37 @@ mod self_files_dispatch {
     use std::sync::{Arc, Mutex};
     use tauri::Listener;
 
+    impl Agent<tauri::test::MockRuntime> {
+        async fn execute_and_approve(
+            &self,
+            handle: &tauri::AppHandle<tauri::test::MockRuntime>,
+            name: &str,
+            args: &serde_json::Value,
+            config: &crate::config::AppConfig,
+        ) -> String {
+            let path =
+                crate::self_files::resolve_allowed_path(handle, args["path"].as_str().unwrap())
+                    .unwrap();
+            let before = std::fs::read(&path).ok();
+            let queued = self.execute_tool(handle, name, args, config).await;
+            assert!(queued.contains("NOT executed"), "{queued}");
+            assert_eq!(
+                std::fs::read(&path).ok(),
+                before,
+                "no effects before approval"
+            );
+            let messages = crate::heartbeat::get_proactive_messages(handle, 100, None).unwrap();
+            let draft = messages
+                .iter()
+                .find(|m| m.reviewed_at.is_none() && m.needs_approval)
+                .unwrap();
+            match crate::heartbeat::execute_approved_draft(handle, &draft.id).await {
+                Ok(result) => result,
+                Err(error) => format!("Error: {error}"),
+            }
+        }
+    }
+
     fn write_config_toml(env: &TestEnv, contents: &str) {
         use tauri::Manager;
         let cfg_dir = env.handle.path().app_config_dir().unwrap();
@@ -549,7 +580,7 @@ mod self_files_dispatch {
         let agent = Agent::new(env.handle.clone());
 
         let r = agent
-            .execute_tool(
+            .execute_and_approve(
                 &env.handle,
                 "edit_file",
                 &json!({
@@ -579,7 +610,7 @@ mod self_files_dispatch {
         let agent = Agent::new(env.handle.clone());
 
         let r = agent
-            .execute_tool(
+            .execute_and_approve(
                 &env.handle,
                 "edit_file",
                 &json!({
@@ -603,7 +634,7 @@ mod self_files_dispatch {
         let agent = Agent::new(env.handle.clone());
 
         let r = agent
-            .execute_tool(
+            .execute_and_approve(
                 &env.handle,
                 "edit_file",
                 &json!({
@@ -627,7 +658,7 @@ mod self_files_dispatch {
         let agent = Agent::new(env.handle.clone());
 
         let r = agent
-            .execute_tool(
+            .execute_and_approve(
                 &env.handle,
                 "edit_file",
                 &json!({
@@ -653,7 +684,7 @@ mod self_files_dispatch {
         let agent = Agent::new(env.handle.clone());
 
         let r = agent
-            .execute_tool(
+            .execute_and_approve(
                 &env.handle,
                 "edit_file",
                 &json!({
@@ -681,7 +712,7 @@ mod self_files_dispatch {
         let agent = Agent::new(env.handle.clone());
 
         let r = agent
-            .execute_tool(
+            .execute_and_approve(
                 &env.handle,
                 "edit_file",
                 &json!({
@@ -716,7 +747,7 @@ mod self_files_dispatch {
 
         let agent = Agent::new(env.handle.clone());
         let r = agent
-            .execute_tool(
+            .execute_and_approve(
                 &env.handle,
                 "edit_file",
                 &json!({

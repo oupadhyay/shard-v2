@@ -27,6 +27,7 @@ pub struct AppConfig {
     pub enable_web_search: Option<bool>,
     pub enable_tools: Option<bool>,
     pub system_prompt: Option<String>, // Custom system prompt, if None will use MCP default
+    // Compatibility key for Reduce Automatic Memory; NOT private history.
     pub incognito_mode: Option<bool>,
     pub research_mode: Option<bool>,
     pub background_model: Option<String>,

@@ -4,7 +4,7 @@
 import DOMPurify from "dompurify";
 import { md, preprocessMarkdown } from "./markdown";
 import { COPY_ICON, CHECK_ICON, CROSS_ICON } from "./icons";
-import type { ImageAttachment, ProactiveMessage } from "../types";
+import type { AttentionItems, ImageAttachment, ProactiveMessage } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "./utils";
 
@@ -601,6 +601,15 @@ export function shouldSkipStreamingChunk(lastElement: Element | null, chunk: str
 /**
  * Render a proactive message with optional approve/reject buttons
  */
+export function draftStatusText(msg: Partial<ProactiveMessage>): string {
+  if (msg.approved === false) return "Rejected — not executed";
+  if (msg.execution_status === "succeeded") return "Approved — execution succeeded";
+  if (msg.execution_status === "failed") return "Approved — execution failed; effects may be partial. Inspect before trying a new action.";
+  if (msg.execution_status === "unknown" || msg.approved === true)
+    return `${msg.approved === true ? "Approved" : "Approval unconfirmed"} — outcome unconfirmed; execution may be in progress or interrupted. Do not retry; inspect effects.`;
+  return msg.needs_approval ? "Reviewed — approval and outcome unconfirmed" : "Dismissed";
+}
+
 export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, msg: ProactiveMessage) {
   const msgDiv = document.createElement("div");
   msgDiv.className = "message proactive-message";
@@ -615,7 +624,9 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
   titleContainer.style.gap = "8px";
   
   const icon = msg.needs_approval ? "⚡" : "🤖";
-  const title = msg.needs_approval ? "Proactive Action Required" : "Scheduled Task";
+  const title = msg.needs_approval
+    ? (msg.reviewed_at ? "Reviewed Action" : "Action Awaiting Approval")
+    : "Scheduled Task";
   titleContainer.innerHTML = `<span>${icon}</span><span style="letter-spacing: 0.5px; text-transform: uppercase; font-size: 11px;">${title}</span>`;
   
   headerDiv.appendChild(titleContainer);
@@ -652,11 +663,33 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
   if (msg.draft_payload) {
     let fnName = "Unknown Action";
     let formattedArgs = msg.draft_payload;
+    let personaMarkdown: { filename: string; markdown: string } | null = null;
     try {
       const parsed = JSON.parse(msg.draft_payload);
       if (parsed.name) fnName = parsed.name;
       if (parsed.arguments) formattedArgs = JSON.stringify(parsed.arguments, null, 2);
+      if (parsed.name === "crystallize_sketch" && typeof parsed.arguments?.markdown === "string") {
+        personaMarkdown = {
+          filename: String(parsed.arguments.logical_path || "persona markdown file"),
+          markdown: parsed.arguments.markdown,
+        };
+      }
     } catch(e) {}
+
+    if (personaMarkdown) {
+      const review = document.createElement("section");
+      review.className = "persona-draft-review";
+      const heading = document.createElement("strong");
+      heading.textContent = `${msg.reviewed_at ? "Reviewed text" : "Exact text to save"} — ${personaMarkdown.filename}`;
+      const note = document.createElement("p");
+      note.textContent = msg.reviewed_at
+        ? "This text was submitted for approval. Check the saved outcome below."
+        : "Approving saves this exact Markdown text.";
+      const markdown = document.createElement("pre");
+      markdown.textContent = personaMarkdown.markdown;
+      review.append(heading, note, markdown);
+      msgDiv.appendChild(review);
+    }
 
     const draftDiv = document.createElement("div");
     draftDiv.className = "tool-output";
@@ -690,11 +723,27 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
       rejectBtn.disabled = true;
       try {
         await invoke("approve_draft", { messageId: msg.id });
-        actionsDiv.innerHTML = `<div class="proactive-status">${CHECK_ICON} Approved</div>`;
+        const state = await invoke<Partial<ProactiveMessage>>("get_draft_status", { messageId: msg.id });
+        titleContainer.querySelector("span:last-child")!.textContent = "Reviewed Action";
+        actionsDiv.textContent = draftStatusText({ ...msg, ...state });
+        appendExecutionResult(msgDiv, state.execution_result);
       } catch (e) {
         logger.error("Failed to approve:", e);
-        approveBtn.disabled = false;
-        rejectBtn.disabled = false;
+        try {
+          const state = await invoke<Partial<ProactiveMessage>>("get_draft_status", { messageId: msg.id });
+          if (!state.reviewed_at) {
+            approveBtn.disabled = false;
+            rejectBtn.disabled = false;
+          } else {
+            titleContainer.querySelector("span:last-child")!.textContent = "Reviewed Action";
+            actionsDiv.textContent = draftStatusText({ ...msg, ...state });
+            appendExecutionResult(msgDiv, state.execution_result);
+          }
+        } catch {
+          actionsDiv.textContent = "Could not confirm approval or execution. Do not retry; reopen Shard and inspect the action.";
+        }
+      } finally {
+        window.dispatchEvent(new Event("shard-action-reviewed"));
       }
     });
 
@@ -703,11 +752,13 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
       rejectBtn.disabled = true;
       try {
         await invoke("reject_draft", { messageId: msg.id });
+        titleContainer.querySelector("span:last-child")!.textContent = "Reviewed Action";
         actionsDiv.innerHTML = `<div class="proactive-status" style="color: #f87171;">${CROSS_ICON} Rejected</div>`;
       } catch (e) {
         logger.error("Failed to reject:", e);
-        approveBtn.disabled = false;
-        rejectBtn.disabled = false;
+        actionsDiv.textContent = "Could not confirm rejection. Reopen Shard to check the saved decision.";
+      } finally {
+        window.dispatchEvent(new Event("shard-action-reviewed"));
       }
     });
 
@@ -718,14 +769,9 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
     // Already reviewed
     const actionsDiv = document.createElement("div");
     actionsDiv.className = "proactive-actions";
-    if (msg.approved === true) {
-      actionsDiv.innerHTML = `<div class="proactive-status">${CHECK_ICON} Approved on ${new Date(msg.reviewed_at).toLocaleString()}</div>`;
-    } else if (msg.approved === false) {
-      actionsDiv.innerHTML = `<div class="proactive-status" style="color: #f87171;">${CROSS_ICON} Rejected on ${new Date(msg.reviewed_at).toLocaleString()}</div>`;
-    } else {
-      actionsDiv.innerHTML = `<div class="proactive-status">Dismissed</div>`;
-    }
+    actionsDiv.textContent = draftStatusText(msg);
     msgDiv.appendChild(actionsDiv);
+    appendExecutionResult(msgDiv, msg.execution_result);
   }
 
   chatArea.appendChild(msgDiv);
@@ -734,3 +780,96 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
   }
 }
 
+function appendExecutionResult(container: HTMLElement, executionResult?: string | null) {
+  if (!executionResult || container.querySelector(".execution-result")) return;
+  const details = document.createElement("details");
+  details.className = "tool-output execution-result";
+  const summary = document.createElement("summary");
+  summary.textContent = "Execution result";
+  const result = document.createElement("div");
+  result.className = "tool-args";
+  result.textContent = executionResult;
+  details.append(summary, result);
+  container.appendChild(details);
+}
+
+/** Stable, non-interactive cross-session follow-up panel. */
+export function mountAttentionPanel(host: HTMLElement, before: HTMLElement) {
+  const panel = document.createElement("details");
+  panel.className = "attention-panel";
+  panel.hidden = true;
+  const summary = document.createElement("summary");
+  summary.textContent = "Needs attention";
+  const body = document.createElement("div");
+  body.className = "attention-body";
+  panel.append(summary, body);
+  host.insertBefore(panel, before);
+
+  let known: AttentionItems | null = null;
+  let request = 0;
+  const refresh = async () => {
+    const current = ++request;
+    try {
+      const items = await invoke<AttentionItems>("get_attention_items");
+      if (current !== request) return;
+      known = items;
+      body.replaceChildren();
+      for (const action of items.actions) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "attention-item";
+        const label = document.createElement("div");
+        label.className = "attention-meta";
+        label.textContent = `${action.execution_status === "failed" ? "Not completed" : "Outcome unknown"} · source session ${action.heartbeat_session}`;
+        const title = document.createElement("div");
+        title.className = "markdown-body";
+        title.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(action.content)));
+        const status = document.createElement("p");
+        status.textContent = draftStatusText(action);
+        wrapper.append(label, title, status);
+        appendExecutionResult(wrapper, action.execution_result);
+        if (action.draft_payload) {
+          const details = document.createElement("details");
+          const summary = document.createElement("summary");
+          summary.textContent = "Saved proposal";
+          const payload = document.createElement("pre");
+          payload.textContent = action.draft_payload;
+          details.append(summary, payload);
+          wrapper.appendChild(details);
+        }
+        body.appendChild(wrapper);
+      }
+      for (const plan of items.plans) {
+        const row = document.createElement("div");
+        row.className = "attention-plan";
+        const title = document.createElement("strong");
+        title.textContent = plan.title;
+        const progress = document.createElement("span");
+        progress.textContent = `${plan.completed} of ${plan.total} completed`;
+        row.append(title, progress);
+        if (plan.next_action_title) {
+          const next = document.createElement("span");
+          next.textContent = `Next step: ${plan.next_action_title}`;
+          row.appendChild(next);
+        }
+        body.appendChild(row);
+      }
+      const count = items.actions.length + items.plans.length;
+      const wasHidden = panel.hidden;
+      panel.hidden = count === 0;
+      if (wasHidden && count > 0) panel.open = true;
+      summary.textContent = `Needs attention${count ? ` (${count})` : ""}`;
+    } catch (error) {
+      if (current !== request) return;
+      logger.error("Failed to load attention items:", error);
+      panel.hidden = false;
+      const errorEl = document.createElement("div");
+      errorEl.className = "attention-error";
+      errorEl.textContent = "Could not refresh needs attention. Previously loaded items are retained.";
+      body.querySelector(".attention-error")?.remove();
+      body.prepend(errorEl);
+      if (!known) summary.textContent = "Needs attention — refresh failed";
+    }
+  };
+  window.addEventListener("shard-action-reviewed", () => { void refresh(); });
+  return { refresh };
+}

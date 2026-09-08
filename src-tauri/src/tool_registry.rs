@@ -55,7 +55,7 @@ pub struct ToolEntry {
     pub parallel_safe: bool,
     /// Cache TTL in seconds, or None if results should never be cached.
     pub cache_ttl_secs: Option<u64>,
-    /// Whether this tool requires draft approval during heartbeat/cron execution.
+    /// Whether this self-change requires user draft approval in chat and background runs.
     pub draft_gated: bool,
 }
 
@@ -472,7 +472,7 @@ impl ToolRegistry {
                 "required": ["path", "old_str", "new_str", "replace_all"],
                 "additionalProperties": false
             }),
-            parallel: false, cache_ttl: None, draft: false, strict: Some(true)
+            parallel: false, cache_ttl: None, draft: true, strict: Some(true)
         );
 
         // ── Self-awareness: file history (read-only, safe) ───────────────
@@ -674,9 +674,9 @@ impl ToolRegistry {
             .filter(|e| {
                 let is_global = GLOBAL_TOOLS.contains(&e.name);
                 let is_required = required.contains(e.name);
-                // Draft-gated tools are NOT included in normal chat definitions
-                let is_draft = e.draft_gated;
-                (is_global || is_required) && !is_draft
+                // Visibility and authorization are separate: exposed self-edit
+                // tools still queue a draft at the host dispatch boundary.
+                is_global || is_required
             })
             .map(|e| e.schema.clone())
             .collect();
@@ -717,7 +717,7 @@ impl ToolRegistry {
         self.tools.get(name).and_then(|e| e.cache_ttl_secs)
     }
 
-    /// Check if a tool requires draft approval (heartbeat mode).
+    /// Check if a self-change requires user draft approval in any model dispatch.
     /// Replaces `tools::is_draft_gated()`.
     pub fn is_draft_gated(&self, name: &str) -> bool {
         self.tools.get(name).is_some_and(|e| e.draft_gated)

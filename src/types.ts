@@ -91,7 +91,23 @@ export interface ProactiveMessage {
   needs_approval: boolean;
   reviewed_at?: string | null;
   approved?: boolean | null;
+  execution_status?: "unknown" | "succeeded" | "failed" | null;
+  execution_result?: string | null;
   created_at: string;
+}
+
+export interface AttentionPlan {
+  root_id: string;
+  title: string;
+  completed: number;
+  total: number;
+  next_action_id: string | null;
+  next_action_title: string | null;
+}
+
+export interface AttentionItems {
+  actions: ProactiveMessage[];
+  plans: AttentionPlan[];
 }
 
 // Heartbeat spec status for the dashboard

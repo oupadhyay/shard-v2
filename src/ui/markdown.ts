@@ -112,8 +112,11 @@ export const md: MarkdownIt = new MarkdownIt({
   }
 });
 
+// The package is CommonJS with a default export. Vite can preserve that wrapper.
+const katexPlugin = typeof mk === "function" ? mk : (mk as { default: typeof mk }).default;
+
 // Configure KaTeX with error tracking
-md.use(mk, {
+md.use(katexPlugin, {
   throwOnError: false,  // Don't throw, render error instead
   errorColor: '#cc0000',
   // Custom error callback to track errors

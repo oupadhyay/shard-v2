@@ -68,6 +68,9 @@ impl<R: tauri::Runtime> Agent<R> {
 
             tauri::async_runtime::spawn(async move {
                 if let Ok(config) = crate::config::load_config(&app_handle_clone) {
+                    if config.incognito_mode.unwrap_or(false) {
+                        return;
+                    }
                     if let Err(e) = crate::sessions::archive_session_transcript(
                         &app_handle_clone,
                         &http_client_clone,

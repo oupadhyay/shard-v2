@@ -263,8 +263,8 @@ pub fn pending_sketch_summary(store: &VectorStore) -> Result<Vec<SketchSummary>,
             .iter()
             .filter(|c| matches!(c.status, ActionStatus::Done))
             .count();
-        // No open children → the sketch is logically complete; skip.
-        if completed == children.len() {
+        // Done and cancelled steps need no follow-up. Blocked steps still do.
+        if children.iter().all(|c| c.status.is_terminal()) {
             continue;
         }
         let next = children.iter().find(|c| {

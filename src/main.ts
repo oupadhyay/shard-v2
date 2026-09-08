@@ -19,6 +19,7 @@ import {
   updateToolResult,
   addMessage,
   addProactiveMessage,
+  mountAttentionPanel,
   getOrCreateWebSearchContainer,
   resetWebSearchContainer,
   isWebSearchTool,
@@ -58,6 +59,7 @@ const breakoutBtn = document.getElementById("breakout-btn") as HTMLButtonElement
 // Listens for `file-edited` events from the backend self_files module.
 const diffHost = chatArea.parentElement ?? document.body;
 const diffViewer = mountDiffViewer(diffHost);
+const attentionPanel = mountAttentionPanel(diffHost, chatArea);
 // Position it visually above the chat (it will appear right under the chat
 // area in DOM order; the existing flex layout keeps it pinned above the input).
 listen<EditOutcome>(EVENTS.FILE_EDITED, (event) => {
@@ -90,7 +92,10 @@ const state = new ChatState();
 const chatController = new ChatController(
   { chatArea, inputField, stopBtn, imagePreviewContainerId: "image-preview-container" },
   state,
-  { onUpdateButtonStates: () => setTimeout(() => updateButtonStates(), 100) },
+  {
+    onUpdateButtonStates: () => setTimeout(() => updateButtonStates(), 100),
+    onTurnComplete: () => attentionPanel.refresh(),
+  },
   { stop: STOP_ICON, resend: RESEND_ICON },
 );
 
@@ -609,6 +614,7 @@ async function loadChatHistory() {
 
     // Load pending proactive actions at the end of chat history
     await loadProactiveMessages();
+    await attentionPanel.refresh();
   } catch (e) {
     logger.error("Failed to load chat history:", e);
     if (fragment.hasChildNodes()) {
@@ -620,12 +626,12 @@ async function loadChatHistory() {
 async function loadProactiveMessages() {
   try {
     const activeSessionId = await invoke<string>("get_current_session_id").catch(() => "");
-    const messages = await invoke<import("./types").ProactiveMessage[]>("get_proactive_messages");
+    const messages = await invoke<import("./types").ProactiveMessage[]>("get_proactive_messages", { sessionId: activeSessionId });
 
     // Only render pending messages that belong to the current active session
     for (const msg of messages) {
       if (msg.heartbeat_session === activeSessionId) {
-        addProactiveMessage(chatArea, msg);
+        if (!chatArea.querySelector(`.proactive-message[data-id="${CSS.escape(msg.id)}"]`)) addProactiveMessage(chatArea, msg);
       }
     }
   } catch (error) {
@@ -707,8 +713,11 @@ listen<import("./types").ProactiveMessage>(EVENTS.PROACTIVE_MESSAGE, async (even
 
   // Only show the message inline if we are currently viewing the session it belongs to
   if (event.payload.heartbeat_session === activeSessionId) {
+    const existing = chatArea.querySelector(`.proactive-message[data-id="${CSS.escape(event.payload.id)}"]`);
+    existing?.remove();
     addProactiveMessage(chatArea, event.payload);
   }
+  attentionPanel.refresh();
 
   const unreadBadge = document.getElementById("unread-sessions-badge");
   if (unreadBadge) {
@@ -1021,6 +1030,7 @@ listen<string>(EVENTS.AGENT_FALLBACK, (event) => {
 
   window.addEventListener("focus", () => {
     setFocused(true);
+    attentionPanel.refresh();
   });
   window.addEventListener("blur", () => setFocused(false));
 

@@ -180,6 +180,9 @@ async fn b12_incognito_skips_embeddings_and_archive() {
     let agent = Agent::new(env.handle.clone());
     mount_gemini_text(&env, "got it").await;
 
+    let store = crate::memories::get_vector_store(&env.handle).unwrap();
+    crate::actions::plan(&store, "PRIVATE_PENDING_ACTION_SENTINEL", &["step"], None).unwrap();
+
     let mut config = config_gemini();
     config.incognito_mode = Some(true);
 
@@ -194,6 +197,22 @@ async fn b12_incognito_skips_embeddings_and_archive() {
     assert_eq!(h.len(), 2);
     // last_archived_hash must remain at its starting value (0) — no archive ran.
     assert_eq!(*agent.last_archived_hash.lock().await, 0);
+    let requests = env.server.received_requests().await.unwrap();
+    assert!(!requests.is_empty());
+    for request in requests {
+        assert!(!String::from_utf8_lossy(&request.body).contains("PRIVATE_PENDING_ACTION_SENTINEL"));
+        assert!(!request.url.path().contains("embed"));
+    }
+    // Reduced automatic memory deliberately retains conversation history.
+    let saved: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM messages WHERE content LIKE '%secret%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(saved > 0);
 }
 
 // ============================================================================

@@ -9,6 +9,7 @@ export {
   updateToolResult,
   addMessage,
   addProactiveMessage,
+  mountAttentionPanel,
   getOrCreateWebSearchContainer,
   resetWebSearchContainer,
   isWebSearchTool,

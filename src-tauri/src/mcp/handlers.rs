@@ -28,7 +28,6 @@ pub const CURATED_TOOL_NAMES: &[&str] = &[
     "save_memory",
     "file_history",
     "read_file",
-    "edit_file",
     "action_next",
     "action_plan",
 ];
@@ -197,54 +196,10 @@ pub fn handle_read_file(args: &Value) -> Result<String, String> {
     std::fs::read_to_string(&abs).map_err(|e| format!("Failed to read {}: {}", abs.display(), e))
 }
 
-pub fn handle_edit_file(args: &Value) -> Result<String, String> {
-    let path = args
-        .get("path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "edit_file requires `path`".to_string())?;
-    let old_str = args
-        .get("old_str")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "edit_file requires `old_str`".to_string())?;
-    let new_str = args
-        .get("new_str")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "edit_file requires `new_str`".to_string())?;
-    let replace_all = args
-        .get("replace_all")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    let abs = resolve_allowed_path_no_tauri(path)?;
-    let outcome = self_files::edit_at_abs_path(&abs, path, old_str, new_str, replace_all)?;
-
-    // Best-effort: log to file_events so a future read of `file_history`
-    // surfaces this edit, even though no Tauri event bus is listening.
-    if let Ok(store) = open_store() {
-        let abs_str = outcome.abs_path.clone();
-        let _ = file_history::record_edit(
-            &store,
-            file_history::RecordEdit {
-                logical_path: path,
-                abs_path: &abs_str,
-                before: &outcome.before,
-                after: &outcome.after,
-                unified_diff: &outcome.unified_diff,
-                session_id: Some("mcp"),
-            },
-        );
-    }
-
-    Ok(format!(
-        "{}\n\n```diff\n{}\n```",
-        format_args!(
-            "Edited {} ({} replacement{}).",
-            outcome.abs_path,
-            outcome.replacements,
-            if outcome.replacements == 1 { "" } else { "s" }
-        ),
-        outcome.unified_diff
-    ))
+/// Kept as a refusal for callers using the old host API. MCP has no trusted
+/// user-review channel and must not silently authorize self-modification.
+pub fn handle_edit_file(_args: &Value) -> Result<String, String> {
+    Err("Self-file edits require approval in Shard; MCP cannot authorize them.".to_string())
 }
 
 // ─── action_next / action_plan ────────────────────────────────────────────

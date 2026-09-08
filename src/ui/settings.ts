@@ -67,8 +67,9 @@ export const SETTINGS_MODAL_HTML = `
         <div class="setting-group checkbox-setting">
           <label>
             <input type="checkbox" id="incognito-mode" />
-            <span class="checkbox-label">Incognito Mode (No Memories)</span>
+            <span class="checkbox-label">Reduce Automatic Memory</span>
           </label>
+          <p>Skips automatic chat memory retrieval and learning, and screen context. Conversation history is still saved and sent to your provider. Explicit memory tools can still read memories. Scheduled tasks and MCP are separate; this is not private chat.</p>
         </div>
         <div class="setting-group checkbox-setting">
           <label>
