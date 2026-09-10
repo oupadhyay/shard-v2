@@ -618,6 +618,14 @@ export function draftStatusText(msg: Partial<ProactiveMessage>): string {
   return msg.needs_approval ? "Reviewed — approval and outcome unconfirmed" : "Dismissed";
 }
 
+function savedActionTitle(msg: ProactiveMessage): string {
+  try {
+    const payload = JSON.parse(msg.draft_payload || "null");
+    if (typeof payload?.name === "string") return `Saved action: ${payload.name}`;
+  } catch { /* Legacy records can lack a valid payload. */ }
+  return "Saved action";
+}
+
 export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, msg: ProactiveMessage) {
   const shouldFollow = chatArea instanceof HTMLElement && isNearScrollEnd(chatArea);
   const msgDiv = document.createElement("div");
@@ -665,7 +673,11 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
 
   const contentDiv = document.createElement("div");
   contentDiv.className = "proactive-content markdown-body";
-  contentDiv.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(msg.content)));
+  if (msg.reviewed_at && msg.needs_approval) {
+    contentDiv.textContent = savedActionTitle(msg);
+  } else {
+    contentDiv.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(msg.content)));
+  }
   msgDiv.appendChild(contentDiv);
 
   // If there's a draft payload, show it as a tool call block
@@ -734,6 +746,7 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
         await invoke("approve_draft", { messageId: msg.id });
         const state = await invoke<Partial<ProactiveMessage>>("get_draft_status", { messageId: msg.id });
         titleContainer.querySelector("span:last-child")!.textContent = "Reviewed Action";
+        contentDiv.textContent = savedActionTitle(msg);
         actionsDiv.textContent = draftStatusText({ ...msg, ...state });
         appendExecutionResult(msgDiv, state.execution_result);
       } catch (e) {
@@ -745,6 +758,7 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
             rejectBtn.disabled = false;
           } else {
             titleContainer.querySelector("span:last-child")!.textContent = "Reviewed Action";
+            contentDiv.textContent = savedActionTitle(msg);
             actionsDiv.textContent = draftStatusText({ ...msg, ...state });
             appendExecutionResult(msgDiv, state.execution_result);
           }
@@ -762,6 +776,7 @@ export function addProactiveMessage(chatArea: HTMLElement | DocumentFragment, ms
       try {
         await invoke("reject_draft", { messageId: msg.id });
         titleContainer.querySelector("span:last-child")!.textContent = "Reviewed Action";
+        contentDiv.textContent = savedActionTitle(msg);
         actionsDiv.innerHTML = `<div class="proactive-status" style="color: #f87171;">${CROSS_ICON} Rejected</div>`;
       } catch (e) {
         logger.error("Failed to reject:", e);
@@ -831,7 +846,7 @@ export function mountAttentionPanel(host: HTMLElement, before: HTMLElement) {
         label.textContent = `${action.execution_status === "failed" ? "Not completed" : "Outcome unknown"} · source session ${action.heartbeat_session}`;
         const title = document.createElement("div");
         title.className = "markdown-body";
-        title.innerHTML = DOMPurify.sanitize(md.render(preprocessMarkdown(action.content)));
+        title.textContent = savedActionTitle(action);
         const status = document.createElement("p");
         status.textContent = draftStatusText(action);
         wrapper.append(label, title, status);
@@ -863,9 +878,7 @@ export function mountAttentionPanel(host: HTMLElement, before: HTMLElement) {
         body.appendChild(row);
       }
       const count = items.actions.length + items.plans.length;
-      const wasHidden = panel.hidden;
       panel.hidden = count === 0;
-      if (wasHidden && count > 0) panel.open = true;
       summary.textContent = `Needs attention${count ? ` (${count})` : ""}`;
     } catch (error) {
       if (current !== request) return;

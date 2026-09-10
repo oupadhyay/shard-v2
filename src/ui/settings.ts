@@ -69,7 +69,11 @@ export const SETTINGS_MODAL_HTML = `
             <input type="checkbox" id="incognito-mode" />
             <span class="checkbox-label">Reduce Automatic Memory</span>
           </label>
-          <p>Skips automatic chat memory retrieval and learning, and screen context. Conversation history is still saved and sent to your provider. Explicit memory tools can still read memories. Scheduled tasks and MCP are separate; this is not private chat.</p>
+          <p class="setting-hint">Not private chat. History is still saved and sent to your provider.</p>
+          <details class="setting-disclosure">
+            <summary>What changes?</summary>
+            <p>Skips automatic chat memory retrieval and learning, and screen context. Explicit memory tools can still read memories. Scheduled tasks and MCP are separate.</p>
+          </details>
         </div>
         <div class="setting-group checkbox-setting">
           <label>
@@ -95,6 +99,7 @@ export const SETTINGS_MODAL_HTML = `
       </div>
     </div>
 
+    <p class="settings-status" role="status"></p>
     <div class="settings-actions">
       <button id="save-settings">Save</button>
       <button id="close-settings">Close</button>

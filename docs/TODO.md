@@ -14,6 +14,13 @@ Vercel AI SDK was evaluated and rejected: it would force the agent loop into Typ
   and Routines views. Keep the existing controller, native IPC, and scheduler.
 - [x] Reject an old memory-deletion Undo after restore/change/delete. Persist the
   deletion revision and test that only the latest deletion can be undone.
+- [x] Tighten the ambient views using real-content feedback: inline Settings,
+  compact privacy disclosure, collapsed routine prompts, flat two-line history
+  previews, capped view height, and a labelled Clear conversation menu item.
+- [x] Stop showing old approval-request prose for reviewed actions. Needs
+  attention starts collapsed and retains unknown outcomes without replay.
+  Normal chat receives up to 20 unresolved records as read-only context, with
+  oversized arguments omitted. Reduce Automatic Memory excludes this context.
 - [ ] Make memory JSON and its migrated SQLite retrieval copy recover together.
   They commit separately. A retrieval-sync failure is reported after the JSON
   change has already been saved; there is no durable repair job. Do not describe

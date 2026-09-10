@@ -2672,12 +2672,13 @@ a:focus-visible {
 .ambient-view-header {
   display: flex;
   align-items: center;
+  gap: 8px;
   min-height: 52px;
   padding: 4px 8px;
 }
 .ambient-view-header h2 { margin: 0; font-size: 12px; font-weight: 500; color: var(--ambient-text-secondary); }
 .ambient-view-content {
-  max-height: calc(100vh - 132px);
+  max-height: min(480px, calc(100vh - 132px));
   overflow: auto;
   padding: 4px 16px 16px;
   overscroll-behavior: contain;
@@ -2696,6 +2697,34 @@ a:focus-visible {
   background: rgba(16, 16, 16, 0.96);
   border-color: var(--ambient-border-strong);
   border-radius: 16px;
+  font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+.settings-inline.hidden { display: none; }
+.settings-inline .settings-content {
+  width: 100%;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  backdrop-filter: none;
+}
+.settings-inline .settings-panels { flex: none; overflow: visible; }
+.settings-inline .settings-panel.active { gap: 16px; }
+.settings-inline .settings-actions { margin-top: 0; }
+.settings-status { margin: 0; color: var(--ambient-text-secondary); font-size: 12px; }
+.settings-status:empty { display: none; }
+.setting-group p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ambient-text-secondary); }
+.setting-disclosure { font-size: 12px; color: var(--ambient-text-secondary); }
+.setting-disclosure > summary { cursor: pointer; padding-block: 4px; }
+.settings-inline :is(input[type="password"], input[type="number"], select) {
+  background: var(--ambient-inset);
+  border: 1px solid var(--ambient-border-strong);
+  border-radius: 8px;
+  font-size: 13px;
+  padding: 8px;
+  max-width: 100%;
 }
 .settings-tab.active::after { background: var(--ambient-accent); }
 .setting-group input[type="checkbox"] { accent-color: var(--ambient-accent); }

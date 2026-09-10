@@ -36,9 +36,6 @@ export function renderRoutinesView(host: HTMLElement): () => void {
 
   host.classList.add("ambient-capability");
   host.replaceChildren();
-  const intro = document.createElement("p");
-  intro.className = "ambient-capability-intro";
-  intro.textContent = "Recurring background prompts owned by Shard’s existing heartbeat scheduler.";
   const status = document.createElement("p");
   status.className = "ambient-capability-status";
   status.setAttribute("role", "status");
@@ -53,7 +50,7 @@ export function renderRoutinesView(host: HTMLElement): () => void {
   note.className = "ambient-capability-note";
   note.textContent =
     "Pause prevents future runs and survives restart. A run already started may still finish.";
-  host.append(intro, status, list, createButton, note);
+  host.append(status, list, createButton, note);
 
   const setStatus = (message: string, error = false) => {
     status.textContent = message;
@@ -177,9 +174,14 @@ export function renderRoutinesView(host: HTMLElement): () => void {
       meta.textContent = `${routine.paused ? "paused" : "active"} · ${routine.paused ? routine.cron : routine.schedule}`;
       const title = document.createElement("strong");
       title.textContent = routine.filename;
+      const details = document.createElement("details");
+      details.className = "ambient-routine-details";
+      const summary = document.createElement("summary");
+      summary.append(title, meta);
       const copy = document.createElement("p");
       copy.className = "ambient-capability-copy";
       copy.textContent = routine.prompt;
+      details.append(summary, copy);
       const actions = document.createElement("div");
       actions.className = "ambient-capability-actions";
       const pause = document.createElement("button");
@@ -193,7 +195,7 @@ export function renderRoutinesView(host: HTMLElement): () => void {
       remove.dataset.danger = "true";
       remove.textContent = "Delete";
       actions.append(pause, edit, remove);
-      row.append(meta, title, copy, actions);
+      row.append(details, actions);
       list.append(row);
 
       pause.addEventListener(

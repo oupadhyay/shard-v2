@@ -32,8 +32,6 @@ import {
   shouldSkipStreamingChunk,
   RESEND_ICON,
   STOP_ICON,
-  TRASH_ICON,
-  UNDO_ICON,
   RETRY_ICON,
   SETTINGS_MODAL_HTML,
   initSettingsTabs,
@@ -463,19 +461,19 @@ async function updateButtonStates() {
     if (messageCount === 0 && !hasBackup) {
       trashBtn.disabled = true;
       trashBtn.dataset.mode = "delete";
-      trashBtn.innerHTML = TRASH_ICON;
+      trashBtn.textContent = "Clear conversation";
     } else if (hasBackup && messageCount === 0) {
       // Undo mode
       trashBtn.disabled = false;
       trashBtn.dataset.mode = "undo";
       trashBtn.title = "Undo Clear (Restore Chat)";
-      trashBtn.innerHTML = UNDO_ICON;
+      trashBtn.textContent = "Undo clear";
     } else {
       // Delete mode
       trashBtn.disabled = false;
       trashBtn.dataset.mode = "delete";
       trashBtn.title = "Clear Chat";
-      trashBtn.innerHTML = TRASH_ICON;
+      trashBtn.textContent = "Clear conversation";
     }
   } catch (error) {
     logger.error("Error updating button states:", error);
@@ -1256,7 +1254,7 @@ document.addEventListener("click", (e) => {
 
 // Settings Modal Logic
 const settingsModal = document.createElement("div");
-settingsModal.className = "settings-modal hidden";
+settingsModal.className = "settings-inline hidden";
 settingsModal.innerHTML = SETTINGS_MODAL_HTML;
 document.body.appendChild(settingsModal);
 
@@ -1366,15 +1364,24 @@ settingsBtn.addEventListener("click", async () => {
     // Populate heartbeats dashboard (async, non-blocking)
     populateHeartbeatsPanel(settingsModal);
 
-    settingsModal.classList.remove("hidden");
+    mountAmbientView({
+      title: "Settings",
+      render: (host) => {
+        settingsModal.classList.remove("hidden");
+        host.appendChild(settingsModal);
+        return () => {
+          settingsModal.classList.add("hidden");
+          document.body.appendChild(settingsModal);
+        };
+      },
+    });
   } catch (e) {
     logger.error("Failed to load config", e);
   }
 });
 
 closeSettingsBtn.addEventListener("click", () => {
-  settingsModal.classList.add("hidden");
-  inputField.focus();
+  closeAmbientView();
 });
 
 saveSettingsBtn.addEventListener("click", async () => {
@@ -1389,16 +1396,20 @@ saveSettingsBtn.addEventListener("click", async () => {
     enable_tools: enableToolsCheckbox.checked,
     incognito_mode: incognitoModeCheckbox.checked,
     enable_screen_context: enableScreenContextCheckbox.checked,
-    heartbeat_global_cooldown_secs: parseInt(heartbeatCooldownInput.value) || 60,
+    heartbeat_global_cooldown_secs: Number.isFinite(heartbeatCooldownInput.valueAsNumber)
+      ? heartbeatCooldownInput.valueAsNumber : 60,
   };
 
+  const status = settingsModal.querySelector<HTMLElement>(".settings-status")!;
+  saveSettingsBtn.disabled = true;
+  status.textContent = "Saving…";
   try {
     await invoke("save_config", { config });
-    alert("Settings saved!");
-    settingsModal.classList.add("hidden");
-    inputField.focus();
+    status.textContent = "Settings saved.";
   } catch (e) {
-    alert(`Failed to save settings: ${e}`);
+    status.textContent = `Could not save settings: ${e}`;
+  } finally {
+    saveSettingsBtn.disabled = false;
   }
 });
 
@@ -1451,8 +1462,7 @@ document.addEventListener("keydown", (event) => {
 
   if (!settingsModal.classList.contains("hidden")) {
     event.preventDefault();
-    settingsModal.classList.add("hidden");
-    inputField.focus();
+    closeAmbientView();
     return;
   }
   const openDetailsList = Array.from(

@@ -89,6 +89,20 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
   wallpaper, screen capture preview/removal, and memory status-row stability.
   They were not all repeated in this final review.
 
+## Screenshot feedback follow-up (September 10, 2026)
+
+- Frontend: 185 tests passed and build passed. Backend: 549 tests and the
+  all-target check passed. Focused wire tests cover attention context inclusion
+  in normal chat and exclusion under Reduce Automatic Memory.
+- Linux native render/IPC checks: inline Settings and Save, 12px privacy help,
+  collapsed long routine, flat 84px history rows, and reviewed unknown action
+  without old approval-request wording. All inspected views fit 360px width.
+- A MacBook test thread launched the patched native app in an isolated profile.
+  Automated input is blocked by macOS Accessibility/Automation permission.
+  Do not treat that launch as proof of clicks, shortcuts, focus, or Spaces.
+- Needs attention starts collapsed. Unknown records are retained; there is still
+  no user-resolution workflow that can safely remove them from the list.
+
 ## Known limits
 
 - No new first-run scope grants or durable offline queue are implemented.

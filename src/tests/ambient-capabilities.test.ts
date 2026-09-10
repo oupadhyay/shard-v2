@@ -72,6 +72,11 @@ describe("ambient capability views", () => {
     const host = document.querySelector<HTMLElement>("#host")!;
     renderRoutinesView(host);
     await settle();
+    const details = host.querySelector<HTMLDetailsElement>(".ambient-routine-details")!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent).toContain("Sunday at 09:00 AM");
+    expect(details.querySelector("summary")?.textContent).not.toContain(routine.prompt);
+    expect(details.textContent).toContain(routine.prompt);
     const pause = [...host.querySelectorAll("button")].find((button) => button.textContent === "Pause")!;
     let resolvePause!: (value: unknown) => void;
     mockedInvoke.mockReturnValueOnce(new Promise((resolve) => (resolvePause = resolve)));
