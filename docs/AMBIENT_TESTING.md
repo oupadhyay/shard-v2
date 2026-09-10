@@ -97,9 +97,18 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 - Linux native render/IPC checks: inline Settings and Save, 12px privacy help,
   collapsed long routine, flat 84px history rows, and reviewed unknown action
   without old approval-request wording. All inspected views fit 360px width.
-- A MacBook test thread launched the patched native app in an isolated profile.
-  Automated input is blocked by macOS Accessibility/Automation permission.
-  Do not treat that launch as proof of clicks, shortcuts, focus, or Spaces.
+- MacBook native Tauri/WKWebView rendering was inspected in an isolated profile:
+  inline Settings, eight collapsed routines, flat populated history, collapsed
+  attention, and expanded unknown action. Controls fit and no horizontal overflow
+  appeared. Navigation was triggered programmatically for captures, not through
+  native input. The tested revision was the initial feedback patch plus the final
+  header gap; later action-context changes were tested separately in the orb.
+  Mac targeted checks passed: 65 frontend, 32 heartbeat, and 5 agent-process
+  tests, plus the frontend build. No real app keys or data were used.
+- Mac input remains blocked by Accessibility/Automation permission (post/listen
+  access false). Ctrl+Space, Escape, focus/draft retention, and physical clicks on
+  Save/Close/Back and routine controls remain untested on Mac. Spaces and live
+  provider behavior also remain unverified.
 - Needs attention starts collapsed. Unknown records are retained; there is still
   no user-resolution workflow that can safely remove them from the list.
 
