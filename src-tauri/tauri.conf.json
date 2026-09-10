@@ -15,7 +15,7 @@
     "windows": [
       {
         "title": "Shard",
-        "width": 350,
+        "width": 360,
         "height": 800,
         "resizable": false,
         "decorations": false,

@@ -6,10 +6,12 @@ import "katex/dist/katex.min.css";
 
 // Internal modules
 import type { AttachedImage, ChatMessage, OcrResult, ModelsResponse } from "./types";
-import { type SessionSummary, renderSessionItem } from "./ui/sessions";
 import { ChatState } from "./state";
 import { ChatController } from "./chat";
 import { EVENTS } from "./events";
+import { renderHistoryView } from "./ui/ambient-history";
+import { renderMemoryView } from "./ui/ambient-memory";
+import { renderRoutinesView } from "./ui/ambient-routines";
 import {
   md,
   clearKatexErrors,
@@ -30,18 +32,17 @@ import {
   shouldSkipStreamingChunk,
   RESEND_ICON,
   STOP_ICON,
-  TRASH_ICON,
-  UNDO_ICON,
   RETRY_ICON,
   SETTINGS_MODAL_HTML,
-  SESSIONS_MODAL_HTML,
   initSettingsTabs,
   populateHeartbeatsPanel,
   resizeImage,
   populateModelDropdown,
-  formatSessionDate,
   logger,
   mountDiffViewer,
+  mountAmbientView,
+  closeAmbientView,
+  isNearScrollEnd,
   type EditOutcome,
 } from "./ui";
 
@@ -52,7 +53,25 @@ const ocrBtn = document.getElementById("ocr-btn") as HTMLButtonElement;
 const trashBtn = document.getElementById("trash-btn") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
 const stopBtn = document.getElementById("stop-btn") as HTMLButtonElement;
+const sendBtn = document.getElementById("send-btn") as HTMLButtonElement;
 const breakoutBtn = document.getElementById("breakout-btn") as HTMLButtonElement;
+const shardMenu = document.getElementById("shard-menu") as HTMLDetailsElement;
+const ambientViewClose = document.getElementById("ambient-view-close") as HTMLButtonElement;
+const sessionsBtn = document.getElementById("sessions-btn") as HTMLButtonElement;
+const memoryBtn = document.getElementById("memory-btn") as HTMLButtonElement;
+const routinesBtn = document.getElementById("routines-btn") as HTMLButtonElement;
+
+let followsConversation = true;
+chatArea.addEventListener("scroll", () => {
+  followsConversation = isNearScrollEnd(chatArea);
+});
+
+function scrollChatToLatest(force = false) {
+  if (force || followsConversation) {
+    chatArea.scrollTop = chatArea.scrollHeight;
+    followsConversation = true;
+  }
+}
 
 // Diff viewer: mount once into the chat-area's parent so the panel sits
 // between messages and the input bar without being scrolled by the chat log.
@@ -102,6 +121,26 @@ const chatController = new ChatController(
 // Convenience alias so existing call sites read naturally
 const handleInput = (skipUi = false) => chatController.handleInput(skipUi);
 
+function syncComposerActions() {
+  const sendable = inputField.value.trim().length > 0 && !state.isProcessing;
+  sendBtn.hidden = !sendable;
+  sendBtn.disabled = !sendable;
+}
+
+async function submitInput(skipUi = false) {
+  sendBtn.hidden = true;
+  await handleInput(skipUi);
+  syncComposerActions();
+}
+
+function closeShardMenu() {
+  shardMenu.open = false;
+}
+
+ambientViewClose.addEventListener("click", () => closeAmbientView());
+sendBtn.addEventListener("click", () => void submitInput());
+shardMenu.querySelector("nav")?.addEventListener("click", closeShardMenu);
+
 // Open external links in default browser
 document.addEventListener("click", (e) => {
   const target = e.target as HTMLElement;
@@ -149,7 +188,7 @@ stopBtn.addEventListener("click", async () => {
       logger.error("Failed to rewind history:", e);
     }
 
-    handleInput(true);
+    submitInput(true);
     return;
   }
 
@@ -165,6 +204,7 @@ stopBtn.addEventListener("click", async () => {
     stopBtn.innerHTML = RESEND_ICON;
     stopBtn.dataset.mode = "resend";
     // Do NOT hide the button
+    syncComposerActions();
   } catch (e) {
     logger.error("Failed to cancel stream:", e);
   }
@@ -174,13 +214,14 @@ stopBtn.addEventListener("click", async () => {
 inputField.addEventListener("input", () => {
   inputField.style.height = "auto";
   inputField.style.height = inputField.scrollHeight + "px";
+  syncComposerActions();
 });
 
 // Event Listeners: keydown for Enter to send and Backspace to remove image
 inputField.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
-    handleInput();
+    submitInput();
   } else if (e.key === "Backspace" && inputField.value === "" && state.attachedImages.length > 0) {
     e.preventDefault();
     // Remove last image
@@ -192,6 +233,8 @@ inputField.addEventListener("keydown", (e) => {
     }
   }
 });
+
+syncComposerActions();
 
 // Handle paste event for clipboard images
 inputField.addEventListener("paste", async (e) => {
@@ -367,7 +410,7 @@ ocrBtn.addEventListener("click", async () => {
     const detailsEl = errorDiv.querySelector('.error-details');
     if (detailsEl) detailsEl.textContent = String(error);
     chatArea.appendChild(errorDiv);
-    chatArea.scrollTop = chatArea.scrollHeight;
+    scrollChatToLatest();
     inputField.focus();
   }
 });
@@ -418,19 +461,19 @@ async function updateButtonStates() {
     if (messageCount === 0 && !hasBackup) {
       trashBtn.disabled = true;
       trashBtn.dataset.mode = "delete";
-      trashBtn.innerHTML = TRASH_ICON;
+      trashBtn.textContent = "Clear conversation";
     } else if (hasBackup && messageCount === 0) {
       // Undo mode
       trashBtn.disabled = false;
       trashBtn.dataset.mode = "undo";
       trashBtn.title = "Undo Clear (Restore Chat)";
-      trashBtn.innerHTML = UNDO_ICON;
+      trashBtn.textContent = "Undo clear";
     } else {
       // Delete mode
       trashBtn.disabled = false;
       trashBtn.dataset.mode = "delete";
       trashBtn.title = "Clear Chat";
-      trashBtn.innerHTML = TRASH_ICON;
+      trashBtn.textContent = "Clear conversation";
     }
   } catch (error) {
     logger.error("Error updating button states:", error);
@@ -462,7 +505,7 @@ trashBtn.addEventListener("click", async () => {
       const detailsEl = errorDiv.querySelector('.error-details');
       if (detailsEl) detailsEl.textContent = String(error);
       chatArea.appendChild(errorDiv);
-      chatArea.scrollTop = chatArea.scrollHeight;
+      scrollChatToLatest();
     }
   } else {
     // Delete chat (no confirmation needed as we have undo)
@@ -486,7 +529,7 @@ trashBtn.addEventListener("click", async () => {
       const detailsEl = errorDiv.querySelector('.error-details');
       if (detailsEl) detailsEl.textContent = String(error);
       chatArea.appendChild(errorDiv);
-      chatArea.scrollTop = chatArea.scrollHeight;
+      scrollChatToLatest();
     }
   }
 });
@@ -610,7 +653,7 @@ async function loadChatHistory() {
     chatArea.appendChild(fragment);
 
     // Scroll to bottom
-    chatArea.scrollTop = chatArea.scrollHeight;
+    scrollChatToLatest(true);
 
     // Load pending proactive actions at the end of chat history
     await loadProactiveMessages();
@@ -680,7 +723,7 @@ listen<string>(EVENTS.AGENT_RETRY, (event) => {
     const escapedMax = md.utils.escapeHtml(String(payload.max));
     retryingDiv.innerHTML = `<span class="loading-dots">Retrying (${escapedAttempt}/${escapedMax})...</span>`;
     chatArea.appendChild(retryingDiv);
-    chatArea.scrollTop = chatArea.scrollHeight;
+    scrollChatToLatest();
   } catch (e) {
     logger.error("[Agent Retry] Failed to parse retry event:", e);
   }
@@ -772,7 +815,7 @@ listen<string>(EVENTS.AGENT_RESPONSE_CHUNK, (event) => {
   } else {
     lastMsg.innerHTML = html;
   }
-  chatArea.scrollTop = chatArea.scrollHeight;
+  scrollChatToLatest();
 });
 
 listen<string>(EVENTS.AGENT_REASONING_CHUNK, (event) => {
@@ -801,9 +844,7 @@ listen<string>(EVENTS.AGENT_REASONING_CHUNK, (event) => {
     updateThinkingElement(state.currentThinkingBlock, thinkingText, false);
   }
 
-  chatArea.scrollTop = chatArea.scrollHeight;
-
-  chatArea.scrollTop = chatArea.scrollHeight;
+  scrollChatToLatest();
 });
 
 listen<string>(EVENTS.AGENT_TOOL_CALL, (event) => {
@@ -869,7 +910,7 @@ listen<string>(EVENTS.AGENT_TOOL_CALL, (event) => {
     chatArea.appendChild(newToolDiv);
   }
 
-  chatArea.scrollTop = chatArea.scrollHeight;
+  scrollChatToLatest();
 });
 
 // Listen for tool results and add them to the matching tool call
@@ -972,7 +1013,7 @@ listen<string>(EVENTS.AGENT_ERROR, (event) => {
   });
 
   chatArea.appendChild(errorDiv);
-  chatArea.scrollTop = chatArea.scrollHeight;
+  scrollChatToLatest();
 
   // Reset processing state
   state.isProcessing = false;
@@ -1011,7 +1052,7 @@ listen<string>(EVENTS.AGENT_FALLBACK, (event) => {
     if (detailsEl) detailsEl.textContent = details;
 
     chatArea.appendChild(fallbackDiv);
-    chatArea.scrollTop = chatArea.scrollHeight;
+    scrollChatToLatest();
   } catch (e) {
     logger.error("Failed to parse fallback event:", e);
   }
@@ -1047,19 +1088,27 @@ listen<string>(EVENTS.AGENT_FALLBACK, (event) => {
 })();
 
 // Window Visibility Logic
+let hideTimer: ReturnType<typeof setTimeout> | null = null;
+let hidePending = false;
+
 async function startHide() {
+  if (hidePending) return;
   const app = document.getElementById("app");
   if (app) {
-    // Also hide settings modal if open
-    const settingsModalEl = document.querySelector(".settings-modal");
-    if (settingsModalEl) {
-      settingsModalEl.classList.add("hidden");
-    }
+    hidePending = true;
+    document.body.classList.add("window-hiding");
     app.classList.add("hidden-app");
-    // Wait for transition to finish (200ms)
-    setTimeout(async () => {
-      await invoke("hide_window");
-    }, 200);
+    hideTimer = setTimeout(async () => {
+      hideTimer = null;
+      try {
+        await invoke("hide_window");
+      } catch (error) {
+        hidePending = false;
+        document.body.classList.remove("window-hiding");
+        app.classList.remove("hidden-app");
+        logger.error("Failed to hide window:", error);
+      }
+    }, 180);
   }
 }
 
@@ -1068,6 +1117,12 @@ listen(EVENTS.START_HIDE, () => {
 });
 
 listen(EVENTS.START_SHOW, async () => {
+  if (hideTimer) {
+    clearTimeout(hideTimer);
+    hideTimer = null;
+  }
+  hidePending = false;
+  document.body.classList.remove("window-hiding");
 
   // Restore .app-ui opacity in case we faded it out for the dedicated window transition
   const appUi = document.querySelector(".app-ui") as HTMLElement | null;
@@ -1155,7 +1210,9 @@ function showSuggestions(suggestions: string[]) {
 
   // Scroll chat to bottom so suggestions don't obscure messages
   setTimeout(() => {
-    chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
+    if (followsConversation) {
+      chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
+    }
   }, 50);
 
   // Auto-hide after 15 seconds
@@ -1187,22 +1244,17 @@ listen<ScreenContext>(EVENTS.SCREEN_CONTEXT_READY, (event) => {
 // Click-to-Hide Logic
 document.addEventListener("click", (e) => {
   const target = e.target as HTMLElement;
-  // Interactive elements: input container, messages, settings modal, bottom bar, buttons, image preview
-  // We also check if the click was on a text selection? (Browser handles this, click fires after mouseup)
-  // If user selects text, they might click? No, selection is drag. Click is click.
-
-  const isInteractive = target.closest(
-    ".input-container, .message, .settings-modal, .bottom-bar, .action-btn, .stop-btn, .image-preview, .suggestion-pills",
-  );
-
-  if (!isInteractive) {
+  if (shardMenu.open && !target.closest("#shard-menu")) {
+    closeShardMenu();
+  }
+  if (!target.closest(".ambient-surface, .settings-modal")) {
     startHide();
   }
 });
 
 // Settings Modal Logic
 const settingsModal = document.createElement("div");
-settingsModal.className = "settings-modal hidden";
+settingsModal.className = "settings-inline hidden";
 settingsModal.innerHTML = SETTINGS_MODAL_HTML;
 document.body.appendChild(settingsModal);
 
@@ -1312,15 +1364,24 @@ settingsBtn.addEventListener("click", async () => {
     // Populate heartbeats dashboard (async, non-blocking)
     populateHeartbeatsPanel(settingsModal);
 
-    settingsModal.classList.remove("hidden");
+    mountAmbientView({
+      title: "Settings",
+      render: (host) => {
+        settingsModal.classList.remove("hidden");
+        host.appendChild(settingsModal);
+        return () => {
+          settingsModal.classList.add("hidden");
+          document.body.appendChild(settingsModal);
+        };
+      },
+    });
   } catch (e) {
     logger.error("Failed to load config", e);
   }
 });
 
 closeSettingsBtn.addEventListener("click", () => {
-  settingsModal.classList.add("hidden");
-  inputField.focus();
+  closeAmbientView();
 });
 
 saveSettingsBtn.addEventListener("click", async () => {
@@ -1335,127 +1396,93 @@ saveSettingsBtn.addEventListener("click", async () => {
     enable_tools: enableToolsCheckbox.checked,
     incognito_mode: incognitoModeCheckbox.checked,
     enable_screen_context: enableScreenContextCheckbox.checked,
-    heartbeat_global_cooldown_secs: parseInt(heartbeatCooldownInput.value) || 60,
+    heartbeat_global_cooldown_secs: Number.isFinite(heartbeatCooldownInput.valueAsNumber)
+      ? heartbeatCooldownInput.valueAsNumber : 60,
   };
 
+  const status = settingsModal.querySelector<HTMLElement>(".settings-status")!;
+  saveSettingsBtn.disabled = true;
+  status.textContent = "Saving…";
   try {
     await invoke("save_config", { config });
-    alert("Settings saved!");
-    settingsModal.classList.add("hidden");
-    inputField.focus();
+    status.textContent = "Settings saved.";
   } catch (e) {
-    alert(`Failed to save settings: ${e}`);
+    status.textContent = `Could not save settings: ${e}`;
+  } finally {
+    saveSettingsBtn.disabled = false;
   }
 });
 
-// Sessions Modal Logic
-const sessionsBtn = document.getElementById("sessions-btn") as HTMLButtonElement;
-const sessionsModal = document.createElement("div");
-sessionsModal.className = "settings-modal hidden"; // reuse settings modal positioning
-sessionsModal.innerHTML = SESSIONS_MODAL_HTML;
-document.body.appendChild(sessionsModal);
-
-const closeSessionsBtn = document.getElementById("close-sessions") as HTMLButtonElement;
-const newChatBtn = document.getElementById("new-session-modal-btn") as HTMLButtonElement;
-const sessionsListContainer = document.getElementById("sessions-list-container") as HTMLDivElement;
-
-sessionsBtn.addEventListener("click", async () => {
-  sessionsModal.classList.remove("hidden");
-
+// Connected capability views preserve the composer and attachment draft while
+// replacing only the shell-owned ambient content host.
+sessionsBtn.addEventListener("click", () => {
   const unreadBadge = document.getElementById("unread-sessions-badge");
-  if (unreadBadge) {
-    unreadBadge.classList.add("hidden");
-  }
-
-  sessionsListContainer.innerHTML = '<div class="loading-spinner">Loading sessions...</div>';
-  try {
-    const resultString = await invoke<string>("get_recent_sessions", { limit: 20 });
-    if (resultString === "No matching sessions found.") {
-      sessionsListContainer.innerHTML = '<div class="sessions-empty">No recent sessions found.</div>';
-      return;
-    }
-
-    sessionsListContainer.innerHTML = '';
-    const sessions: SessionSummary[] = JSON.parse(resultString);
-
-    sessions.forEach((s) => {
-      const item = renderSessionItem(s, formatSessionDate);
-
-      // Delete button — shown on hover via CSS
-      const deleteBtn = document.createElement("button");
-      deleteBtn.className = "session-item-delete";
-      deleteBtn.title = "Delete session";
-      deleteBtn.setAttribute("aria-label", "Delete session");
-      deleteBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
-      deleteBtn.addEventListener("click", async (e) => {
-        e.stopPropagation(); // don't trigger session load
-        const id = (item as HTMLElement).dataset.id;
-        if (!id) return;
-        try {
-          // Check BEFORE deleting — backend rotates session ID on delete so comparison fails after
-          const activeId = await invoke<string>("get_current_session_id").catch(() => "");
-          const wasActive = activeId === id;
-
-          await invoke("delete_session", { sessionId: id });
-
-          if (wasActive) {
-            chatArea.innerHTML = "";
-            await updateButtonStates();
-          }
-          // Re-render the list
-          item.remove();
-          if (!sessionsListContainer.querySelector(".session-item")) {
-            sessionsListContainer.innerHTML = '<div class="sessions-empty">No recent sessions found.</div>';
-          }
-        } catch (err) {
-          logger.error("Failed to delete session:", err);
-        }
-      });
-      item.appendChild(deleteBtn);
-
-      sessionsListContainer.appendChild(item);
-    });
-
-    // Add click listeners
-    sessionsListContainer.querySelectorAll('.session-item').forEach(el => {
-      el.addEventListener('click', async (e) => {
-        const id = (e.currentTarget as HTMLElement).dataset.id;
-        if (id) {
-          sessionsModal.classList.add("hidden");
-          await invoke("load_session", { sessionId: id });
-          chatArea.innerHTML = "";
+  unreadBadge?.classList.add("hidden");
+  mountAmbientView({
+    title: "History",
+    render: (host) =>
+      renderHistoryView(
+        host,
+        async (sessionId) => {
+          await invoke("load_session", { sessionId });
           await loadChatHistory();
           await updateButtonStates();
-          inputField.focus();
-        }
-      });
-    });
-
-  } catch (e) {
-    sessionsListContainer.innerHTML = `<div class="sessions-error">Failed to load sessions: <span class="sessions-error-details"></span></div>`;
-    const detailsSpan = sessionsListContainer.querySelector('.sessions-error-details');
-    if (detailsSpan) detailsSpan.textContent = String(e);
-  }
+          closeAmbientView();
+        },
+        async (sessionId) => {
+          const activeId = await invoke<string>("get_current_session_id").catch(() => "");
+          await invoke("delete_session", { sessionId });
+          if (activeId === sessionId) {
+            chatArea.replaceChildren();
+            await updateButtonStates();
+          }
+        },
+      ),
+  });
 });
 
-// Refresh sessions list if modal is open and we receive a backend update
+memoryBtn.addEventListener("click", () => {
+  mountAmbientView({ title: "Saved memory", render: renderMemoryView });
+});
+
+routinesBtn.addEventListener("click", () => {
+  mountAmbientView({ title: "Routines", render: renderRoutinesView });
+});
+
 listen(EVENTS.SESSIONS_UPDATED, () => {
-  if (!sessionsModal.classList.contains("hidden")) {
+  if (!document.getElementById("ambient-view")?.hidden &&
+      document.getElementById("ambient-view-title")?.textContent === "History") {
     sessionsBtn.click();
   }
 });
 
-closeSessionsBtn.addEventListener("click", () => {
-  sessionsModal.classList.add("hidden");
-  inputField.focus();
-});
+// Escape dismisses the innermost local surface before hiding the native panel.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || event.defaultPrevented || event.repeat) return;
 
-newChatBtn.addEventListener("click", async () => {
-  sessionsModal.classList.add("hidden");
-  await invoke("save_and_clear_chat");
-  chatArea.innerHTML = "";
-  await updateButtonStates();
-  inputField.focus();
+  if (!settingsModal.classList.contains("hidden")) {
+    event.preventDefault();
+    closeAmbientView();
+    return;
+  }
+  const openDetailsList = Array.from(
+    document.querySelectorAll<HTMLDetailsElement>(".ambient-surface details[open]"),
+  );
+  const openDetails = openDetailsList[openDetailsList.length - 1];
+  if (openDetails) {
+    event.preventDefault();
+    openDetails.open = false;
+    openDetails.querySelector<HTMLElement>("summary")?.focus();
+    return;
+  }
+
+  if (closeAmbientView()) {
+    event.preventDefault();
+    return;
+  }
+
+  event.preventDefault();
+  startHide();
 });
 
 // Development-only benchmark helper

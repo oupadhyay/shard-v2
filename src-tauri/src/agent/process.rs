@@ -248,23 +248,28 @@ impl<R: tauri::Runtime> Agent<R> {
             (None, None, None)
         };
 
-        // Phase 3.1 — Surface any in-progress action sketches at the top of
-        // the RAG slot so the agent can resume a multi-step refactor even
-        // after a compaction has scrubbed the original `action_plan` call
-        // from chat history. Best-effort; if the store is unavailable or
-        // there are no open sketches, we leave rag_context_str unchanged.
-        let rag_context_str = match (
-            (!incognito)
-                .then(|| {
-                    crate::memories::get_vector_store(app_handle)
-                        .ok()
-                        .and_then(|s| crate::actions::pending_sketch_summary_text(&s))
-                })
-                .flatten(),
-            rag_context_str,
-        ) {
-            (Some(sketches), Some(rag)) => Some(format!("{}\n{}", sketches, rag)),
-            (Some(sketches), None) => Some(sketches),
+        // Surface durable plans and unresolved proactive outcomes at the top
+        // of the RAG slot. Both are best-effort and excluded with Reduce
+        // Automatic Memory, like the rest of historical context.
+        let durable_context = (!incognito)
+            .then(|| {
+                let mut sections = Vec::new();
+                if let Some(sketches) = crate::memories::get_vector_store(app_handle)
+                    .ok()
+                    .and_then(|s| crate::actions::pending_sketch_summary_text(&s))
+                {
+                    sections.push(sketches);
+                }
+                if let Some(attention) = crate::heartbeat::unresolved_attention_context(app_handle)
+                {
+                    sections.push(attention);
+                }
+                (!sections.is_empty()).then(|| sections.join("\n"))
+            })
+            .flatten();
+        let rag_context_str = match (durable_context, rag_context_str) {
+            (Some(durable), Some(rag)) => Some(format!("{}\n{}", durable, rag)),
+            (Some(durable), None) => Some(durable),
             (None, rag) => rag,
         };
 

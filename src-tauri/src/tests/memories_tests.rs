@@ -2,6 +2,7 @@
  * Memory system tests
  */
 use crate::memories::{Memory, MemoryCategory, MemoryStore};
+use crate::tests::agent_helpers::{home_lock, HomeJail};
 
 #[test]
 fn test_memory_creation() {
@@ -86,6 +87,160 @@ fn test_format_for_prompt() {
     assert!(formatted.contains("Working on shard-v2"));
     assert!(formatted.contains("### Preferences"));
     assert!(formatted.contains("### Project Context"));
+}
+
+#[test]
+fn saved_memory_correction_undo_and_stale_protection_are_persisted() {
+    let _home_lock = home_lock();
+    let _home_jail = HomeJail::new();
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+
+    let original = crate::memories::add_memory(
+        handle,
+        MemoryCategory::Preference,
+        "Prefers rushed trips".to_string(),
+        4,
+    )
+    .unwrap();
+    assert_eq!(
+        crate::memories::migrate_memories_to_observations(handle).unwrap(),
+        1
+    );
+    let correction = crate::memories::correct_saved_memory(
+        handle,
+        &original.id,
+        original.revision,
+        "Prefers slow trips".to_string(),
+    )
+    .unwrap();
+    let corrected = correction.memory.clone().unwrap();
+    assert_eq!(corrected.content, "Prefers slow trips");
+    assert!(crate::memories::get_memories_for_prompt(handle)
+        .unwrap()
+        .contains("Prefers slow trips"));
+    let vector_store = crate::memories::get_vector_store(handle).unwrap();
+    let migrated: (String, Option<String>) = vector_store
+        .conn
+        .query_row(
+            "SELECT content, deleted_at FROM observations WHERE session_name = ?1",
+            [format!("saved-memory:{}", original.id)],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(migrated, ("Prefers slow trips".to_string(), None));
+
+    assert!(crate::memories::correct_saved_memory(
+        handle,
+        &original.id,
+        original.revision,
+        "Stale overwrite".to_string(),
+    )
+    .unwrap_err()
+    .contains("changed since"));
+
+    let restored = crate::memories::undo_saved_memory(handle, correction.undo_token).unwrap();
+    assert_eq!(restored.content, "Prefers rushed trips");
+    assert!(restored.revision > corrected.revision);
+
+    let deletion =
+        crate::memories::forget_saved_memory(handle, &restored.id, restored.revision).unwrap();
+    let deleted_at: Option<String> = vector_store
+        .conn
+        .query_row(
+            "SELECT deleted_at FROM observations WHERE session_name = ?1",
+            [format!("saved-memory:{}", original.id)],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(deleted_at.is_some());
+    assert!(crate::memories::list_saved_memories(handle)
+        .unwrap()
+        .is_empty());
+    let restored = crate::memories::undo_saved_memory(handle, deletion.undo_token).unwrap();
+    assert_eq!(restored.content, "Prefers rushed trips");
+    assert_eq!(
+        crate::memories::load_memories_from_disk(handle)
+            .unwrap()
+            .memories,
+        vec![restored]
+    );
+    let migrated: (String, Option<String>) = vector_store
+        .conn
+        .query_row(
+            "SELECT content, deleted_at FROM observations WHERE session_name = ?1",
+            [format!("saved-memory:{}", original.id)],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(migrated, ("Prefers rushed trips".to_string(), None));
+}
+
+#[test]
+fn saved_memory_undo_rejects_a_newer_correction() {
+    let _home_lock = home_lock();
+    let _home_jail = HomeJail::new();
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+    let original =
+        crate::memories::add_memory(handle, MemoryCategory::Fact, "First".to_string(), 3).unwrap();
+    let first = crate::memories::correct_saved_memory(
+        handle,
+        &original.id,
+        original.revision,
+        "Second".to_string(),
+    )
+    .unwrap();
+    let second_memory = first.memory.clone().unwrap();
+    crate::memories::correct_saved_memory(
+        handle,
+        &original.id,
+        second_memory.revision,
+        "Third".to_string(),
+    )
+    .unwrap();
+
+    assert!(crate::memories::undo_saved_memory(handle, first.undo_token)
+        .unwrap_err()
+        .contains("changed again"));
+    assert_eq!(
+        crate::memories::load_memories_from_disk(handle)
+            .unwrap()
+            .memories[0]
+            .content,
+        "Third"
+    );
+}
+
+#[test]
+fn saved_memory_old_deletion_cannot_undo_a_later_deletion() {
+    let _home_lock = home_lock();
+    let _home_jail = HomeJail::new();
+    let app = tauri::test::mock_app();
+    let handle = app.handle();
+    let original =
+        crate::memories::add_memory(handle, MemoryCategory::Fact, "First".to_string(), 3).unwrap();
+    let first =
+        crate::memories::forget_saved_memory(handle, &original.id, original.revision).unwrap();
+    let restored = crate::memories::undo_saved_memory(handle, first.undo_token.clone()).unwrap();
+    let corrected = crate::memories::correct_saved_memory(
+        handle,
+        &restored.id,
+        restored.revision,
+        "Latest".to_string(),
+    )
+    .unwrap()
+    .memory
+    .unwrap();
+    let latest =
+        crate::memories::forget_saved_memory(handle, &corrected.id, corrected.revision).unwrap();
+    assert!(crate::memories::undo_saved_memory(handle, first.undo_token).is_err());
+    assert!(crate::memories::load_memories_from_disk(handle)
+        .unwrap()
+        .memories
+        .is_empty());
+    let restored = crate::memories::undo_saved_memory(handle, latest.undo_token).unwrap();
+    assert_eq!(restored.content, "Latest");
 }
 
 // ============================================================================

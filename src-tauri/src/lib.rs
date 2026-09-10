@@ -326,9 +326,15 @@ async fn rewind_history(state: tauri::State<'_, AppState>) -> Result<(), String>
 async fn get_recent_sessions(
     app_handle: AppHandle,
     limit: Option<usize>,
+    query: Option<String>,
 ) -> Result<String, String> {
     if let Ok(store) = crate::memories::get_vector_store(&app_handle) {
-        crate::db::sessions::search_sessions_by_time(&store, "", "all_time", limit.unwrap_or(15))
+        crate::db::sessions::search_sessions_by_time(
+            &store,
+            query.as_deref().unwrap_or(""),
+            "all_time",
+            limit.unwrap_or(15),
+        )
     } else {
         Err("Failed to open database".to_string())
     }
@@ -563,6 +569,76 @@ async fn get_heartbeat_status(
     app_handle: AppHandle,
 ) -> Result<Vec<heartbeat::HeartbeatStatusInfo>, String> {
     Ok(heartbeat::get_heartbeat_status_list(&app_handle))
+}
+
+#[tauri::command]
+fn list_saved_memories(app_handle: AppHandle) -> Result<Vec<memories::Memory>, String> {
+    memories::list_saved_memories(&app_handle)
+}
+
+#[tauri::command]
+fn correct_saved_memory(
+    app_handle: AppHandle,
+    id: String,
+    expected_revision: u64,
+    content: String,
+) -> Result<memories::MemoryMutationResult, String> {
+    memories::correct_saved_memory(&app_handle, &id, expected_revision, content)
+}
+
+#[tauri::command]
+fn forget_saved_memory(
+    app_handle: AppHandle,
+    id: String,
+    expected_revision: u64,
+) -> Result<memories::MemoryMutationResult, String> {
+    memories::forget_saved_memory(&app_handle, &id, expected_revision)
+}
+
+#[tauri::command]
+fn undo_saved_memory(
+    app_handle: AppHandle,
+    undo_token: memories::MemoryUndoToken,
+) -> Result<memories::Memory, String> {
+    memories::undo_saved_memory(&app_handle, undo_token)
+}
+
+#[tauri::command]
+fn create_heartbeat(
+    app_handle: AppHandle,
+    name: String,
+    input: heartbeat::HeartbeatInput,
+) -> Result<heartbeat::HeartbeatStatusInfo, String> {
+    heartbeat::create_heartbeat(&app_handle, &name, input)
+}
+
+#[tauri::command]
+fn update_heartbeat(
+    app_handle: AppHandle,
+    name: String,
+    expected_revision: String,
+    input: heartbeat::HeartbeatInput,
+) -> Result<heartbeat::HeartbeatStatusInfo, String> {
+    heartbeat::update_heartbeat(&app_handle, &name, &expected_revision, input)
+}
+
+#[tauri::command]
+fn set_heartbeat_paused(
+    app_handle: AppHandle,
+    name: String,
+    expected_revision: String,
+    paused: bool,
+) -> Result<heartbeat::HeartbeatStatusInfo, String> {
+    heartbeat::set_heartbeat_paused(&app_handle, &name, &expected_revision, paused)
+}
+
+#[tauri::command]
+fn delete_heartbeat(
+    app_handle: AppHandle,
+    name: String,
+    expected_revision: String,
+) -> Result<(), String> {
+    heartbeat::delete_heartbeat(&app_handle, &name, &expected_revision)
 }
 
 // ============================================================================
@@ -868,7 +944,7 @@ pub fn run() {
 
                     window
                         .set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                            width: (350.0 * scale) as u32,
+                            width: (360.0 * scale) as u32,
                             height: target_h,
                         }))
                         .ok();
@@ -1028,7 +1104,15 @@ pub fn run() {
             get_draft_status,
             reject_draft,
             get_proactive_count,
-            get_heartbeat_status
+            get_heartbeat_status,
+            list_saved_memories,
+            correct_saved_memory,
+            forget_saved_memory,
+            undo_saved_memory,
+            create_heartbeat,
+            update_heartbeat,
+            set_heartbeat_paused,
+            delete_heartbeat
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

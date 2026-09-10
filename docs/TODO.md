@@ -8,6 +8,37 @@ Vercel AI SDK was evaluated and rejected: it would force the agent loop into Typ
 
 ## Trust Repair: Remaining Work and Test Gaps
 
+### Ambient integration review
+
+- [x] Import the Pierre Dark ambient shell and connected History, Saved memory,
+  and Routines views. Keep the existing controller, native IPC, and scheduler.
+- [x] Reject an old memory-deletion Undo after restore/change/delete. Persist the
+  deletion revision and test that only the latest deletion can be undone.
+- [x] Tighten the ambient views using real-content feedback: inline Settings,
+  compact privacy disclosure, collapsed routine prompts, flat two-line history
+  previews, capped view height, and a labelled Clear conversation menu item.
+- [x] Stop showing old approval-request prose for reviewed actions. Needs
+  attention starts collapsed and retains unknown outcomes without replay.
+  Normal chat receives up to 20 unresolved records as read-only context, with
+  oversized arguments omitted. Reduce Automatic Memory excludes this context.
+- [ ] Make memory JSON and its migrated SQLite retrieval copy recover together.
+  They commit separately. A retrieval-sync failure is reported after the JSON
+  change has already been saved; there is no durable repair job. Do not describe
+  Forget as deletion of all inferred observations or original conversations.
+- [ ] Unify routine write concurrency across direct controls, approved file edits,
+  and external file changes. Direct controls compare a content hash under their
+  own lock; this does not serialize every writer or detect change-and-revert.
+- [ ] Preserve unsaved capability-form edits when leaving a view, or ask before
+  discarding them. Native hide/show retains mounted state; Back closes the view.
+- [ ] Run the macOS and live-provider checklist in
+  [AMBIENT_TESTING.md](./AMBIENT_TESTING.md). Linux GUI checks do not prove macOS
+  focus, vibrancy, Spaces, permissions, or global shortcut behavior.
+- [ ] Fix the existing strict Clippy failure in `src/vector_store.rs`
+  (`chunks_exact_to_as_chunks`). Keep it separate from the ambient feature.
+- [ ] Verify a packaged native build. The development app is not a release build.
+- [ ] Design backend scope grants before implementing onboarding autonomy choices.
+  This PR does not implement those prototype choices or a durable offline queue.
+
 The trust repair adds review for self-changes, separate approval and execution
 states, exact persona-text approval, truthful memory settings, and a **Needs
 attention** section. See [TRUST_CONTRACT.md](./TRUST_CONTRACT.md) for the current
@@ -35,10 +66,9 @@ rules and test evidence. These notes do not mean the changes have been released.
   context goes to the provider, explicit memory reads remain possible, and separate
   scheduled/background/MCP activity continues. Define retention, in-flight work,
   and transitions before adding a stronger privacy claim.
-- [ ] **Check the trust UI with the new ambient design.** The separate design
-  study is still a prototype and was not merged or tested with this backend.
-  Preserve exact-text review, unknown/failed outcomes, and access to attention
-  items when adopting its simpler opening screen.
+- [x] **Connect the trust UI to the new ambient design.** The integration keeps
+  exact-text review, unknown/failed outcomes, and access to attention items.
+  Live-provider and macOS checks remain open below.
 
 ### Tests that failed or need follow-up
 
