@@ -30,9 +30,12 @@ Vercel AI SDK was evaluated and rejected: it would force the agent loop into Typ
   own lock; this does not serialize every writer or detect change-and-revert.
 - [ ] Preserve unsaved capability-form edits when leaving a view, or ask before
   discarding them. Native hide/show retains mounted state; Back closes the view.
-- [ ] Run the macOS and live-provider checklist in
-  [AMBIENT_TESTING.md](./AMBIENT_TESTING.md). Linux GUI checks do not prove macOS
-  focus, vibrancy, Spaces, permissions, or global shortcut behavior.
+- [x] Run actual Mac input checks for Settings, routines, history, Escape,
+  Ctrl+Space, and draft/focus retention. Fix and natively re-test the detached
+  click-target bug that hid the panel during Routine Edit and Settings Close.
+- [ ] Finish Mac attachment retention, Spaces/display behavior, and live-provider
+  checks in [AMBIENT_TESTING.md](./AMBIENT_TESTING.md). The completed checks used
+  isolated fixtures without real keys, private screen capture, or clipboard use.
 - [ ] Fix the existing strict Clippy failure in `src/vector_store.rs`
   (`chunks_exact_to_as_chunks`). Keep it separate from the ambient feature.
 - [ ] Verify a packaged native build. The development app is not a release build.

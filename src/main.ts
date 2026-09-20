@@ -1241,16 +1241,16 @@ listen<ScreenContext>(EVENTS.SCREEN_CONTEXT_READY, (event) => {
   showSuggestions(event.payload.suggestions);
 });
 
-// Click-to-Hide Logic
+// Classify the click before component handlers can detach its target.
 document.addEventListener("click", (e) => {
   const target = e.target as HTMLElement;
   if (shardMenu.open && !target.closest("#shard-menu")) {
     closeShardMenu();
   }
-  if (!target.closest(".ambient-surface, .settings-modal")) {
+  if (!target.closest(".ambient-surface, .settings-inline")) {
     startHide();
   }
-});
+}, { capture: true });
 
 // Settings Modal Logic
 const settingsModal = document.createElement("div");

@@ -105,10 +105,23 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
   header gap; later action-context changes were tested separately in the orb.
   Mac targeted checks passed: 65 frontend, 32 heartbeat, and 5 agent-process
   tests, plus the frontend build. No real app keys or data were used.
-- Mac input remains blocked by Accessibility/Automation permission (post/listen
-  access false). Ctrl+Space, Escape, focus/draft retention, and physical clicks on
-  Save/Close/Back and routine controls remain untested on Mac. Spaces and live
-  provider behavior also remain unverified.
+- After Accessibility was granted and the console stayed unlocked, actual
+  CoreGraphics mouse/keyboard tests passed on PR head
+  [`364767e`](https://github.com/oupadhyay/shard-v2/commit/364767e1c15c74fc19c7389fa87737523bca782c): Settings
+  Open/Save/Back, Escape closing a view before hiding the panel, Ctrl+Space
+  hide/restore with draft/focus retention, routine expansion and persisted
+  pause/edit/delete, and history search/open. Fixtures used a disposable bundle
+  identifier/profile and keychain namespace; no real keys, data, or clipboard
+  were accessed. No provider calls were made.
+- Native input exposed a real click-dismissal bug: Routine Edit and Settings
+  Close could remove the clicked element before the document's bubbling handler
+  checked its ancestors, causing it to hide the panel. The handler now checks in
+  capture phase and uses the current Settings selector. Native re-tests of Edit
+  and Close passed with that patch.
+- Attachment retention, Spaces, and live-provider behavior remain unverified on
+  Mac. Attachment testing was skipped to avoid modifying the user's clipboard or
+  capturing private desktop content. An inactive panel needed one click to
+  activate and another to focus the composer; shortcut restoration focused it.
 - Needs attention starts collapsed. Unknown records are retained; there is still
   no user-resolution workflow that can safely remove them from the list.
 
