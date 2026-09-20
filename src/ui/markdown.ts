@@ -112,6 +112,12 @@ export const md: MarkdownIt = new MarkdownIt({
   }
 });
 
+// Keep wide tables inside a keyboard-focusable local scroll region instead of
+// widening the ambient conversation or stealing its vertical scroll.
+md.renderer.rules.table_open = () =>
+  '<div class="markdown-table-scroll" role="region" aria-label="Scrollable table" tabindex="0"><span class="markdown-table-hint" aria-hidden="true">Table · scroll horizontally →</span><table>';
+md.renderer.rules.table_close = () => '</table></div>';
+
 // The package is CommonJS with a default export. Vite can preserve that wrapper.
 const katexPlugin = typeof mk === "function" ? mk : (mk as { default: typeof mk }).default;
 

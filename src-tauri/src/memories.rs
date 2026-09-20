@@ -9,7 +9,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self};
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager, Runtime};
 
 // ============================================================================
@@ -99,13 +101,20 @@ impl std::fmt::Display for MemoryCategory {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Memory {
     pub id: String,
     pub category: MemoryCategory,
     pub content: String,
     pub created_at: DateTime<Utc>,
     pub importance: u8, // 1-5
+    /// Monotonic compare-and-swap revision for user corrections and Undo.
+    #[serde(default = "default_memory_revision")]
+    pub revision: u64,
+}
+
+fn default_memory_revision() -> u64 {
+    1
 }
 
 impl Memory {
@@ -116,6 +125,7 @@ impl Memory {
             content,
             created_at: Utc::now(),
             importance: importance.clamp(1, 5),
+            revision: default_memory_revision(),
         }
     }
 
@@ -134,6 +144,9 @@ pub struct MemoryStore {
     pub memories: Vec<Memory>,
     #[serde(default)]
     pub version: u32,
+    /// Revisions of explicit deletions that can still be undone.
+    #[serde(default)]
+    pub deleted_revisions: HashMap<String, u64>,
 }
 
 impl MemoryStore {
@@ -141,6 +154,7 @@ impl MemoryStore {
         Self {
             memories: Vec::new(),
             version: 1,
+            deleted_revisions: HashMap::new(),
         }
     }
 
@@ -224,6 +238,121 @@ impl MemoryStore {
 const MEMORIES_FILENAME: &str = "MEMORIES.json";
 const MEMORIES_MD_FILENAME: &str = "MEMORIES.md";
 const TOKEN_BUDGET: usize = 1000;
+
+/// Serializes complete read-modify-write operations. The memory cache alone
+/// cannot do this because some runtimes intentionally operate without AppState.
+fn memory_write_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn write_memory_file(path: &std::path::Path, content: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Memory file has no parent directory".to_string())?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|e| format!("Failed to create temporary memory file: {}", e))?;
+    temporary
+        .write_all(content)
+        .and_then(|_| temporary.as_file_mut().sync_all())
+        .map_err(|e| format!("Failed to write temporary memory file: {}", e))?;
+    temporary
+        .persist(path)
+        .map_err(|e| format!("Failed to replace memory file: {}", e.error))?;
+    Ok(())
+}
+
+fn saved_memory_observation_marker(id: &str) -> String {
+    format!("saved-memory:{}", id)
+}
+
+/// Keep the one-time migrated observation copy aligned with its explicit
+/// MemoryStore source. Newer memories may have no observation copy, which is
+/// valid; linked and unambiguous legacy copies are updated and any stale
+/// embedding is removed so hybrid retrieval cannot return old content.
+fn sync_saved_memory_observation<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    memory_id: &str,
+    previous_content: &str,
+    current_content: Option<&str>,
+) -> Result<(), String> {
+    let store = get_vector_store(app_handle)?;
+    let marker = saved_memory_observation_marker(memory_id);
+    let linked_id = store
+        .conn
+        .query_row(
+            "SELECT id FROM observations WHERE session_name = ?1 LIMIT 1",
+            [&marker],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let observation_id = if let Some(id) = linked_id {
+        Some(id)
+    } else {
+        // Older migrations predate explicit linkage. Claim only one exact,
+        // source-less candidate; ambiguity means it may be independently
+        // inferred and must not be rewritten.
+        let hash = compute_content_hash(previous_content);
+        let mut statement = store
+            .conn
+            .prepare(
+                "SELECT id FROM observations \
+                 WHERE content_hash = ?1 AND level = 'explicit' \
+                   AND session_name IS NULL AND source_ids = '[]' \
+                 LIMIT 2",
+            )
+            .map_err(|e| format!("Failed to inspect migrated memory observation: {}", e))?;
+        let candidates: Vec<String> = statement
+            .query_map([hash], |row| row.get(0))
+            .map_err(|e| format!("Failed to inspect migrated memory observation: {}", e))?
+            .filter_map(Result::ok)
+            .collect();
+        if candidates.len() == 1 {
+            Some(candidates[0].clone())
+        } else {
+            None
+        }
+    };
+
+    let Some(observation_id) = observation_id else {
+        return Ok(());
+    };
+    let transaction = store
+        .conn
+        .unchecked_transaction()
+        .map_err(|e| format!("Failed to update migrated memory observation: {}", e))?;
+    if let Some(content) = current_content {
+        transaction
+            .execute(
+                "UPDATE observations SET content = ?1, content_hash = ?2, \
+                 session_name = ?3, deleted_at = NULL WHERE id = ?4",
+                rusqlite::params![
+                    content,
+                    compute_content_hash(content),
+                    marker,
+                    observation_id
+                ],
+            )
+            .map_err(|e| format!("Failed to update migrated memory observation: {}", e))?;
+    } else {
+        transaction
+            .execute(
+                "UPDATE observations SET session_name = ?1, deleted_at = ?2 WHERE id = ?3",
+                rusqlite::params![marker, Utc::now().to_rfc3339(), observation_id],
+            )
+            .map_err(|e| format!("Failed to forget migrated memory observation: {}", e))?;
+    }
+    transaction
+        .execute(
+            "DELETE FROM observation_embeddings WHERE observation_id = ?1",
+            [&observation_id],
+        )
+        .map_err(|e| format!("Failed to invalidate migrated memory embedding: {}", e))?;
+    transaction
+        .commit()
+        .map_err(|e| format!("Failed to commit migrated memory observation: {}", e))
+}
 
 /// Get the path to the memories directory
 pub fn get_memories_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -689,13 +818,6 @@ pub fn save_memories<R: Runtime>(
     app_handle: &AppHandle<R>,
     store: &MemoryStore,
 ) -> Result<(), String> {
-    // Update cache first (no-op when AppState isn't registered)
-    if let Some(state) = app_handle.try_state::<crate::AppState>() {
-        if let Ok(mut guard) = state.memory_store.write() {
-            *guard = Some(store.clone());
-        }
-    }
-
     let memories_dir = get_memories_dir(app_handle)?;
 
     // Save JSON (source of truth)
@@ -703,8 +825,7 @@ pub fn save_memories<R: Runtime>(
     let json_content = serde_json::to_string_pretty(store)
         .map_err(|e| format!("Failed to serialize memories: {}", e))?;
 
-    fs::write(&json_path, json_content)
-        .map_err(|e| format!("Failed to write memories JSON: {}", e))?;
+    write_memory_file(&json_path, json_content.as_bytes())?;
 
     // Also write human-readable markdown
     let md_path = memories_dir.join(MEMORIES_MD_FILENAME);
@@ -713,7 +834,18 @@ pub fn save_memories<R: Runtime>(
         store.format_for_prompt()
     );
 
-    fs::write(&md_path, md_content).map_err(|e| format!("Failed to write memories MD: {}", e))?;
+    if let Err(e) = write_memory_file(&md_path, md_content.as_bytes()) {
+        // MEMORIES.json is the canonical store and is already durable. Do not
+        // report the mutation as failed after it has committed.
+        log::warn!("Failed to refresh generated memories Markdown: {}", e);
+    }
+
+    // Publish the new cache only after the canonical JSON write succeeds.
+    if let Some(state) = app_handle.try_state::<crate::AppState>() {
+        if let Ok(mut guard) = state.memory_store.write() {
+            *guard = Some(store.clone());
+        }
+    }
 
     Ok(())
 }
@@ -725,8 +857,10 @@ pub fn add_memory<R: Runtime>(
     content: String,
     importance: u8,
 ) -> Result<Memory, String> {
-    // Load will check cache
-    let mut store = load_memories(app_handle)?;
+    let _write_guard = memory_write_lock()
+        .lock()
+        .map_err(|_| "Memory store write lock is unavailable".to_string())?;
+    let mut store = load_memories_from_disk(app_handle)?;
 
     let memory = Memory::new(category, content, importance);
     store.add(memory.clone());
@@ -748,7 +882,10 @@ pub fn add_memory<R: Runtime>(
 /// Delete a memory by ID
 #[allow(dead_code)]
 pub fn delete_memory<R: Runtime>(app_handle: &AppHandle<R>, id: &str) -> Result<bool, String> {
-    let mut store = load_memories(app_handle)?;
+    let _write_guard = memory_write_lock()
+        .lock()
+        .map_err(|_| "Memory store write lock is unavailable".to_string())?;
+    let mut store = load_memories_from_disk(app_handle)?;
     let removed = store.remove(id);
 
     if removed {
@@ -757,6 +894,186 @@ pub fn delete_memory<R: Runtime>(app_handle: &AppHandle<R>, id: &str) -> Result<
     }
 
     Ok(removed)
+}
+
+/// Opaque frontend round-trip token. Undo verifies the current revision (or
+/// continued absence after deletion) before restoring anything, so an older
+/// status row cannot overwrite a subsequent correction.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MemoryUndoToken {
+    Correction {
+        memory_id: String,
+        expected_revision: u64,
+        previous_content: String,
+    },
+    Deletion {
+        memory: Memory,
+    },
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct MemoryMutationResult {
+    pub memory: Option<Memory>,
+    pub undo_token: MemoryUndoToken,
+}
+
+/// List the explicit saved memories injected into future prompts. This does
+/// not include inferred observations or conversation history.
+pub fn list_saved_memories<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Vec<Memory>, String> {
+    let mut memories = load_memories(app_handle)?.memories;
+    memories.sort_by_key(|memory| std::cmp::Reverse(memory.created_at));
+    Ok(memories)
+}
+
+pub fn correct_saved_memory<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    id: &str,
+    expected_revision: u64,
+    content: String,
+) -> Result<MemoryMutationResult, String> {
+    let content = content.trim();
+    if content.is_empty() {
+        return Err("Saved memory cannot be empty".to_string());
+    }
+
+    let _write_guard = memory_write_lock()
+        .lock()
+        .map_err(|_| "Memory store write lock is unavailable".to_string())?;
+    let mut store = load_memories_from_disk(app_handle)?;
+    let memory = store
+        .memories
+        .iter_mut()
+        .find(|memory| memory.id == id)
+        .ok_or_else(|| "Saved memory no longer exists".to_string())?;
+    if memory.revision != expected_revision {
+        return Err(
+            "Saved memory changed since it was opened; reload before correcting it".to_string(),
+        );
+    }
+
+    let previous_content = std::mem::replace(&mut memory.content, content.to_string());
+    memory.revision = memory.revision.saturating_add(1);
+    let corrected = memory.clone();
+    save_memories(app_handle, &store)?;
+    sync_saved_memory_observation(
+        app_handle,
+        &corrected.id,
+        &previous_content,
+        Some(&corrected.content),
+    )
+    .map_err(|e| {
+        format!(
+            "Saved memory was corrected, but its retrieval copy could not be synchronized: {}",
+            e
+        )
+    })?;
+
+    Ok(MemoryMutationResult {
+        memory: Some(corrected.clone()),
+        undo_token: MemoryUndoToken::Correction {
+            memory_id: corrected.id,
+            expected_revision: corrected.revision,
+            previous_content,
+        },
+    })
+}
+
+pub fn forget_saved_memory<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    id: &str,
+    expected_revision: u64,
+) -> Result<MemoryMutationResult, String> {
+    let _write_guard = memory_write_lock()
+        .lock()
+        .map_err(|_| "Memory store write lock is unavailable".to_string())?;
+    let mut store = load_memories_from_disk(app_handle)?;
+    let index = store
+        .memories
+        .iter()
+        .position(|memory| memory.id == id)
+        .ok_or_else(|| "Saved memory no longer exists".to_string())?;
+    if store.memories[index].revision != expected_revision {
+        return Err(
+            "Saved memory changed since it was opened; reload before forgetting it".to_string(),
+        );
+    }
+    let memory = store.memories.remove(index);
+    store
+        .deleted_revisions
+        .insert(memory.id.clone(), memory.revision);
+    save_memories(app_handle, &store)?;
+    sync_saved_memory_observation(app_handle, &memory.id, &memory.content, None).map_err(|e| {
+        format!(
+            "Saved memory was removed, but its retrieval copy could not be synchronized: {}",
+            e
+        )
+    })?;
+
+    Ok(MemoryMutationResult {
+        memory: None,
+        undo_token: MemoryUndoToken::Deletion { memory },
+    })
+}
+
+pub fn undo_saved_memory<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    undo_token: MemoryUndoToken,
+) -> Result<Memory, String> {
+    let _write_guard = memory_write_lock()
+        .lock()
+        .map_err(|_| "Memory store write lock is unavailable".to_string())?;
+    let mut store = load_memories_from_disk(app_handle)?;
+
+    let (restored, previous_content) = match undo_token {
+        MemoryUndoToken::Correction {
+            memory_id,
+            expected_revision,
+            previous_content,
+        } => {
+            let memory = store
+                .memories
+                .iter_mut()
+                .find(|memory| memory.id == memory_id)
+                .ok_or_else(|| "Cannot undo because the saved memory was removed".to_string())?;
+            if memory.revision != expected_revision {
+                return Err("Cannot undo because the saved memory changed again".to_string());
+            }
+            let current_content = memory.content.clone();
+            memory.content = previous_content;
+            memory.revision = memory.revision.saturating_add(1);
+            (memory.clone(), current_content)
+        }
+        MemoryUndoToken::Deletion { mut memory } => {
+            if store.memories.iter().any(|current| current.id == memory.id)
+                || store.deleted_revisions.get(&memory.id) != Some(&memory.revision)
+            {
+                return Err(
+                    "Cannot undo because the saved memory was recreated or changed".to_string(),
+                );
+            }
+            store.deleted_revisions.remove(&memory.id);
+            memory.revision = memory.revision.saturating_add(1);
+            let previous_content = memory.content.clone();
+            store.memories.push(memory.clone());
+            (memory, previous_content)
+        }
+    };
+
+    save_memories(app_handle, &store)?;
+    sync_saved_memory_observation(
+        app_handle,
+        &restored.id,
+        &previous_content,
+        Some(&restored.content),
+    )
+    .map_err(|e| {
+        format!(
+            "Undo was saved, but its retrieval copy could not be synchronized: {}",
+            e
+        )
+    })?;
+    Ok(restored)
 }
 
 /// Get formatted memories for prompt injection
@@ -1467,7 +1784,7 @@ pub fn migrate_memories_to_observations<R: Runtime>(
             &memory.content,
             crate::observations::ObservationLevel::Explicit,
             vec![],
-            None,
+            Some(saved_memory_observation_marker(&memory.id)),
         );
 
         match crate::observations::insert_observation(&vector_store, &obs, None) {

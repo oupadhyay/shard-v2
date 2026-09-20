@@ -11,6 +11,14 @@ import {
 import hljs from 'highlight.js';
 
 describe('Markdown Utilities', () => {
+  it('wraps wide tables in a keyboard-focusable local scroll region', () => {
+    const html = md.render('| Column | Another |\n|---|---|\n| value | value |');
+
+    expect(html).toContain('class="markdown-table-scroll"');
+    expect(html).toContain('role="region"');
+    expect(html).toContain('tabindex="0"');
+  });
+
   describe('detectUnrenderedLatex', () => {
     it('should return no errors for plain text', () => {
       expect(detectUnrenderedLatex('Hello world')).toEqual([]);

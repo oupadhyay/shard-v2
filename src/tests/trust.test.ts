@@ -76,14 +76,16 @@ describe('durable approval UI', () => {
       if (command === 'get_draft_status') return { approved: true, reviewed_at: 'now', execution_status: 'succeeded', execution_result: 'Saved the reviewed text.' };
     });
     const container = document.createElement('div');
-    addProactiveMessage(container, pending);
+    addProactiveMessage(container, { ...pending, content: 'Heartbeat requests approval' });
     (container.querySelector('.approve') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(container.querySelector('.execution-result')?.textContent).toContain('Saved the reviewed text.'));
     expect(container.querySelector('.approve')).toBeNull();
+    expect(container.textContent).not.toContain('requests approval');
+    expect(container.textContent).toContain('Saved action: edit_file');
   });
 
   it('does not invent approval for an old unknown action or reopen a collapsed panel', async () => {
-    mockIPC(() => ({ actions: [{ ...pending, reviewed_at: 'legacy', execution_status: 'unknown' }], plans: [] }));
+    mockIPC(() => ({ actions: [{ ...pending, content: 'Heartbeat requests approval for edit_config', reviewed_at: 'legacy', execution_status: 'unknown' }], plans: [] }));
     const host = document.createElement('div');
     const chat = document.createElement('div');
     host.appendChild(chat);
@@ -92,7 +94,9 @@ describe('durable approval UI', () => {
     expect(host.textContent).toContain('Approval unconfirmed');
     expect(host.querySelector('button')).toBeNull();
     const details = host.querySelector('.attention-panel') as HTMLDetailsElement;
-    details.open = false;
+    expect(details.open).toBe(false);
+    expect(host.textContent).not.toContain('requests approval');
+    expect(host.textContent).toContain('Saved action: edit_file');
     await panel.refresh();
     expect(details.open).toBe(false);
   });

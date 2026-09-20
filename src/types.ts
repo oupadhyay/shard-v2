@@ -114,9 +114,13 @@ export interface AttentionItems {
 export interface HeartbeatStatusInfo {
   filename: string;
   schedule: string;
+  cron?: string;
   session: string;
   persona: string | null;
   max_tool_calls: number;
   max_runs_per_day: number | null;
+  paused?: boolean;
+  prompt?: string;
   prompt_preview: string;
+  revision?: string;
 }

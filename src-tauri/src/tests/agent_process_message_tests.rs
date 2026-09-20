@@ -182,6 +182,22 @@ async fn b12_incognito_skips_embeddings_and_archive() {
 
     let store = crate::memories::get_vector_store(&env.handle).unwrap();
     crate::actions::plan(&store, "PRIVATE_PENDING_ACTION_SENTINEL", &["step"], None).unwrap();
+    let private_draft = crate::heartbeat::queue_tool_draft(
+        &env.handle,
+        "private-old-session",
+        "edit_file",
+        &json!({"path": "PRIVATE_ATTENTION_SENTINEL"}),
+        "PRIVATE_JUSTIFICATION_SENTINEL",
+    )
+    .unwrap();
+    store
+        .conn
+        .execute(
+            "UPDATE proactive_queue SET reviewed_at = 'legacy' WHERE id = ?1",
+            [&private_draft],
+        )
+        .unwrap();
+    crate::heartbeat::ensure_proactive_queue_table(&env.handle).unwrap();
 
     let mut config = config_gemini();
     config.incognito_mode = Some(true);
@@ -201,6 +217,7 @@ async fn b12_incognito_skips_embeddings_and_archive() {
     assert!(!requests.is_empty());
     for request in requests {
         assert!(!String::from_utf8_lossy(&request.body).contains("PRIVATE_PENDING_ACTION_SENTINEL"));
+        assert!(!String::from_utf8_lossy(&request.body).contains("PRIVATE_ATTENTION_SENTINEL"));
         assert!(!request.url.path().contains("embed"));
     }
     // Reduced automatic memory deliberately retains conversation history.
@@ -213,6 +230,31 @@ async fn b12_incognito_skips_embeddings_and_archive() {
         )
         .unwrap();
     assert!(saved > 0);
+
+    // Turning automatic context back on sends the visible unresolved record,
+    // even when embedding retrieval is unavailable. It must not send old prose.
+    config.incognito_mode = Some(false);
+    agent
+        .process_message(
+            &env.handle,
+            "What is the saved action?".into(),
+            None,
+            None,
+            &config,
+            false,
+        )
+        .await
+        .unwrap();
+    let requests = env.server.received_requests().await.unwrap();
+    let wire = requests
+        .iter()
+        .map(|r| String::from_utf8_lossy(&r.body))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(wire.contains("PRIVATE_ATTENTION_SENTINEL"));
+    assert!(wire.contains("UNTRUSTED DATA"));
+    assert!(wire.contains("legacy_decision_unknown"));
+    assert!(!wire.contains("PRIVATE_JUSTIFICATION_SENTINEL"));
 }
 
 // ============================================================================

@@ -25,6 +25,19 @@ describe('Performance & Fragment Support', () => {
     expect(scrollSetter).toHaveBeenCalledWith(100);
   });
 
+  it('should not steal scroll when appending output while reading earlier content', () => {
+    const container = document.createElement('div');
+    Object.defineProperties(container, {
+      clientHeight: { value: 200, configurable: true },
+      scrollHeight: { value: 1000, configurable: true },
+      scrollTop: { value: 100, writable: true, configurable: true },
+    });
+
+    addMessage(container, 'assistant', 'New streamed output');
+
+    expect(container.scrollTop).toBe(100);
+  });
+
   it('should access scrollHeight only once when batching via DocumentFragment', () => {
     const fragment = document.createDocumentFragment();
     const chatArea = document.createElement('div');
