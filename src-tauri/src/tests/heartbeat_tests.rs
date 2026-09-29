@@ -9,6 +9,38 @@ use crate::heartbeat::*;
 use crate::tests::agent_helpers::{home_lock, home_lock_async, HomeJail};
 use tauri::Manager;
 
+#[test]
+fn native_alerts_only_for_new_actionable_queue_entries() {
+    let mut msg = ProactiveMessage {
+        id: "test".into(),
+        heartbeat_session: "agent:test".into(),
+        content: "A finding".into(),
+        draft_payload: None,
+        needs_approval: false,
+        reviewed_at: None,
+        approved: None,
+        execution_status: None,
+        execution_result: None,
+        created_at: "now".into(),
+    };
+    assert_eq!(
+        notification_title(&msg),
+        Some("Shard heartbeat has an update")
+    );
+    msg.content = " HEARTBEAT_OK \n".into();
+    assert_eq!(notification_title(&msg), None);
+    msg.content = "A finding".into();
+    msg.needs_approval = true;
+    assert_eq!(notification_title(&msg), None);
+    msg.draft_payload = Some("{}".into());
+    assert_eq!(
+        notification_title(&msg),
+        Some("Shard action awaiting approval")
+    );
+    msg.reviewed_at = Some("now".into());
+    assert_eq!(notification_title(&msg), None);
+}
+
 // ============================================================================
 // Spec Parsing Tests
 // ============================================================================

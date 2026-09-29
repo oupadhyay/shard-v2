@@ -394,6 +394,7 @@ const enableToolsCheckbox = settingsModal.querySelector("#enable-tools") as HTML
 const incognitoModeCheckbox = settingsModal.querySelector("#incognito-mode") as HTMLInputElement;
 const enableScreenContextCheckbox = settingsModal.querySelector("#enable-screen-context") as HTMLInputElement;
 const heartbeatCooldownInput = settingsModal.querySelector("#heartbeat-cooldown") as HTMLInputElement;
+const heartbeatNotificationsInput = settingsModal.querySelector("#heartbeat-notifications") as HTMLInputElement;
 const geminiKeyInput = settingsModal.querySelector("#gemini-key") as HTMLInputElement;
 const openRouterKeyInput = settingsModal.querySelector("#openrouter-key") as HTMLInputElement;
 const groqKeyInput = settingsModal.querySelector("#groq-key") as HTMLInputElement;
@@ -461,6 +462,7 @@ async function populateSettings() {
     if (heartbeatCooldownInput) {
       heartbeatCooldownInput.value = String(config.heartbeat_global_cooldown_secs ?? 60);
     }
+    heartbeatNotificationsInput.checked = config.heartbeat_notifications === true;
 
     updateToolAvailability();
     checkProviderConflict();
@@ -485,6 +487,7 @@ async function saveSettings() {
     incognito_mode: incognitoModeCheckbox.checked,
     enable_screen_context: enableScreenContextCheckbox.checked,
     heartbeat_global_cooldown_secs: parseInt(heartbeatCooldownInput?.value) || 60,
+    heartbeat_notifications: heartbeatNotificationsInput.checked,
   };
 
   try {

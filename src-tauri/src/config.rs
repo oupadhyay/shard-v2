@@ -47,6 +47,8 @@ pub struct AppConfig {
     // Heartbeat engine configuration
     #[serde(default)]
     pub heartbeat_global_cooldown_secs: Option<u64>, // Default: 60
+    #[serde(default)]
+    pub heartbeat_notifications: bool, // Opt-in; native desktop alerts for new queue items
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +164,7 @@ impl Default for AppConfig {
             // Fallback model for quota errors
             fallback_model: Some("openai/gpt-oss-120b:free".to_string()),
             heartbeat_global_cooldown_secs: Some(60),
+            heartbeat_notifications: false,
         }
     }
 }
