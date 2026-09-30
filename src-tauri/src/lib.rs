@@ -1,4 +1,8 @@
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
+    AppHandle, Emitter, Manager, Runtime,
+};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -380,6 +384,21 @@ async fn hide_window(app_handle: AppHandle) -> Result<(), String> {
         window.hide().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn open_shard(app_handle: &AppHandle) {
+    // Keep the breakout window active if it exists; otherwise reveal the ambient panel.
+    if let Some(window) = app_handle
+        .get_webview_window("dedicated")
+        .or_else(|| app_handle.get_webview_window("main"))
+    {
+        let was_visible = window.is_visible().unwrap_or(false);
+        if let Err(e) = window.show().and_then(|_| window.set_focus()) {
+            log::warn!("Failed to open Shard: {e}");
+        } else if window.label() == "main" && !was_visible {
+            window.emit("start-show", ()).ok();
+        }
+    }
 }
 
 /// Open the dedicated (breakout) chat window.
@@ -827,7 +846,30 @@ pub fn run() {
         return;
     }
 
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // Register before other plugins so duplicate desktop launches stop before
+    // they can initialize background work or create another window.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        // Breakout mode hides the ambient panel; never reveal it over a
+        // dedicated window when a second launch requests the existing app.
+        if let Some(window) = app.get_webview_window("dedicated") {
+            window.show().ok();
+            window.unminimize().ok();
+            window.set_focus().ok();
+        } else if let Some(window) = app.get_webview_window("main") {
+            let was_hidden = !window.is_visible().unwrap_or(true);
+            window.show().ok();
+            window.unminimize().ok();
+            window.set_focus().ok();
+            if was_hidden {
+                window.emit("start-show", true).ok();
+            }
+        }
+    }));
+
+    let builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(
@@ -847,6 +889,21 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let _app_handle = app.handle();
+
+            let open = MenuItem::with_id(app, "open_shard", "Open Shard", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit_shard", "Quit Shard", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open, &quit])?;
+            let icon = app.default_window_icon().expect("Shard app icon").clone();
+            TrayIconBuilder::new()
+                .icon(icon)
+                .tooltip("Shard")
+                .menu(&menu)
+                .on_menu_event(|app_handle, event| match event.id().as_ref() {
+                    "open_shard" => open_shard(app_handle),
+                    "quit_shard" => app_handle.exit(0),
+                    _ => {}
+                })
+                .build(app)?;
 
             // Start maintenance background jobs (Summary + Cleanup)
             background::start_maintenance_jobs(app.handle().clone());
@@ -1065,6 +1122,16 @@ pub fn run() {
                 .ok();
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    if let Err(e) = window.hide() {
+                        log::warn!("Failed to hide ambient window: {e}");
+                    }
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_config,
