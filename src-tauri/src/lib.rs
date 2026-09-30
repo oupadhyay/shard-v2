@@ -827,17 +827,38 @@ pub fn run() {
         return;
     }
 
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(
-            tauri_plugin_log::Builder::default()
-                .level(log::LevelFilter::Info)
-                .filter(|metadata| {
-                    !metadata.target().starts_with("html5ever")
-                        && !metadata.target().starts_with("selectors")
-                })
-                .build(),
-        );
+    let builder = tauri::Builder::default();
+
+    // Register before other plugins so duplicate desktop launches stop before
+    // they can initialize background work or create another window.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        // Breakout mode hides the ambient panel; never reveal it over a
+        // dedicated window when a second launch requests the existing app.
+        if let Some(window) = app.get_webview_window("dedicated") {
+            window.show().ok();
+            window.unminimize().ok();
+            window.set_focus().ok();
+        } else if let Some(window) = app.get_webview_window("main") {
+            let was_hidden = !window.is_visible().unwrap_or(true);
+            window.show().ok();
+            window.unminimize().ok();
+            window.set_focus().ok();
+            if was_hidden {
+                window.emit("start-show", true).ok();
+            }
+        }
+    }));
+
+    let builder = builder.plugin(tauri_plugin_opener::init()).plugin(
+        tauri_plugin_log::Builder::default()
+            .level(log::LevelFilter::Info)
+            .filter(|metadata| {
+                !metadata.target().starts_with("html5ever")
+                    && !metadata.target().starts_with("selectors")
+            })
+            .build(),
+    );
 
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
