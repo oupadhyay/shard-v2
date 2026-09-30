@@ -4,6 +4,7 @@ use crate::config::AppConfig;
 fn test_default_config_research_mode() {
     let config = AppConfig::default();
     assert_eq!(config.research_mode, Some(false));
+    assert!(!config.heartbeat_notifications);
 }
 
 #[test]
@@ -18,4 +19,9 @@ fn test_config_serialization() {
 
     let deserialized: AppConfig = toml::from_str(&serialized).unwrap();
     assert_eq!(deserialized.research_mode, Some(true));
+    assert!(
+        !toml::from_str::<AppConfig>("selected_model = 'test'")
+            .unwrap()
+            .heartbeat_notifications
+    );
 }

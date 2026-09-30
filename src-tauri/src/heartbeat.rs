@@ -714,7 +714,42 @@ pub fn insert_proactive_message<R: Runtime>(
             ],
         )
         .map_err(|e| format!("Failed to insert proactive message: {}", e))?;
+    // Only newly persisted, unreviewed items are announced. Never replay the
+    // queue on startup; it remains the durable source of truth in Shard.
+    if let Some(title) = notification_title(msg) {
+        if crate::config::load_config(app_handle)
+            .map(|config| config.heartbeat_notifications)
+            .unwrap_or(false)
+        {
+            use tauri_plugin_notification::NotificationExt;
+            if let Err(error) = app_handle
+                .notification()
+                .builder()
+                .title(title)
+                .body("Open Shard to review. No action is taken from this notification.")
+                .show()
+            {
+                log::warn!("[Heartbeat] Could not show desktop notification: {error}");
+            }
+        }
+    }
     Ok(())
+}
+
+pub(crate) fn notification_title(msg: &ProactiveMessage) -> Option<&'static str> {
+    if msg.reviewed_at.is_some() || msg.content.trim().is_empty() {
+        return None;
+    }
+    if msg.needs_approval && msg.draft_payload.is_some() {
+        Some("Shard action awaiting approval")
+    } else if !msg.needs_approval
+        && msg.draft_payload.is_none()
+        && msg.content.trim() != "HEARTBEAT_OK"
+    {
+        Some("Shard heartbeat has an update")
+    } else {
+        None
+    }
 }
 
 /// Get pending notifications and durable draft outcomes, scoped before limiting.

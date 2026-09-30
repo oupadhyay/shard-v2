@@ -869,15 +869,18 @@ pub fn run() {
         }
     }));
 
-    let builder = builder.plugin(tauri_plugin_opener::init()).plugin(
-        tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .filter(|metadata| {
-                !metadata.target().starts_with("html5ever")
-                    && !metadata.target().starts_with("selectors")
-            })
-            .build(),
-    );
+    let builder = builder
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(
+            tauri_plugin_log::Builder::default()
+                .level(log::LevelFilter::Info)
+                .filter(|metadata| {
+                    !metadata.target().starts_with("html5ever")
+                        && !metadata.target().starts_with("selectors")
+                })
+                .build(),
+        );
 
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());

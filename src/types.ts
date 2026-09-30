@@ -56,6 +56,7 @@ export interface AppConfig {
   research_mode?: boolean;
   enable_screen_context?: boolean;
   heartbeat_global_cooldown_secs?: number;
+  heartbeat_notifications?: boolean;
 }
 
 // Payload for chat command

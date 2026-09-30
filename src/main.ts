@@ -1272,6 +1272,7 @@ const enableToolsCheckbox = document.getElementById("enable-tools") as HTMLInput
 const incognitoModeCheckbox = document.getElementById("incognito-mode") as HTMLInputElement;
 const enableScreenContextCheckbox = document.getElementById("enable-screen-context") as HTMLInputElement;
 const heartbeatCooldownInput = document.getElementById("heartbeat-cooldown") as HTMLInputElement;
+const heartbeatNotificationsInput = document.getElementById("heartbeat-notifications") as HTMLInputElement;
 const saveSettingsBtn = document.getElementById("save-settings") as HTMLButtonElement;
 const closeSettingsBtn = document.getElementById("close-settings") as HTMLButtonElement;
 
@@ -1354,6 +1355,7 @@ settingsBtn.addEventListener("click", async () => {
     incognitoModeCheckbox.checked = config.incognito_mode || false;
     enableScreenContextCheckbox.checked = config.enable_screen_context || false;
     heartbeatCooldownInput.value = String(config.heartbeat_global_cooldown_secs ?? 60);
+    heartbeatNotificationsInput.checked = config.heartbeat_notifications === true;
 
     // Disable screen context when incognito mode is enabled
     enableScreenContextCheckbox.disabled = incognitoModeCheckbox.checked;
@@ -1398,6 +1400,7 @@ saveSettingsBtn.addEventListener("click", async () => {
     enable_screen_context: enableScreenContextCheckbox.checked,
     heartbeat_global_cooldown_secs: Number.isFinite(heartbeatCooldownInput.valueAsNumber)
       ? heartbeatCooldownInput.valueAsNumber : 60,
+    heartbeat_notifications: heartbeatNotificationsInput.checked,
   };
 
   const status = settingsModal.querySelector<HTMLElement>(".settings-status")!;

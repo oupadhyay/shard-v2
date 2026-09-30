@@ -90,6 +90,13 @@ export const SETTINGS_MODAL_HTML = `
           <input type="number" id="heartbeat-cooldown" min="0" max="3600" step="10" placeholder="60" />
           <span class="setting-hint">Minimum gap between any two heartbeat runs</span>
         </div>
+        <div class="setting-group checkbox-setting">
+          <label>
+            <input type="checkbox" id="heartbeat-notifications" />
+            <span class="checkbox-label">Desktop notifications for new heartbeat updates and approval drafts</span>
+          </label>
+          <p class="setting-hint">Off by default. Open Shard to review; notification clicks cannot navigate directly to a draft on desktop. Your system may also block notifications.</p>
+        </div>
         <div class="setting-group">
           <label>Active Heartbeats</label>
           <div id="heartbeat-list" class="heartbeat-list">
